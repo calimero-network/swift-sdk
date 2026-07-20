@@ -1,0 +1,75 @@
+name: E2E (vs released merod)
+
+# Real end-to-end run against a live node. Manual (workflow_dispatch) so it does
+# NOT gate PRs — booting merod is heavier and slower than the unit/mock suite,
+# which already covers the full auth journey via FakeNode. The MeroKitE2ETests
+# target skips itself unless MERO_E2E_NODE_URL is set.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * 1'  # weekly smoke, Mondays 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (single node)
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      # First-login setup code (core#3221). merod below inherits it and the SDK
+      # test passes it explicitly, so the first login mints the root key.
+      MERO_AUTH_BOOTSTRAP_SECRET: swift-sdk-e2e-bootstrap
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download released merod (aarch64-apple-darwin)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
+          echo "Using core release $TAG"
+          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
+            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
+          test -n "$URL" || { echo "no merod darwin asset on release $TAG"; exit 1; }
+          curl -sL "$URL" | tar xz
+          chmod +x ./merod
+
+      - name: Boot merod (embedded auth, single node)
+        run: |
+          ./merod --home ./e2e-node --node e2e init \
+            --server-port 4001 --swarm-port 4002 --auth-mode embedded
+          ./merod --home ./e2e-node --node e2e run > merod.log 2>&1 &
+          echo $! > merod.pid
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 && { echo "merod healthy"; break; }
+            sleep 2
+            [ "$i" = "30" ] && { echo "merod did not become healthy"; cat merod.log; exit 1; }
+          done
+
+      - name: Run e2e tests
+        env:
+          MERO_E2E_NODE_URL: http://localhost:4001
+          MERO_E2E_USER: dev
+          MERO_E2E_PASS: dev-password
+        run: |
+          set -o pipefail
+          swift test --filter MeroKitE2ETests 2>&1 | tee e2e.log
+          # Guard against a vacuous/all-skipped green: require a real pass.
+          grep -qE "Executed [1-9][0-9]* test" e2e.log \
+            || { echo "::error::e2e produced no executed tests — refusing a vacuous pass"; exit 1; }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            e2e.log
+            merod.log
+          if-no-files-found: warn
+
+      - name: Stop merod
+        if: always()
+        run: kill "$(cat merod.pid 2>/dev/null)" 2>/dev/null || true

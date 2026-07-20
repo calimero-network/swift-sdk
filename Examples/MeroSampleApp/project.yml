@@ -1,0 +1,58 @@
+# XcodeGen spec for the MeroKit sample app + its XCUITest suite.
+# Generate the Xcode project with:  xcodegen generate
+# Run the UI tests with:
+#   xcodebuild test -project MeroSampleApp.xcodeproj -scheme MeroSampleApp \
+#     -destination 'platform=iOS Simulator,name=iPhone 17'
+name: MeroSampleApp
+
+options:
+  bundleIdPrefix: network.calimero.merokit
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  MeroKit:
+    path: ../..
+
+targets:
+  MeroSampleApp:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        SWIFT_VERSION: "5.9"
+    dependencies:
+      - package: MeroKit
+        product: MeroKit
+      - package: MeroKit
+        product: MeroKitUI
+
+  MeroSampleAppUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample.uitests
+        SWIFT_VERSION: "5.9"
+    dependencies:
+      - target: MeroSampleApp
+
+schemes:
+  MeroSampleApp:
+    build:
+      targets:
+        MeroSampleApp: all
+        MeroSampleAppUITests: [test]
+    test:
+      targets:
+        - MeroSampleAppUITests
