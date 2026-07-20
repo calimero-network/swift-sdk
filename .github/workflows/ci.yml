@@ -44,4 +44,4 @@ jobs:
         run: swiftlint lint --strict --reporter github-actions-logging
 
       - name: swift-format lint
-        run: swift-format lint --recursive --strict Sources Tests
+        run: swift-format lint --recursive --strict Sources Tests Examples

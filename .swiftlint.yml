@@ -1,9 +1,11 @@
 included:
   - Sources
   - Tests
+  - Examples
 
 excluded:
   - .build
+  - Examples/MeroSampleApp/MeroSampleApp.xcodeproj
 
 # Keep the ruleset practical for an SDK with large hand-ported DTO files.
 disabled_rules:

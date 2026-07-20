@@ -1,7 +1,5 @@
 import Foundation
 
-@testable import MeroKit
-
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -11,31 +9,31 @@ import FoundationNetworking
 /// journey without a live node.
 ///
 /// Thread-safe: the URLProtocol handler runs on arbitrary threads.
-final class FakeNode: @unchecked Sendable {
+public final class FakeNode: @unchecked Sendable {
     private let lock = NSLock()
 
     // Rotating token state.
     private var version = 0
-    private(set) var accessToken = ""
-    private(set) var refreshToken = ""
+    public private(set) var accessToken = ""
+    public private(set) var refreshToken = ""
     private var accessExpired = false
     /// Refresh tokens already consumed — replaying one revokes the family.
     private var consumedRefreshTokens: Set<String> = []
     private var familyRevoked = false
 
     // Call counters, for assertions.
-    private(set) var tokenCalls = 0
-    private(set) var refreshCalls = 0
-    private(set) var rpcCalls = 0
-    private(set) var protectedCalls = 0
+    public private(set) var tokenCalls = 0
+    public private(set) var refreshCalls = 0
+    public private(set) var rpcCalls = 0
+    public private(set) var protectedCalls = 0
 
-    // Canned contract output for `/jsonrpc`, keyed by method.
-    var rpcOutputs: [String: Any] = ["get": 42]
+    /// Canned contract output for `/jsonrpc`, keyed by method.
+    public var rpcOutputs: [String: Any] = ["get": 42]
 
-    init() {}
+    public init() {}
 
     /// Route every request on `MockURLProtocol` through this node.
-    func install() {
+    public func install() {
         MockURLProtocol.setHandler { [weak self] req in
             self?.handle(req) ?? .init(status: 500, headers: [:], body: Data())
         }
@@ -45,17 +43,17 @@ final class FakeNode: @unchecked Sendable {
 
     /// Simulate the access token expiring — the next protected call returns
     /// `401 token_expired`, driving a reactive refresh.
-    func expireAccessToken() {
+    public func expireAccessToken() {
         lock.lock(); accessExpired = true; lock.unlock()
     }
 
     /// Simulate the whole family being revoked — protected calls return
     /// `401 token_reuse` (terminal).
-    func revokeFamily() {
+    public func revokeFamily() {
         lock.lock(); familyRevoked = true; lock.unlock()
     }
 
-    // MARK: - Counters (locked reads)
+    // MARK: - Counters
 
     private func bump(_ keyPath: ReferenceWritableKeyPath<FakeNode, Int>) {
         lock.lock(); self[keyPath: keyPath] += 1; lock.unlock()
@@ -188,7 +186,7 @@ final class FakeNode: @unchecked Sendable {
         .init(status: 401, headers: ["x-auth-error": reason], body: Data())
     }
 
-    static func body(_ req: URLRequest) -> Data {
+    public static func body(_ req: URLRequest) -> Data {
         if let body = req.httpBody { return body }
         guard let stream = req.httpBodyStream else { return Data() }
         stream.open(); defer { stream.close() }

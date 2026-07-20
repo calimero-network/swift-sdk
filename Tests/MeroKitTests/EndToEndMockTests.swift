@@ -1,3 +1,4 @@
+import MeroKitTestSupport
 import XCTest
 
 @testable import MeroKit

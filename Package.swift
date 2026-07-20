@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .library(name: "MeroKit", targets: ["MeroKit"]),
+        .library(name: "MeroKitUI", targets: ["MeroKitUI"]),
         .executable(name: "MeroExample", targets: ["MeroExample"]),
     ],
     targets: [
@@ -18,9 +19,16 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
-        // A runnable end-to-end example that exercises the whole SDK. Runs an
-        // offline demo with no config, or a full online flow when MERO_NODE_URL
-        // (+ MERO_USERNAME / MERO_PASSWORD) are set. See `swift run MeroExample`.
+        // SwiftUI "frontend" layer: an observable MeroClient + Login/Home views.
+        // The native analog of mero-react's MeroProvider/useMero + LoginModal.
+        .target(
+            name: "MeroKitUI",
+            dependencies: ["MeroKit"],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
+        // A runnable end-to-end example that exercises the whole SDK.
         .executableTarget(
             name: "MeroExample",
             dependencies: ["MeroKit"],
@@ -28,10 +36,24 @@ let package = Package(
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
         ),
+        // Reusable test doubles: a URLProtocol stub + a stateful fake node
+        // (nock/msw analog). Shared by every test target below.
+        .target(
+            name: "MeroKitTestSupport",
+            dependencies: ["MeroKit"]
+        ),
         // Unit tests + fully-mocked end-to-end journeys (no node required).
         .testTarget(
             name: "MeroKitTests",
-            dependencies: ["MeroKit"],
+            dependencies: ["MeroKit", "MeroKitTestSupport"],
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency"),
+            ]
+        ),
+        // View-model tests for the SwiftUI frontend (fast; no simulator needed).
+        .testTarget(
+            name: "MeroKitUITests",
+            dependencies: ["MeroKit", "MeroKitUI", "MeroKitTestSupport"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

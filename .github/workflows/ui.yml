@@ -1,0 +1,56 @@
+name: UI Tests
+
+# XCUITest (the Swift analog of Playwright): builds the SwiftUI sample app and
+# drives login → home → RPC → logout in the iOS Simulator against an in-app mock.
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ui-tests:
+    name: XCUITest (iOS Simulator)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: Examples/MeroSampleApp
+        run: xcodegen generate
+
+      - name: Run UI tests
+        working-directory: Examples/MeroSampleApp
+        run: |
+          set -o pipefail
+          # Pick an available iPhone simulator by name (image-agnostic).
+          DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone 1[0-9][^(]*' | head -1 | xargs)
+          echo "Using simulator: ${DEVICE:-iPhone 16}"
+          xcodebuild test \
+            -project MeroSampleApp.xcodeproj \
+            -scheme MeroSampleApp \
+            -destination "platform=iOS Simulator,name=${DEVICE:-iPhone 16}" \
+            | tee xcuitest.log
+          grep -qE "Test Suite 'All tests' passed" xcuitest.log \
+            || { echo "::error::UI tests did not pass"; exit 1; }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcuitest-log
+          path: Examples/MeroSampleApp/xcuitest.log
+          if-no-files-found: warn

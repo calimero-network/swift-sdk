@@ -5,25 +5,32 @@ import FoundationNetworking
 #endif
 
 /// A `URLProtocol` that routes every request through a registered handler, so
-/// tests can stub HTTP without a live node. (Swift's clean way to fake `URLSession`.)
-final class MockURLProtocol: URLProtocol {
-    /// Handler: given a request, return status, headers, and body bytes.
-    struct Stub: Sendable {
-        let status: Int
-        let headers: [String: String]
-        let body: Data
+/// tests can stub HTTP without a live node — Swift's clean way to fake `URLSession`
+/// (and the route-mocking analog of Playwright's `page.route`).
+public final class MockURLProtocol: URLProtocol {
+    /// Handler result: status, headers, and body bytes for a request.
+    public struct Stub: Sendable {
+        public let status: Int
+        public let headers: [String: String]
+        public let body: Data
+
+        public init(status: Int, headers: [String: String], body: Data) {
+            self.status = status
+            self.headers = headers
+            self.body = body
+        }
     }
 
-    /// Thread-safe registry, keyed by nothing — a single handler serves all requests.
     private static let lock = NSLock()
-    private static var _handler: (@Sendable (URLRequest) -> Stub)?
+    nonisolated(unsafe) private static var _handler: (@Sendable (URLRequest) -> Stub)?
 
-    static func setHandler(_ handler: @escaping @Sendable (URLRequest) -> Stub) {
+    /// Register the single handler that serves all requests.
+    public static func setHandler(_ handler: @escaping @Sendable (URLRequest) -> Stub) {
         lock.lock(); defer { lock.unlock() }
         _handler = handler
     }
 
-    static func reset() {
+    public static func reset() {
         lock.lock(); defer { lock.unlock() }
         _handler = nil
     }
@@ -34,16 +41,16 @@ final class MockURLProtocol: URLProtocol {
     }
 
     /// Build a `URLSession` wired to this protocol.
-    static func makeSession() -> URLSession {
+    public static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
         return URLSession(configuration: config)
     }
 
-    override class func canInit(with request: URLRequest) -> Bool { true }
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    public override class func canInit(with request: URLRequest) -> Bool { true }
+    public override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
-    override func startLoading() {
+    public override func startLoading() {
         guard let handler = MockURLProtocol.handler() else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
@@ -60,21 +67,24 @@ final class MockURLProtocol: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
 
-    override func stopLoading() {}
+    public override func stopLoading() {}
 }
 
 /// A mutable, thread-safe counter for tests.
-final class Counter: @unchecked Sendable {
+public final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
 
-    func increment() -> Int {
+    public init() {}
+
+    @discardableResult
+    public func increment() -> Int {
         lock.lock(); defer { lock.unlock() }
         value += 1
         return value
     }
 
-    var count: Int {
+    public var count: Int {
         lock.lock(); defer { lock.unlock() }
         return value
     }
