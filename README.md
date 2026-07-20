@@ -114,14 +114,44 @@ await mero.logout() // clears the token bundle from memory and the store
   is never retried — it surfaces as `MeroError.authRevoked` and the token bundle
   is cleared.
 
-## Development
+## Runnable example
+
+`MeroExample` is an executable target that tours the whole SDK:
+
+```bash
+swift run MeroExample                       # offline demo (SSO URL, capabilities, JSON)
+
+MERO_NODE_URL=http://localhost:4001 \
+MERO_USERNAME=dev MERO_PASSWORD=dev-password \
+MERO_BOOTSTRAP_SECRET=… \
+swift run MeroExample                       # full online flow: auth → identity → contexts → rpc → logout
+```
+
+## Testing
+
+The suite is a Swift test pyramid:
+
+- **Unit tests** (`Tests/MeroKitTests`) — JWT/token parsing, JSONValue, SSO, capabilities,
+  retry, and per-method admin request-shape checks.
+- **Mocked end-to-end** (`FakeNode` + `EndToEndMockTests`) — a stateful in-memory node
+  (the Swift analog of nock/msw) drives whole journeys: login → refresh mid-flight →
+  concurrent single-flight refresh → revoked-family re-login → logout. No node needed.
+- **Live e2e** (`Tests/MeroKitE2ETests`) — runs against a real `merod`; **skips itself**
+  unless `MERO_E2E_NODE_URL` is set, so normal CI stays green. The `E2E` workflow boots a
+  released node and runs these.
 
 ```bash
 swift build
-swift test
-swiftlint lint --strict          # brew install swiftlint
+swift test                                  # unit + mocked e2e (live e2e auto-skips)
+swiftlint lint --strict                     # brew install swiftlint
 xcrun swift-format lint -r Sources Tests
+
+# live e2e against a running node:
+MERO_E2E_NODE_URL=http://localhost:4001 swift test --filter MeroKitE2ETests
 ```
+
+CI (`.github/workflows/`): `ci.yml` (build + test + lint on every PR), `e2e.yml`
+(live-node run, manual/weekly), `release.yml` (tag-driven SPM release).
 
 ## License
 
