@@ -1,0 +1,100 @@
+---
+title: Auth API
+description: The full AuthApi surface — health, identity, providers, token generation and refresh, revocation, and root/client key management.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`mero.auth` (`AuthApi`) is the node's authentication surface — token issuance and
+the management of **root keys** and **client keys**. It's a `Sendable` struct over
+the shared [`HttpClient`](/reference/error-model/#transport); methods are
+`async throws` unless noted.
+
+<Aside type="tip">
+  For the common case — logging in and staying logged in — you don't call this
+  directly. `mero.authenticate()` uses `generateTokens`, and the transport calls
+  `refreshToken` for you. Reach for `mero.auth` when you need key management or
+  provider details.
+</Aside>
+
+## Tokens & session
+
+| Method | Endpoint |
+| --- | --- |
+| `getHealth() -> HealthResponse` | `GET /auth/health` |
+| `getIdentity() -> IdentityResponse` | `GET /admin/identity` |
+| `getProviders() -> ProvidersResponse` | `GET /auth/providers` |
+| `generateTokens(_ request: TokenRequest) -> TokenResponse` | `POST /auth/token` |
+| `refreshToken(_ request: RefreshTokenRequest) -> TokenResponse` | `POST /auth/refresh` |
+| `generateMockTokens(_ request: MockTokenRequest) -> TokenResponse` | `POST /auth/mock-token` (dev) |
+| `validateToken(_ token: String) -> TokenValidation` | `HEAD /auth/validate` — `async`, **not** `throws` |
+| `revokeTokens(_ request: RevokeTokenRequest) -> RevokeTokenResponse` | `POST /admin/revoke` |
+
+## Root keys
+
+| Method | Endpoint |
+| --- | --- |
+| `listRootKeys() -> [RootKey]` | `GET /admin/keys` |
+| `createRootKey(_ request: CreateKeyRequest) -> CreateKeyResponse` | `POST /admin/keys` |
+| `deleteRootKey(_ keyId: String) -> DeleteKeyResponse` | `DELETE /admin/keys/{keyId}` |
+| `getKeyPermissions(_ keyId: String) -> PermissionResponse` | `GET /admin/keys/{keyId}/permissions` |
+| `updateKeyPermissions(_ keyId: String, changes: UpdateKeyPermissionsRequest) -> PermissionResponse` | `PUT /admin/keys/{keyId}/permissions` |
+
+`updateKeyPermissions` sends an `{ add, remove }` delta of permission strings, not
+a replacement.
+
+## Client keys
+
+| Method | Endpoint |
+| --- | --- |
+| `listClientKeys() -> [ClientKey]` | `GET /admin/keys/clients` |
+| `generateClientKey(_ request: GenerateClientKeyRequest) -> TokenResponse` | `POST /admin/client-key` |
+| `deleteClientKey(keyId: String, clientId: String) -> DeleteClientResponse` | `DELETE /admin/keys/{keyId}/clients/{clientId}` |
+
+## Key types
+
+```swift
+struct TokenResponse: Codable, Sendable {
+  let data: Payload            // { accessToken, refreshToken, error? }
+  let error: String?
+}
+
+struct IdentityResponse: Codable, Sendable {
+  let service: String
+  let version: String
+  let authenticationMode: String   // wire: authentication_mode
+  let providers: [String]
+}
+
+struct RootKey: Codable, Sendable {
+  let keyId, publicKey, authMethod: String
+  let createdAt: Int
+  let revokedAt: Int?
+  let permissions: [String]
+}
+
+struct ClientKey: Codable, Sendable {
+  let clientId, rootKeyId, name: String
+  let permissions: [String]
+  let createdAt: Int
+  let revokedAt: Int?
+  let isValid: Bool
+}
+
+struct TokenRequest: Codable, Sendable {          // built for you by mero.authenticate()
+  let authMethod, publicKey, clientName: String
+  let permissions: [String]?
+  let timestamp: Int
+  let providerData: [String: JSONValue]
+}
+```
+
+<Aside type="note">
+  Auth request/response fields are **snake_case** on the wire (via CodingKeys) —
+  they mirror the node exactly. The admin API, by contrast, is camelCase.
+</Aside>
+
+See [`AuthTypes.swift`](https://github.com/calimero-network/swift-sdk/blob/master/Sources/MeroKit/Auth/AuthTypes.swift)
+for the complete set.

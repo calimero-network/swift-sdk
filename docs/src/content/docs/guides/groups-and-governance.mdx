@@ -1,0 +1,156 @@
+---
+title: Groups & Governance
+description: Namespaces, groups, members and roles, the UInt32 capability bitmask, metadata, and the TEE admission policy — driven from the admin API in Swift.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Governance is layered: a **namespace** scopes an application instance; **groups**
+(and **subgroups**) within it hold members with roles and capabilities and own
+contexts. This guide covers the pieces you'll touch most; the exhaustive list is
+in the [admin API reference](/reference/admin-api/#group-management).
+
+## Namespaces
+
+```swift
+let ns = try await mero.admin.createNamespace(
+  CreateNamespaceRequest(applicationId: applicationId, upgradePolicy: .automatic, name: "production")
+)
+let namespaceId = ns.namespaceId
+
+let all      = try await mero.admin.listNamespaces()               // [Namespace]
+let one      = try await mero.admin.getNamespace(namespaceId)
+let identity = try await mero.admin.getNamespaceIdentity(namespaceId)
+```
+
+Invite and join:
+
+```swift
+let invite = try await mero.admin.createNamespaceInvitation(namespaceId)
+// CreateNamespaceInvitationResult — .single(...) or .recursive(...)
+
+// on the joining node, with a SignedGroupOpenInvitation:
+let joined = try await mero.admin.joinNamespace(
+  namespaceId, request: JoinNamespaceRequest(invitation: signed, groupName: nil))
+// joined.groupId, joined.memberIdentity
+```
+
+## Groups, members & roles
+
+```swift
+let info     = try await mero.admin.getGroupInfo(groupId)
+let members  = try await mero.admin.listGroupMembers(groupId).members
+let contexts = try await mero.admin.listGroupContexts(groupId)
+
+try await mero.admin.addGroupMembers(groupId,
+  request: AddGroupMembersRequest(members: [GroupMemberInput(identity: id, role: "member")]))
+try await mero.admin.updateMemberRole(groupId, identity: id,
+  request: UpdateMemberRoleRequest(role: "admin"))
+try await mero.admin.removeGroupMembers(groupId,
+  request: RemoveGroupMembersRequest(members: [id]))
+
+let subgroups = try await mero.admin.listSubgroups(groupId)
+```
+
+## Capabilities
+
+A member's permissions are a **`UInt32` bitmask**. `Capabilities` provides the
+bit constants and pure helpers so you never write raw bitwise operators.
+
+```swift
+// Read the current mask
+let current = try await mero.admin.getMemberCapabilities(groupId, identity: id).capabilities
+
+// Test / add / remove bits
+let mask = UInt32(current)
+let canInvite = Capabilities.hasCap(mask, Capabilities.canInviteMembers)
+let next = Capabilities.withCap(mask, Capabilities.manageMembers)
+let revoked = Capabilities.withoutCap(next, Capabilities.manageApplication)
+
+// Persist
+try await mero.admin.setMemberCapabilities(groupId, identity: id,
+  request: SetMemberCapabilitiesRequest(capabilities: Int(next)))
+```
+
+The bits (`UInt32`, mirroring core's `MemberCapabilities`):
+
+| Constant | Value | Grants |
+| --- | --- | --- |
+| `Capabilities.canCreateContext` | `1 << 0` | create contexts in the group |
+| `Capabilities.canInviteMembers` | `1 << 1` | invite new members |
+| `Capabilities.canJoinOpenSubgroups` | `1 << 2` | join open subgroups |
+| `Capabilities.manageMembers` | `1 << 3` | add/remove members, change roles |
+| `Capabilities.manageApplication` | `1 << 4` | manage the group's application |
+| `Capabilities.canCreateSubgroup` | `1 << 5` | create subgroups |
+| `Capabilities.canDeleteSubgroup` | `1 << 6` | delete subgroups |
+| `Capabilities.canManageVisibility` | `1 << 7` | change subgroup visibility |
+| `Capabilities.canManageMetadata` | `1 << 8` | edit group/member/context metadata |
+
+<Aside type="note">
+  `hasCap(mask, cap)` is `(mask & cap) == cap` — true only when every bit of
+  `cap` is set, so composite masks test correctly. The capability APIs on
+  `AdminApi` take/return `Int`; convert with `UInt32(...)`/`Int(...)` at the
+  boundary as above.
+</Aside>
+
+Group defaults and subgroup visibility:
+
+```swift
+try await mero.admin.setDefaultCapabilities(groupId,
+  request: SetDefaultCapabilitiesRequest(defaultCapabilities: Int(Capabilities.canCreateContext)))
+let defaults   = try await mero.admin.getDefaultCapabilities(groupId)   // Int
+let visibility = try await mero.admin.getSubgroupVisibility(groupId)    // String
+```
+
+## Metadata
+
+Attach a small named key/value record to a group, member, or context:
+
+```swift
+try await mero.admin.setGroupMetadata(groupId,
+  request: SetGroupMetadataRequest(name: "Production", data: ["region": "eu", "tier": "gold"]))
+
+let meta = try await mero.admin.getGroupMetadata(groupId)   // MetadataRecord?
+// meta?.name, meta?.data, meta?.updatedAt, meta?.updatedBy
+```
+
+The same pair exists for members (`set/getMemberMetadata`) and contexts
+(`set/getContextMetadata`). Setting a record replaces it wholesale (server limits:
+name ≤64 B, ≤64 entries, key ≤64 B, value ≤4096 B).
+
+## TEE admission policy
+
+Restrict which nodes may join a group to those in an approved Trusted Execution
+Environment:
+
+```swift
+try await mero.admin.setTeeAdmissionPolicy(groupId,
+  request: SetTeeAdmissionPolicyRequest(
+    allowedMrtd: ["<mrtd-hex>"],
+    allowedRtmr0: [], allowedRtmr1: [], allowedRtmr2: [], allowedRtmr3: [],
+    allowedTcbStatuses: ["UpToDate"],
+    acceptMock: false))              // true only for local/dev
+
+let policy = try await mero.admin.getTeeAdmissionPolicy(groupId)
+```
+
+Nodes can attest and verify quotes directly:
+
+```swift
+let teeInfo = try await mero.admin.getTeeInfo()                              // cloudProvider, osImage, mrtd
+let attest  = try await mero.admin.teeAttest(TeeAttestRequest(nonce: nonce)) // quoteB64, quote
+let verdict = try await mero.admin.teeVerifyQuote(
+  TeeVerifyQuoteRequest(quoteB64: attest.quoteB64, nonce: nonce))
+```
+
+## Upgrades & migration
+
+```swift
+_ = try await mero.admin.upgradeGroup(groupId,
+  request: UpgradeGroupRequest(targetApplicationId: newAppId, cascade: true))
+let status    = try await mero.admin.getGroupUpgradeStatus(groupId)
+let migration = try await mero.admin.getMigrationStatus(namespaceId)
+// migration.rollup.allMigrated == true when done
+```

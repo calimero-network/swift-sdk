@@ -1,0 +1,109 @@
+---
+title: Glossary
+description: The Calimero and MeroKit terms used across these docs — node, context, namespace, group, application, blob, RPC, capabilities, keys, TEE, and the Swift-specific pieces.
+sidebar:
+  order: 2
+---
+
+Short definitions for the terms used throughout these docs. For the full
+protocol-level treatment, see the [Calimero Core docs](https://calimero-network.github.io/core/).
+
+## Node & runtime
+
+**Node / `merod`**
+: A running Calimero node — the remote process MeroKit talks to over HTTP(S). The
+  device is a **thin client**; it never runs a node. `MeroConfig.baseURL` points a
+  `Mero` at one.
+
+**Application**
+: A WASM bundle installed on a node — from a URL, a dev path, or a registry
+  package. Identified by an application ID. One bundle can expose multiple
+  **services**.
+
+**Context**
+: A running instance of an application's shared state — what you execute methods
+  against. Has a `contextId`, a state hash, and DAG heads. Multi-service apps take
+  a `serviceName` at creation.
+
+**Context identity**
+: A keypair representing you within a context, generated per context and used to
+  join and sign operations.
+
+## Governance
+
+**Namespace**
+: An application-instance boundary grouping contexts and members under a shared
+  upgrade policy (`.automatic` / `.lazyOnAccess`).
+
+**Group / subgroup**
+: A governance boundary within a namespace — members with roles and capabilities,
+  owning contexts. Groups can nest as subgroups.
+
+**Capabilities (bitmask)**
+: A `UInt32` bitmask of what a member may do. MeroKit exposes the
+  `Capabilities` constants and `hasCap`/`withCap`/`withoutCap` helpers. See
+  [groups & governance](/guides/groups-and-governance/#capabilities).
+
+**Invitation**
+: A signed token (`SignedGroupOpenInvitation`) letting a new member join a group
+  or namespace; may be single-target or recursive.
+
+**Metadata**
+: A small key/value record (`MetadataRecord`) attachable to a group, member, or
+  context — a name, a `[String: String]`, and `updatedAt`/`updatedBy`.
+
+## Data
+
+**Blob**
+: An opaque binary object on the node (`Data` in Swift) — an app bundle or app
+  data, keyed by `blobId`. See [blobs](/guides/blobs/).
+
+**Alias**
+: A human-readable name mapped to a context, application, or context identity.
+
+## Calls
+
+**RPC / `execute`**
+: A JSON-RPC call to `/jsonrpc` that runs a WASM method in a context and decodes
+  its output into your `Decodable` type — `mero.rpc.execute(...)`. See
+  [executing methods](/guides/executing-methods/).
+
+**`JSONValue`**
+: MeroKit's dynamic JSON type used for RPC arguments and untyped responses. It
+  conforms to the `ExpressibleBy…Literal` protocols, so `["id": "42", "n": 5]`
+  works directly as `argsJson`.
+
+## Identity & security
+
+**Access token / refresh token**
+: The JWT pair (`TokenData`) from login. The access token rides every request; the
+  single-use refresh token mints a new pair when it expires. See
+  [the token lifecycle](/get-started/authentication/#the-token-lifecycle).
+
+**Bootstrap secret**
+: A one-time setup code (`Credentials.bootstrapSecret`) required only for the very
+  first login on a fresh node.
+
+**Root key / client key**
+: A top-level auth key registered on the node, and a scoped credential derived
+  under it. Managed via `mero.auth`.
+
+**TEE (Trusted Execution Environment)**
+: Hardware-isolated execution. A group can carry a **TEE admission policy**
+  (allowed MRTD/RTMR measurements, TCB statuses, `acceptMock`) gating which nodes
+  may join. MeroKit reads/sets it and can attest/verify quotes. See
+  [groups & governance](/guides/groups-and-governance/#tee-admission-policy).
+
+## Swift specifics
+
+**`Mero` (actor)**
+: The SDK facade. Being an `actor` serialises token state, so concurrent `401`s
+  share one refresh. Every instance member is `await`ed.
+
+**`MeroKit` vs `MeroKitUI`**
+: `MeroKit` is the core SDK; `MeroKitUI` is the optional SwiftUI frontend
+  (`MeroClient` + views), the analog of mero-react.
+
+**`TokenStore`**
+: The persistence protocol — `KeychainTokenStore` (secure default) or
+  `MemoryTokenStore` (ephemeral).

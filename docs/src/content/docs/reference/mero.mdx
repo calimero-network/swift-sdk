@@ -1,0 +1,163 @@
+---
+title: Mero
+description: The Mero actor — configuration, sub-client accessors, authentication and token methods, SSO statics, and the token types and stores.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The entry point to the SDK — an `actor`, so every instance member is `await`ed
+and token state is race-free.
+
+```swift
+import MeroKit
+
+let mero = Mero(config: MeroConfig(
+  baseURL: URL(string: "https://your-node.example")!,
+  tokenStore: KeychainTokenStore()
+))
+```
+
+## Initializers
+
+```swift
+public init(config: MeroConfig)                          // uses URLSession.shared
+public init(config: MeroConfig, session: URLSession)     // inject a custom session (tests)
+```
+
+## Sub-client accessors
+
+Computed properties that build a fresh value-type client over the shared
+transport:
+
+| Accessor | Type | Description |
+| --- | --- | --- |
+| `mero.auth` | `AuthApi` | login, tokens, key management — [reference](/reference/auth-api/) |
+| `mero.admin` | `AdminApi` | contexts, apps, namespaces, groups, blobs, TEE — [reference](/reference/admin-api/) |
+| `mero.rpc` | `RpcClient` | execute WASM methods — [guide](/guides/executing-methods/) |
+| `mero.http` | `any HttpClient` | the transport in use (advanced) |
+
+## Authentication
+
+```swift
+@discardableResult
+func authenticate(_ credentials: Credentials? = nil) async throws -> TokenData
+```
+Authenticate with credentials (falls back to `config.credentials`; throws
+`MeroError.noCredentials` if neither is set). Builds a `user_password`
+`TokenRequest` with client name `mero-swift-sdk` and permissions `["admin"]`,
+calls `auth.generateTokens`, and persists the bundle.
+
+## Token state
+
+```swift
+var isAuthenticated: Bool                     // await mero.isAuthenticated
+func currentTokenData() -> TokenData?         // current bundle (debug / handoff)
+func setTokenData(_ data: TokenData)          // set directly; derives expiresAt from the JWT
+func setTokenData(from callback: AuthCallbackResult)  // from a parsed SSO callback
+func clearToken()                             // drop the bundle + clear the store
+func logout()                                 // clearToken() + close()
+func close()                                  // release long-lived resources
+```
+
+<Aside type="note">
+  All of the above are actor-isolated — call them with `await`
+  (e.g. `let ok = await mero.isAuthenticated`).
+</Aside>
+
+## SSO statics
+
+Synchronous, non-throwing, and also available as free helpers on `SsoLogin`:
+
+```swift
+static func parseAuthCallback(_ url: String) -> AuthCallbackResult?
+static func buildAuthLoginUrl(nodeUrl: String, options: AuthLoginOptions) -> String
+```
+
+See [authentication → hosted SSO](/get-started/authentication/#hosted-sso-deep-link).
+
+## Configuration types
+
+### `MeroConfig`
+
+```swift
+public struct MeroConfig: Sendable {
+  public var baseURL: URL
+  public var credentials: Credentials?
+  public var timeout: TimeInterval          // default 10
+  public var tokenStore: (any TokenStore)?  // nil → in-memory
+  public init(baseURL: URL, credentials: Credentials? = nil,
+              timeout: TimeInterval = 10, tokenStore: (any TokenStore)? = nil)
+}
+```
+
+### `Credentials`
+
+```swift
+public struct Credentials: Sendable, Equatable {
+  public var username: String
+  public var password: String
+  public var bootstrapSecret: String?   // only for a fresh node's first login
+  public init(username: String, password: String, bootstrapSecret: String? = nil)
+}
+```
+
+### `TokenData`
+
+```swift
+public struct TokenData: Codable, Sendable, Equatable {
+  public var accessToken: String
+  public var refreshToken: String
+  public var expiresAt: Date   // informational; the SDK never refreshes proactively
+}
+```
+
+On the wire these are `access_token`, `refresh_token`, and `expires_at` (epoch
+**milliseconds**). `expiresAtFromJWT(_:fallback:)` extracts `exp` from a JWT.
+
+### `AuthCallbackResult` / `AuthLoginOptions`
+
+```swift
+public struct AuthCallbackResult: Sendable, Equatable {
+  public let accessToken, refreshToken, applicationId, contextId, contextIdentity, nodeUrl: String
+}
+
+public struct AuthLoginOptions: Sendable {
+  public init(callbackUrl: String, mode: String, packageName: String? = nil,
+              permissions: [String]? = nil, registryUrl: String? = nil,
+              packageVersion: String? = nil)
+}
+```
+
+## Token stores
+
+```swift
+public protocol TokenStore: Sendable {
+  func getTokens() -> TokenData?
+  func setTokens(_ data: TokenData)
+  func clear()
+}
+```
+
+Built-in implementations:
+
+```swift
+// Secure, persisted — backed by the Keychain (Security framework)
+public final class KeychainTokenStore: TokenStore {
+  public init(service: String = "network.calimero.merokit",
+              account: String = "mero-tokens",
+              accessGroup: String? = nil,                        // shared Keychain group
+              accessible: CFString = kSecAttrAccessibleAfterFirstUnlock)
+}
+
+// Ephemeral (the default when config.tokenStore is nil)
+public final class MemoryTokenStore: TokenStore { public init() }
+```
+
+## Sub-client references
+
+- [`RpcClient`](/guides/executing-methods/) — `execute`, `migrateMyEntries`, `countMyPending`.
+- [`AdminApi`](/reference/admin-api/) — the full admin surface.
+- [`AuthApi`](/reference/auth-api/) — the full auth surface.
+- [`MeroClient`](/guides/swiftui-frontend/) — the SwiftUI view-model (`MeroKitUI`).

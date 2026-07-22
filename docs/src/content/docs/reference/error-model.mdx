@@ -1,0 +1,118 @@
+---
+title: Error Model
+description: MeroError and its cases, the HTTPError and RpcError payloads, the transport protocol, and how the SDK handles 401s and terminal auth failures.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Everything the SDK throws is a `MeroError`. It's an `enum`, so you `switch` over
+the failure modes you care about.
+
+## `MeroError`
+
+```swift
+public enum MeroError: Error, Sendable {
+  case http(HTTPError)                          // non-2xx HTTP response
+  case authRevoked(reason: String, http: HTTPError)  // token_reuse / token_revoked — terminal
+  case rpc(RpcError)                            // JSON-RPC error from a contract
+  case network(String)                          // transport/connectivity failure
+  case emptyResponse(String)                    // expected a body, got none
+  case authenticationFailed(String)
+  case noCredentials                            // authenticate() with nothing to use
+  case noRefreshToken
+  case decoding(String)                         // response didn't match the expected type
+}
+```
+
+`MeroError` also conforms to `LocalizedError`, so `error.localizedDescription`
+gives a human-readable string.
+
+### `HTTPError`
+
+```swift
+public struct HTTPError: Error, Sendable, Equatable {
+  public let status: Int
+  public let statusText: String
+  public let url: String
+  public let headers: [String: String]
+  public let bodyText: String?          // raw body if available (capped ~64 KiB)
+  public var message: String { "HTTP \(status) \(statusText)" }
+}
+```
+
+### `RpcError`
+
+```swift
+public struct RpcError: Error, Sendable, Equatable {
+  public let code: Int
+  public let message: String
+  public let type: String?
+  public let data: JSONValue?
+}
+```
+
+## Handling pattern
+
+```swift
+do {
+  let post: Post = try await mero.rpc.execute(
+    contextId: "…", method: "get_post", argsJson: ["id": "42"])
+} catch let error as MeroError {
+  switch error {
+  case .rpc(let rpc):
+    // Contract-level error
+    print("contract error \(rpc.code): \(rpc.message)", rpc.data as Any)
+  case .authRevoked:
+    // Refresh token reused/revoked — session is over
+    promptSignIn()
+  case .http(let http):
+    if http.status == 403 { print("permission denied") }
+    else { print(http.message) }
+  case .network(let detail):
+    print("network error: \(detail)")
+  default:
+    print(error.localizedDescription)
+  }
+}
+```
+
+## How 401s are handled
+
+The transport handles `401` **internally**: it runs a single token refresh and
+retries the original request (see
+[the token lifecycle](/get-started/authentication/#the-token-lifecycle)). You only
+see an error if the refresh *itself* fails:
+
+- **Access token expired but refresh works** → transparent; no error surfaces.
+- **Refresh fails (expired refresh token)** → surfaces as `MeroError.http` /
+  `.authenticationFailed`; call `await mero.clearToken()` and re-authenticate.
+- **`x-auth-error: token_reuse | token_revoked`** → never retried; surfaces as
+  `MeroError.authRevoked(reason:http:)` and the bundle is cleared for you.
+
+<Aside type="caution">
+  Because `Mero` is an `actor` and refresh tokens are single-use, concurrent
+  `401`s share one refresh and the store is re-read first — so you won't
+  accidentally replay a consumed refresh token and revoke the whole family.
+</Aside>
+
+## Transport
+
+The retry engine (transient network/5xx backoff) lives inside the transport and
+isn't part of the public API. The public transport surface:
+
+```swift
+public protocol HttpClient: Sendable {
+  func send<T: Decodable>(_ req: HttpRequest) async throws -> T
+  func sendVoid(_ req: HttpRequest) async throws
+  func sendRaw(_ req: HttpRequest) async throws -> (Data, HeadResult)
+  func head(_ path: String, headers: [String: String]) async throws -> HeadResult
+  func download(_ req: HttpRequest, to fileURL: URL) async throws -> HeadResult
+}
+```
+
+`URLSessionHttpClient` is the built-in implementation; reach it as `mero.http`.
+Its `TransportHooks` (`getAuthToken`, `refreshToken`, `onTokenRefresh`,
+`onAuthRevoked`) are what `Mero` wires into its own token state — you don't set
+these yourself when using `Mero`.
