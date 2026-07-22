@@ -42,10 +42,15 @@ jobs:
           # -retry-tests-on-failure absorbs transient runner flakes (e.g. "Timed
           # out while launching application via Xcode") without masking real
           # failures — a genuinely broken test still fails after all iterations.
+          # Skip the node+registry-dependent e2e classes here (this job runs
+          # against the in-app mock, no node). They run via e2e-ios.sh /
+          # chat-multi-e2e.sh locally against a live merod.
           xcodebuild test \
             -project MeroSampleApp.xcodeproj \
             -scheme MeroSampleApp \
             -destination "platform=iOS Simulator,name=${DEVICE:-iPhone 16}" \
+            -skip-testing:MeroSampleAppUITests/AppE2ETests \
+            -skip-testing:MeroSampleAppUITests/ChatMultiUserTests \
             -retry-tests-on-failure -test-iterations 3 \
             | tee xcuitest.log
           grep -qE "Test Suite 'All tests' passed" xcuitest.log \

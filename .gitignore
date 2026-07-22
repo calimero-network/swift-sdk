@@ -15,3 +15,11 @@ e2e-node/
 merod.log
 merod.pid
 .mero-build.log
+.mero-e2e-node/
+.mero-e2e-node.log
+.mero-e2e-node.pid
+.e2e-ios.log
+.mero-a/
+.mero-b/
+.mero-*.log
+.mero-*.pid

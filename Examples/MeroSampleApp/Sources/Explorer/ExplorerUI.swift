@@ -63,6 +63,11 @@ struct CalimeroLoginView: View {
             .ignoresSafeArea()
         )
         .sheet(isPresented: $showLogs) { LogsView() }
+        .onAppear {
+            // e2e hook: point at a specific node (used by the multi-node harness
+            // so the guest simulator connects to node B, not the default :4001).
+            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty { nodeURL = n }
+        }
     }
 
     private var header: some View {

@@ -43,7 +43,15 @@ struct ChatHomeView: View {
             .tint(Cal.lime)
         }
         .preferredColorScheme(.dark)
-        .task { if service.appId == nil { /* wait for user to install */ } }
+        .task {
+            // e2e hook: with E2E_JOIN=<invite json> set, auto-install then join —
+            // lets the multi-user harness hand a guest an invite without typing it.
+            let env = ProcessInfo.processInfo.environment
+            if let invite = env["E2E_JOIN"], !invite.isEmpty, service.appId == nil {
+                await service.setup()
+                await service.joinSpace(invite)
+            }
+        }
         .alert("New space", isPresented: $showNewSpace) {
             TextField("Space name", text: $newSpace)
             Button("Create") { let n = newSpace; newSpace = ""; Task { await service.createSpace(n) } }
