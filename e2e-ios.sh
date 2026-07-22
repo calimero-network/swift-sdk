@@ -38,7 +38,12 @@ echo "node healthy (dev / dev-password)"
 echo "${BOLD}▶ prep simulator: $DEVICE${RESET}"
 defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false 2>/dev/null || true
 UDID=$(xcrun simctl list devices available | grep -E "^\s*${DEVICE} \(" | grep -oE '[0-9A-F-]{36}' | head -1)
-[ -n "$UDID" ] || die "no simulator named '$DEVICE'"
+if [ -z "$UDID" ]; then  # fall back to any available iPhone (CI images differ)
+  DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone 1[0-9][^(]*' | head -1 | xargs)
+  UDID=$(xcrun simctl list devices available | grep -E "${DEVICE} \(" | grep -oE '[0-9A-F-]{36}' | head -1)
+fi
+[ -n "$UDID" ] || die "no iPhone simulator available"
+echo "device: $DEVICE"
 xcrun simctl boot "$UDID" 2>/dev/null || true
 xcrun simctl bootstatus "$UDID" 2>/dev/null || sleep 5
 xcrun simctl spawn "$UDID" defaults write com.apple.security.AutoFill Enabled -bool NO 2>/dev/null || true

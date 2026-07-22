@@ -20,8 +20,8 @@
 set -u
 cd "$(dirname "$0")"
 REPO_ROOT="$(pwd)"
-DEV_A="iPhone 17"
-DEV_B="iPhone 17 Pro"
+DEV_A="${DEV_A:-iPhone 17}"
+DEV_B="${DEV_B:-iPhone 17 Pro}"
 GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 step() { echo; echo "${BOLD}▶ $*${RESET}"; }
 die() { echo "${RED}✘ $*${RESET}"; exit 1; }
@@ -72,6 +72,14 @@ step "Boot simulators: A=$DEV_A  B=$DEV_B"
 defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false 2>/dev/null || true
 udid() { xcrun simctl list devices available | grep -E "^\s*$1 \(" | grep -oE '[0-9A-F-]{36}' | head -1; }
 UDID_A=$(udid "$DEV_A"); UDID_B=$(udid "$DEV_B")
+if [ -z "$UDID_A" ] || [ -z "$UDID_B" ] || [ "$UDID_A" = "$UDID_B" ]; then
+  # fall back to two distinct available iPhones (CI images differ)
+  names=$(xcrun simctl list devices available | grep -oE 'iPhone 1[0-9][^(]*' | sed 's/ *$//' | awk '!seen[$0]++')
+  DEV_A=$(echo "$names" | sed -n 1p); DEV_B=$(echo "$names" | sed -n 2p)
+  [ -n "$DEV_B" ] || DEV_B="$DEV_A"
+  UDID_A=$(udid "$DEV_A"); UDID_B=$(udid "$DEV_B")
+  echo "auto-picked devices: A=$DEV_A  B=$DEV_B"
+fi
 [ -n "$UDID_A" ] || die "no simulator '$DEV_A'"; [ -n "$UDID_B" ] || die "no simulator '$DEV_B'"
 for u in "$UDID_A" "$UDID_B"; do
   xcrun simctl boot "$u" 2>/dev/null || true

@@ -1,0 +1,91 @@
+name: iOS E2E (vs live merod)
+
+# End-to-end iOS tests against a REAL merod node + registry (heavier than the
+# mock XCUITest in ui.yml, so this runs on master pushes / manually / weekly,
+# not on every PR). Two jobs:
+#   * single-node — full-feature AppE2ETests (login → explorer → chat).
+#   * multi-node  — two nodes + two simulators, cross-user chat (ChatMultiUserTests),
+#     driven by chat-multi-e2e.sh. Allowed to fail: cross-node gossipsub between
+#     two co-located merods is unreliable on a single host, so this job is
+#     informational until that (core-side) settles.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  schedule:
+    - cron: '0 7 * * 1'  # Mondays 07:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  single-node-e2e:
+    name: Full-feature e2e (1 node)
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install xcodegen
+
+      - name: Download released merod
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
+          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
+            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
+          test -n "$URL" || { echo "no merod darwin asset on $TAG"; exit 1; }
+          curl -sL "$URL" | tar xz && chmod +x ./merod && sudo mv ./merod /usr/local/bin/merod
+          merod --version
+
+      - name: Run AppE2ETests (boots node + sim)
+        run: ./e2e-ios.sh
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-e2e-single-node
+          path: |
+            .e2e-ios.log
+            .mero-e2e-node.log
+          if-no-files-found: warn
+
+  multi-node-e2e:
+    name: Multi-user chat e2e (2 nodes / 2 sims)
+    runs-on: macos-15
+    timeout-minutes: 50
+    # Informational: cross-node sync between co-located merods is flaky on one host.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install xcodegen
+
+      - name: Download released merod
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
+          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
+            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
+          test -n "$URL" || { echo "no merod darwin asset on $TAG"; exit 1; }
+          curl -sL "$URL" | tar xz && chmod +x ./merod && sudo mv ./merod /usr/local/bin/merod
+
+      - name: Run chat-multi-e2e.sh (2 nodes, 2 sims)
+        run: ./chat-multi-e2e.sh
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-e2e-multi-node
+          path: |
+            .mero-a.log
+            .mero-b.log
+            .mero-role-*.log
+          if-no-files-found: warn
