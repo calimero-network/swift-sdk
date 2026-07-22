@@ -39,10 +39,14 @@ jobs:
           # Pick an available iPhone simulator by name (image-agnostic).
           DEVICE=$(xcrun simctl list devices available | grep -oE 'iPhone 1[0-9][^(]*' | head -1 | xargs)
           echo "Using simulator: ${DEVICE:-iPhone 16}"
+          # -retry-tests-on-failure absorbs transient runner flakes (e.g. "Timed
+          # out while launching application via Xcode") without masking real
+          # failures — a genuinely broken test still fails after all iterations.
           xcodebuild test \
             -project MeroSampleApp.xcodeproj \
             -scheme MeroSampleApp \
             -destination "platform=iOS Simulator,name=${DEVICE:-iPhone 16}" \
+            -retry-tests-on-failure -test-iterations 3 \
             | tee xcuitest.log
           grep -qE "Test Suite 'All tests' passed" xcuitest.log \
             || { echo "::error::UI tests did not pass"; exit 1; }

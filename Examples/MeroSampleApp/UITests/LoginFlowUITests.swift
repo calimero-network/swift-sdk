@@ -30,7 +30,13 @@ final class LoginFlowUITests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: timeout), "button not found. \(message)", file: file, line: line)
         for _ in 0...retries {
             if expected.exists { return }
-            if button.exists, button.isHittable { button.tap() }
+            // Tap via a coordinate rather than `button.tap()`. `.tap()` first runs an
+            // AX "scroll to visible" action, which flakily throws kAXErrorCannotComplete
+            // on the CI simulator (iPhone 16 Pro) even for on-screen buttons. A
+            // coordinate tap hits the element's centre directly and skips that step.
+            if button.exists {
+                button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            }
             if expected.waitForExistence(timeout: timeout) { return }
         }
         XCTFail("expected element never appeared after tapping. \(message)", file: file, line: line)
@@ -50,7 +56,9 @@ final class LoginFlowUITests: XCTestCase {
         let focused = NSPredicate(format: "hasKeyboardFocus == true")
         var gotFocus = false
         for _ in 0..<5 {
-            field.tap()
+            // Coordinate tap (see tap(untilExists:)): avoids the flaky AX
+            // scroll-to-visible that `field.tap()` triggers on the CI simulator.
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             let exp = XCTNSPredicateExpectation(predicate: focused, object: field)
             if XCTWaiter().wait(for: [exp], timeout: 2) == .completed {
                 gotFocus = true
