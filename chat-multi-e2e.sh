@@ -21,7 +21,7 @@ set -u
 cd "$(dirname "$0")"
 REPO_ROOT="$(pwd)"
 DEV_A="iPhone 17"
-DEV_B="iPhone 16 Pro"
+DEV_B="iPhone 17 Pro"
 GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 step() { echo; echo "${BOLD}▶ $*${RESET}"; }
 die() { echo "${RED}✘ $*${RESET}"; exit 1; }
