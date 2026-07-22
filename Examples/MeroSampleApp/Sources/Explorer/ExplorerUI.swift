@@ -25,6 +25,8 @@ struct ExplorerRootView: View {
 struct CalimeroLoginView: View {
     @EnvironmentObject private var session: MeroSession
     @State private var nodeURL = "http://localhost:4001"
+    @State private var username = ""
+    @State private var password = ""
     @State private var showLogs = false
 
     var body: some View {
@@ -75,7 +77,7 @@ struct CalimeroLoginView: View {
                     .font(.system(.title, design: .default).weight(.bold))
                     .foregroundColor(Cal.text)
                     .accessibilityIdentifier("loginTitle")
-                Text("Connect to a Calimero node. You'll sign in on the node's\nsecure login page, then land back here.")
+                Text("Sign in to a Calimero node to explore the full MeroKit SDK.")
                     .font(.subheadline)
                     .foregroundColor(Cal.textDim)
                     .multilineTextAlignment(.center)
@@ -87,6 +89,10 @@ struct CalimeroLoginView: View {
         VStack(spacing: 11) {
             MinimalField(icon: "globe", placeholder: "Node URL", text: $nodeURL)
                 .accessibilityIdentifier("nodeURLField")
+            MinimalField(icon: "person", placeholder: "Username", text: $username)
+                .accessibilityIdentifier("usernameField")
+            MinimalField(icon: "lock", placeholder: "Password", text: $password, secure: true)
+                .accessibilityIdentifier("passwordField")
 
             if let error = session.errorMessage {
                 Text(error)
@@ -97,13 +103,9 @@ struct CalimeroLoginView: View {
             }
 
             Button {
-                Task { await session.connect(nodeURL: nodeURL) }
+                Task { await session.login(nodeURL: nodeURL, username: username, password: password) }
             } label: {
-                if session.isLoading {
-                    ProgressView().tint(Cal.bg)
-                } else {
-                    Label("Sign in with Calimero", systemImage: "arrow.up.forward.app")
-                }
+                if session.isLoading { ProgressView().tint(Cal.bg) } else { Text("Connect") }
             }
             .buttonStyle(CalPrimaryButtonStyle())
             .disabled(session.isLoading)
