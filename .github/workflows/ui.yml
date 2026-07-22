@@ -53,7 +53,10 @@ jobs:
             -skip-testing:MeroSampleAppUITests/ChatMultiUserTests \
             -retry-tests-on-failure -test-iterations 3 \
             | tee xcuitest.log
-          grep -qE "Test Suite 'All tests' passed" xcuitest.log \
+          # `-skip-testing` makes xcodebuild report "Selected tests" (not "All
+          # tests"); accept either, and require the overall success marker.
+          grep -qE "Test Suite '(All tests|Selected tests)' passed" xcuitest.log \
+            && grep -q "\*\* TEST SUCCEEDED \*\*" xcuitest.log \
             || { echo "::error::UI tests did not pass"; exit 1; }
 
       - name: Upload logs
