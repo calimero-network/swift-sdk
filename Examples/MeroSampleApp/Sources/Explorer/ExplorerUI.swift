@@ -26,6 +26,7 @@ struct CalimeroLoginView: View {
     @State private var nodeURL = "http://localhost:4001"
     @State private var username = ""
     @State private var password = ""
+    @State private var showLogs = false
 
     var body: some View {
         GeometryReader { geo in
@@ -35,6 +36,14 @@ struct CalimeroLoginView: View {
                     header
                     Spacer(minLength: 34)
                     form
+                    Button {
+                        showLogs = true
+                    } label: {
+                        Label("Connection logs", systemImage: "terminal")
+                            .font(.footnote)
+                            .foregroundColor(Cal.textDim)
+                    }
+                    .padding(.top, 18)
                     Spacer(minLength: 40)
                 }
                 .frame(minHeight: geo.size.height)
@@ -52,6 +61,7 @@ struct CalimeroLoginView: View {
             }
             .ignoresSafeArea()
         )
+        .sheet(isPresented: $showLogs) { LogsView() }
     }
 
     private var header: some View {
@@ -109,6 +119,7 @@ struct CalimeroLoginView: View {
 struct ExplorerView: View {
     @EnvironmentObject private var session: MeroSession
     @State private var search = ""
+    @State private var showLogs = false
 
     private var filtered: [(category: String, ops: [SDKOperation])] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -153,6 +164,10 @@ struct ExplorerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) { CalLogo(size: 22) }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showLogs = true } label: { Image(systemName: "terminal") }
+                        .foregroundColor(Cal.lime)
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Log Out") { Task { await session.logout() } }
                         .foregroundColor(Cal.lime)
@@ -160,6 +175,7 @@ struct ExplorerView: View {
             }
         }
         .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
+        .sheet(isPresented: $showLogs) { LogsView() }
     }
 
     private var header: some View {
@@ -283,6 +299,69 @@ struct OperationRunnerView: View {
             } catch {
                 await MainActor.run { output = "\(error)"; failed = true; running = false }
             }
+        }
+    }
+}
+
+// MARK: - Diagnostics log
+
+struct LogsView: View {
+    @EnvironmentObject private var session: MeroSession
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 5) {
+                        if session.logs.isEmpty {
+                            Text("No activity yet. Try connecting.")
+                                .font(.footnote).foregroundColor(Cal.textDim)
+                        }
+                        ForEach(session.logs) { line in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(line.level.rawValue)
+                                    .foregroundColor(color(line.level))
+                                    .frame(width: 12, alignment: .leading)
+                                Text(line.text)
+                                    .foregroundColor(Cal.text)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .font(Cal.mono)
+                            .id(line.id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                }
+                .onChange(of: session.logs.count) { _ in
+                    if let last = session.logs.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }
+            }
+            .background(Cal.bg)
+            .navigationTitle("Diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Clear") { session.clearLogs() }.foregroundColor(Cal.lime)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }.foregroundColor(Cal.lime)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .tint(Cal.lime)
+    }
+
+    private func color(_ level: MeroSession.LogLine.Level) -> Color {
+        switch level {
+        case .err: return Cal.error
+        case .ok: return Cal.lime
+        case .warn: return Cal.orange
+        case .req: return Cal.text
+        case .info: return Cal.textDim
         }
     }
 }
