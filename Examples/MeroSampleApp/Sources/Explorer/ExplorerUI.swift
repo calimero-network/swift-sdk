@@ -121,6 +121,7 @@ struct ExplorerView: View {
     @EnvironmentObject private var session: MeroSession
     @State private var search = ""
     @State private var showLogs = false
+    @State private var showChat = false
 
     private var filtered: [(category: String, ops: [SDKOperation])] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -139,6 +140,12 @@ struct ExplorerView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     header
+                    Button {
+                        showChat = true
+                    } label: {
+                        Label("Open Chat", systemImage: "bubble.left.and.bubble.right.fill")
+                    }
+                    .buttonStyle(CalPrimaryButtonStyle())
                     ForEach(filtered, id: \.category) { section in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(section.category.uppercased())
@@ -177,6 +184,11 @@ struct ExplorerView: View {
         }
         .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
         .sheet(isPresented: $showLogs) { LogsView() }
+        .sheet(isPresented: $showChat) {
+            if let mero = session.mero {
+                ChatHomeView(mero: mero, username: session.username)
+            }
+        }
     }
 
     private var header: some View {

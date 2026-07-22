@@ -23,6 +23,10 @@ public struct RpcClient: Sendable {
             let contextId: String
             let method: String
             let argsJson: [String: JSONValue]
+            /// The context identity executing the call. Omitted when nil (the node
+            /// then uses the context's default/owning identity). Required by apps
+            /// like curb that key state on the caller identity.
+            let executorPublicKey: String?
         }
     }
 
@@ -43,9 +47,12 @@ public struct RpcClient: Sendable {
     public func execute<T: Decodable>(
         contextId: String,
         method: String,
-        argsJson: [String: JSONValue] = [:]
+        argsJson: [String: JSONValue] = [:],
+        executorPublicKey: String? = nil
     ) async throws -> T {
-        let body = Request(params: .init(contextId: contextId, method: method, argsJson: argsJson))
+        let body = Request(
+            params: .init(
+                contextId: contextId, method: method, argsJson: argsJson, executorPublicKey: executorPublicKey))
         let bodyData = try MeroJSON.encode(body)
         let (data, _) = try await http.sendRaw(HttpRequest(path: "/jsonrpc", method: .post, body: .json(bodyData)))
 
