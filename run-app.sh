@@ -174,8 +174,10 @@ echo "app: $APP"
 
 # ---- install + launch ------------------------------------------------------
 step "Installing on simulator (clean reinstall → always the latest build)"
-BUNDLE_ID_RUN="${BUNDLE_ID}"
-xcrun simctl uninstall "$UDID" "$BUNDLE_ID_RUN" >/dev/null 2>&1 || true
+xcrun simctl uninstall "$UDID" "$BUNDLE_ID" >/dev/null 2>&1 || true
+# Also remove the XCUITest runner app that `xcodebuild test` leaves behind, so
+# only the real app (with the Calimero icon) is on the home screen.
+xcrun simctl uninstall "$UDID" "${BUNDLE_ID}.uitests.xctrunner" >/dev/null 2>&1 || true
 xcrun simctl install "$UDID" "$APP" || die "install failed"
 
 step "Launching ${BUNDLE_ID}  ($([ "$MOCK" -eq 1 ] && echo 'MOCK backend' || echo 'LIVE node'))"
