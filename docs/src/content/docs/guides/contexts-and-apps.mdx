@@ -1,0 +1,131 @@
+---
+title: Contexts & Applications
+description: Install an application, create a context, generate an identity, and join — the core admin-API lifecycle in Swift.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
+An **application** is a WASM bundle on a node; a **context** is a running instance
+of its shared state. This guide walks the lifecycle install → create context →
+join, all on `mero.admin`. Every method is `async throws`. The full surface is in
+the [admin API reference](/reference/admin-api/).
+
+## The lifecycle
+
+<SeqDiagram
+  id="d-context-lifecycle"
+  title="Install an app, create a context, join it"
+  lanes={[
+    { label: 'Your app', color: '#3fb950' },
+    { label: 'mero.admin', color: '#a5ff11' },
+    { label: 'Node /admin-api', color: '#58a6ff' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'installApplication(request)' },
+    { from: 1, to: 2, label: 'POST /install-application' },
+    { from: 2, to: 1, label: 'applicationId', dashed: true },
+    { from: 0, to: 1, label: 'createContext(request)' },
+    { from: 1, to: 2, label: 'POST /contexts' },
+    { from: 2, to: 1, label: 'contextId + memberPublicKey', dashed: true },
+    { type: 'divider', label: 'context is live on the creating node' },
+    { from: 0, to: 1, label: 'generateContextIdentity()', color: '#a371f7' },
+    { from: 1, to: 2, label: 'POST /identity/context' },
+    { from: 0, to: 1, label: 'joinContext(contextId)' },
+    { from: 1, to: 2, label: 'POST /contexts/:id/join' },
+    { type: 'divider', label: 'now a member — execute methods' },
+  ]}
+/>
+
+## Install an application
+
+From a hosted bundle URL:
+
+```swift
+let installed = try await mero.admin.installApplication(
+  InstallApplicationRequest(url: "https://example.com/app.wasm", hash: nil, metadata: [])
+)
+let applicationId = installed.applicationId
+```
+
+From a **registry** package — MeroKit resolves the manifest, derives the bundle
+artifact URL, and installs it:
+
+```swift
+let versions = try await mero.admin.getRegistryVersions(
+  registryUrl: registryURL, packageName: "my-package")            // newest first
+
+let app = try await mero.admin.installFromRegistry(
+  registryUrl: registryURL, packageName: "my-package", version: versions[0])
+```
+
+During development, install from a path with `installDevApplication(_:)`.
+
+Inspect and manage:
+
+```swift
+let apps = try await mero.admin.listApplications().apps
+let app  = try await mero.admin.getApplication(applicationId)
+_ = try await mero.admin.uninstallApplication(applicationId)
+```
+
+## Create a context
+
+```swift
+let created = try await mero.admin.createContext(
+  CreateContextRequest(applicationId: applicationId, groupId: groupId)
+)
+let contextId = created.contextId
+let memberKey = created.memberPublicKey
+```
+
+For a **multi-service** application, name the service:
+
+```swift
+let ctx = try await mero.admin.createContext(
+  CreateContextRequest(applicationId: applicationId, groupId: groupId, serviceName: "chat")
+)
+```
+
+List and inspect:
+
+```swift
+let contexts = try await mero.admin.getContexts().contexts   // [ContextWithGroup]
+let one      = try await mero.admin.getContext(contextId)    // Context
+let forApp   = try await mero.admin.getContextsForApplication(applicationId)
+let storage  = try await mero.admin.getContextStorage(contextId).sizeInBytes
+```
+
+## Identities & joining
+
+A **context identity** is your keypair within a context. Generate one, then join:
+
+```swift
+let identity = try await mero.admin.generateContextIdentity()   // .publicKey
+_ = try await mero.admin.joinContext(contextId)
+
+let all  = try await mero.admin.getContextIdentities(contextId).identities
+let mine = try await mero.admin.getContextIdentitiesOwned(contextId).identities
+```
+
+## Keeping state in sync
+
+```swift
+try await mero.admin.syncContext(contextId)                                // request a sync
+let r = try await mero.admin.resyncContext(contextId, request: ResyncContextRequest(force: true))
+// r.resyncStarted
+```
+
+<Aside type="tip">
+  Aliases let you use a friendly name instead of a raw ID:
+  `try await mero.admin.createContextAlias(CreateContextAliasRequest(alias: "main", contextId: contextId))`,
+  then `mero.admin.lookupContextAlias("main")`. Same for applications and context
+  identities — see the [admin API reference](/reference/admin-api/#aliases).
+</Aside>
+
+## Next
+
+- **[Executing methods](/guides/executing-methods/)** — run WASM methods in a context.
+- **[Groups & governance](/guides/groups-and-governance/)** — namespaces, members, capabilities.

@@ -1,0 +1,61 @@
+---
+title: Blobs
+description: Upload, list, download, inspect, and delete binary blobs on a node through the admin API in Swift.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **blob** is an opaque binary object stored on the node — an application bundle
+or arbitrary app data. `mero.admin` covers the full lifecycle; blob bytes are
+plain `Data`.
+
+## Upload
+
+```swift
+let bytes: Data = try Data(contentsOf: fileURL)
+
+let info = try await mero.admin.uploadBlob(
+  UploadBlobRequest(data: bytes, hash: nil, contextId: contextId)  // hash & contextId optional
+)
+let blobId = info.blobId
+```
+
+The body is sent as raw `application/octet-stream` to `PUT /admin-api/blobs`.
+
+## List
+
+```swift
+let blobs = try await mero.admin.listBlobs().blobs   // [BlobInfo] — blobId, size
+```
+
+## Inspect without downloading
+
+`getBlobInfo` issues a `HEAD` request — size, hash, and MIME type come from the
+response headers without transferring the body:
+
+```swift
+let meta = try await mero.admin.getBlobInfo(blobId)
+// meta.blobId, meta.size, meta.hash, meta.mimeType
+```
+
+## Download
+
+`getBlob` returns the raw bytes as `Data` (the endpoint streams the content, not
+JSON):
+
+```swift
+let data: Data = try await mero.admin.getBlob(blobId)
+```
+
+<Aside type="tip">
+  Use `listBlobs()` / `getBlobInfo()` when you only need `{ blobId, size }`
+  metadata; reserve `getBlob()` for when you actually need the bytes.
+</Aside>
+
+## Delete
+
+```swift
+let result = try await mero.admin.deleteBlob(blobId)   // result.deleted
+```

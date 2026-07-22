@@ -1,0 +1,181 @@
+---
+title: Authentication
+description: Direct credential login and hosted SSO deep-link login, plus the actor-serialised token lifecycle that refreshes access tokens transparently.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
+Every call MeroKit makes carries a JWT access token. There are two ways to obtain
+one — direct credentials and hosted SSO — and the SDK keeps it fresh for you.
+
+## Direct credentials
+
+For first-party apps, exchange a username and password for a token bundle.
+`bootstrapSecret` is only needed for the very first login on a fresh node.
+
+```swift
+let tokens = try await mero.authenticate(
+  Credentials(username: "alice", password: "s3cr3t",
+              bootstrapSecret: "…") // only on a fresh node's first login
+)
+let authed = await mero.isAuthenticated   // true
+```
+
+<SeqDiagram
+  id="d-direct-login"
+  title="Direct credential login"
+  lanes={[
+    { label: 'Your app', color: '#3fb950' },
+    { label: 'Mero (actor)', color: '#a5ff11' },
+    { label: 'Node /auth', color: '#58a6ff' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'authenticate(Credentials)' },
+    { from: 1, to: 2, label: 'POST /auth/token (user_password)' },
+    { from: 2, to: 1, label: 'access + refresh token', dashed: true },
+    { from: 1, to: 1, label: 'persist bundle to TokenStore' },
+    { from: 1, to: 0, label: 'TokenData', dashed: true, color: '#a5ff11' },
+    { type: 'divider', label: 'every later request carries Authorization: Bearer' },
+  ]}
+/>
+
+You can also put credentials in the config and call `authenticate()` with no
+argument:
+
+```swift
+let mero = Mero(config: MeroConfig(
+  baseURL: URL(string: "https://your-node.example")!,
+  credentials: Credentials(username: "alice", password: "s3cr3t")
+))
+try await mero.authenticate() // uses config.credentials
+```
+
+## The token lifecycle
+
+Refresh is **reactive**: the SDK never refreshes proactively (the server rejects
+a refresh while the access token is still valid). A `401` with
+`x-auth-error: token_expired` drives a single refresh and one retry — invisible
+to the caller.
+
+Because `Mero` is an **`actor`**, concurrent requests that all hit a `401` share
+**one** in-flight refresh. And because refresh tokens are **single-use**
+(rotated on every refresh), the SDK re-reads the token store first — so if
+another process or app extension already rotated the token, that newer bundle is
+adopted instead of replaying a consumed one (which would revoke the whole token
+family).
+
+<SeqDiagram
+  id="d-refresh"
+  title="Reactive 401 → refresh → retry (actor-serialised)"
+  lanes={[
+    { label: 'Caller', color: '#3fb950' },
+    { label: 'Mero (actor)', color: '#a5ff11' },
+    { label: 'TokenStore', color: '#f0883e' },
+    { label: 'Node', color: '#58a6ff' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'admin.getContexts()' },
+    { from: 1, to: 3, label: 'GET /admin-api/contexts (Bearer)' },
+    { from: 3, to: 1, label: '401 · x-auth-error: token_expired', dashed: true, color: '#f0883e' },
+    { from: 1, to: 1, label: 'serialise: one refresh at a time' },
+    { from: 1, to: 2, label: 're-read store (adopt if already rotated)' },
+    { from: 1, to: 3, label: 'POST /auth/refresh' },
+    { from: 3, to: 1, label: 'rotated bundle', dashed: true },
+    { from: 1, to: 2, label: 'persist rotated bundle' },
+    { from: 1, to: 3, label: 'retry request (new Bearer)', color: '#a5ff11' },
+    { from: 3, to: 1, label: '200 contexts', dashed: true },
+    { from: 1, to: 0, label: 'contexts', dashed: true, color: '#a5ff11' },
+    { type: 'divider', label: 'the 401 + retry never surface to the caller' },
+  ]}
+/>
+
+<Aside type="caution">
+  Terminal errors force re-login. `x-auth-error: token_reuse | token_revoked` is
+  never retried — it surfaces as `MeroError.authRevoked(reason:http:)` and the
+  token bundle is cleared. Catch it and route the user back to login. See the
+  [error model](/reference/error-model/).
+</Aside>
+
+## Hosted SSO (deep link)
+
+For hosted login, build the node's login URL, present it in
+`ASWebAuthenticationSession`, and feed the callback URL back in — the native
+analog of the web redirect flow.
+
+```swift
+import AuthenticationServices
+
+// 1. Build the login URL.
+let loginURL = Mero.buildAuthLoginUrl(
+  nodeUrl: "https://your-node.example",
+  options: AuthLoginOptions(callbackUrl: "myapp://auth-callback", mode: "login",
+                            permissions: ["admin"])
+)
+
+// 2. Present it (ASWebAuthenticationSession), then on the callback URL:
+if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
+  await mero.setTokenData(from: callback)
+  // callback also carries applicationId, contextId, contextIdentity, nodeUrl
+}
+```
+
+<SeqDiagram
+  id="d-sso"
+  title="Hosted SSO via ASWebAuthenticationSession"
+  lanes={[
+    { label: 'Your app', color: '#3fb950' },
+    { label: 'ASWebAuthSession', color: '#a371f7' },
+    { label: 'Mero (actor)', color: '#a5ff11' },
+  ]}
+  steps={[
+    { from: 2, to: 0, label: 'buildAuthLoginUrl(nodeUrl, options)', dashed: true },
+    { from: 0, to: 1, label: 'present(loginURL)' },
+    { from: 1, to: 1, label: 'user signs in on the node' },
+    { from: 1, to: 0, label: 'callback: myapp://…#access_token=…', dashed: true },
+    { from: 0, to: 0, label: 'Mero.parseAuthCallback(url) → AuthCallbackResult' },
+    { from: 0, to: 2, label: 'setTokenData(from: callback)' },
+    { type: 'divider', label: 'authenticated — no password entered in-app' },
+  ]}
+/>
+
+`parseAuthCallback` reads the URL hash fragment
+(`access_token`, `refresh_token`, `application_id`, `context_id`,
+`context_identity`, `node_url`) and returns `nil` if no access token is present.
+Both SSO helpers are `static` on `Mero`.
+
+## Persistence
+
+Pass a `tokenStore` in the config so tokens survive app launches. The Keychain
+store is the secure default; the memory store is ephemeral.
+
+```swift
+// Secure, persisted across launches — backed by the iOS/macOS Keychain
+let mero = Mero(config: MeroConfig(
+  baseURL: URL(string: "https://your-node.example")!,
+  tokenStore: KeychainTokenStore()
+))
+
+// Share tokens with an app extension via a Keychain access group:
+let shared = KeychainTokenStore(accessGroup: "TEAMID.group.myapp")
+
+// Ephemeral (the default when tokenStore is nil)
+let ephemeral = Mero(config: MeroConfig(
+  baseURL: URL(string: "https://your-node.example")!,
+  tokenStore: MemoryTokenStore()
+))
+```
+
+Conform to `TokenStore` (`getTokens` / `setTokens` / `clear`) to back tokens with
+anything else — see the [reference](/reference/mero/#tokenstore).
+
+## Inspecting and clearing auth state
+
+```swift
+await mero.isAuthenticated        // Bool — is a bundle present?
+await mero.currentTokenData()     // TokenData? (debugging / handoff)
+await mero.clearToken()           // drop the bundle + clear the store
+await mero.logout()               // clearToken() + close() — full sign-out
+```

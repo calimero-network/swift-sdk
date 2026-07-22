@@ -1,0 +1,115 @@
+---
+title: Executing Methods
+description: Run WASM contract methods with the RPC client — JSONValue arguments, Decodable return types, error handling, and the migration helpers.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import SeqDiagram from '../../../components/SeqDiagram.astro';
+
+`mero.rpc` executes methods on the WASM application inside a context. It speaks
+JSON-RPC 2.0 to the node's `/jsonrpc` endpoint and decodes the method's return
+value straight into your `Decodable` type.
+
+## Execute a method
+
+```swift
+struct Post: Decodable { let id: String; let title: String }
+
+let post: Post = try await mero.rpc.execute(
+  contextId: "…",
+  method: "get_post",
+  argsJson: ["id": "42"]
+)
+```
+
+- `contextId` — the context to run in.
+- `method` — the contract method name.
+- `argsJson` — a `[String: JSONValue]` of named arguments (defaults to `[:]`).
+- The return type is inferred from the call site; `execute` decodes `result.output`
+  into it.
+
+<SeqDiagram
+  id="d-rpc-execute"
+  title="execute() → JSON-RPC → WASM → Decodable"
+  lanes={[
+    { label: 'Your app', color: '#3fb950' },
+    { label: 'mero.rpc', color: '#a5ff11' },
+    { label: 'Node', color: '#58a6ff' },
+    { label: 'WASM app', color: '#a371f7' },
+  ]}
+  steps={[
+    { from: 0, to: 1, label: 'execute(contextId:method:argsJson:)' },
+    { from: 1, to: 2, label: 'POST /jsonrpc { method: "execute", … }' },
+    { from: 2, to: 3, label: 'run method in context' },
+    { from: 3, to: 2, label: 'return value / error', dashed: true },
+    { from: 2, to: 1, label: 'JSON-RPC { result | error }', dashed: true },
+    { from: 1, to: 0, label: 'decode result.output → T  (or throw)', dashed: true, color: '#a5ff11' },
+  ]}
+/>
+
+<Aside type="note">
+  There's a single entry point — `execute`. Reads and writes both go through it;
+  whether a call mutates state is up to the contract method, not the SDK.
+</Aside>
+
+## Arguments with `JSONValue`
+
+`argsJson` is a `[String: JSONValue]`. `JSONValue` conforms to the Swift
+`ExpressibleBy…Literal` protocols, so you write ordinary literals — strings,
+numbers, bools, arrays, and nested objects — with no wrapping:
+
+```swift
+let args: [String: JSONValue] = [
+  "id": "42",
+  "limit": 10,
+  "verbose": true,
+  "tags": ["a", "b"],
+  "filter": ["author": "alice"],
+]
+
+let result: MyResult = try await mero.rpc.execute(
+  contextId: contextId, method: "search", argsJson: args
+)
+```
+
+If you don't need a typed result, decode into `JSONValue` and use its accessors
+(`.stringValue`, `.intValue`, `.arrayValue`, `subscript(key:)`, …):
+
+```swift
+let raw: JSONValue = try await mero.rpc.execute(
+  contextId: contextId, method: "get_state", argsJson: [:]
+)
+let name = raw["name"]?.stringValue
+```
+
+## Handling contract errors
+
+A JSON-RPC error from the contract throws `MeroError.rpc(RpcError)`:
+
+```swift
+do {
+  let r: Receipt = try await mero.rpc.execute(
+    contextId: contextId, method: "transfer", argsJson: ["to": to, "amount": 10])
+} catch let error as MeroError {
+  if case .rpc(let rpc) = error {
+    print("contract error \(rpc.code): \(rpc.message)", rpc.data as Any)
+  }
+  throw error
+}
+```
+
+`RpcError` carries `code`, `message`, an optional `type`, and optional `data`
+(`JSONValue?`). Transport failures (HTTP 4xx/5xx, network) are `MeroError.http` /
+`.network`, not `.rpc` — see the [error model](/reference/error-model/).
+
+## Migration helpers
+
+Two convenience wrappers over `execute` support the entry-migration flow used
+when an application upgrades its state schema:
+
+```swift
+let summary = try await mero.rpc.migrateMyEntries(contextId)  // .converted, .remaining
+let pending = try await mero.rpc.countMyPending(contextId)    // Int
+```

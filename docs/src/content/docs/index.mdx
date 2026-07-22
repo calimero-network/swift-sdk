@@ -1,0 +1,120 @@
+---
+title: MeroKit
+description: The Calimero Swift SDK — a native, zero-dependency iOS/macOS client for a remote Calimero node. async/await auth, JSON-RPC contract calls, the admin API, SSO login, and a SwiftUI frontend.
+template: splash
+hero:
+  tagline: The native Swift SDK for Calimero. A zero-dependency iOS/macOS client for a remote node — async/await auth with automatic token refresh, JSON-RPC contract calls, the full admin API, SSO deep-link login, and an optional SwiftUI frontend. Built on URLSession, Foundation, and Security.
+  actions:
+    - text: Quickstart
+      link: /get-started/quickstart/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/calimero-network/swift-sdk
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import Figure from '../../components/Figure.astro';
+
+{/* Audience-routed landing — pick your track. */}
+
+<CardGrid>
+  <Card title="Get Started" icon="rocket">
+    Add the package, create a `Mero` client, authenticate, and make your first
+    call. [Quickstart →](/get-started/quickstart/)
+  </Card>
+  <Card title="Understand" icon="open-book">
+    How the SDK is layered — the `Mero` actor, the API clients, the actor-based
+    token lifecycle, and the SwiftUI frontend. [Read the overview →](/understand/system-overview/)
+  </Card>
+  <Card title="Guides" icon="setting">
+    Task guides: contexts & apps, executing WASM methods, groups & governance,
+    blobs, and the `MeroKitUI` layer. [Browse the guides →](/guides/contexts-and-apps/)
+  </Card>
+  <Card title="Reference" icon="list-format">
+    The `Mero` actor API, the full admin & auth surface, and the `MeroError`
+    model. [Open the reference →](/reference/mero/)
+  </Card>
+</CardGrid>
+
+## The device is a thin client
+
+MeroKit never runs a node. Every capability is an `async` HTTP(S) call to a
+**remote** Calimero node. It's a faithful Swift port of the
+[`@calimero-network/mero-js`](https://calimero-network.github.io/mero-js/) wire
+contract — same endpoints, same auth model — in idiomatic `async/await`.
+
+<Figure id="d-architecture">
+  <svg viewBox="0 0 760 494" role="img" aria-label="MeroKit layered architecture" font-family="var(--sl-font-mono)">
+    <rect x="0" y="0" width="760" height="494" rx="12" fill="#0f0f16" />
+
+    {/* Layer: your app + MeroKitUI */}
+    <g class="seq-step" style="--step-i:0">
+      <rect x="60" y="24" width="640" height="54" rx="8" fill="#3fb95018" stroke="#3fb95050" />
+      <text x="380" y="47" text-anchor="middle" fill="#3fb950" font-size="12.5" font-weight="600">Your app — SwiftUI / UIKit</text>
+      <text x="380" y="65" text-anchor="middle" fill="#9aa4b2" font-size="10">iOS 15+ · macOS 12+  ·  optional MeroKitUI (MeroClient + MeroRootView)</text>
+    </g>
+    <g class="seq-step" style="--step-i:1">
+      <line x1="380" y1="78" x2="380" y2="102" stroke="#3f3f46" stroke-width="1.4" />
+      <polygon points="380,102 376,94 384,94" fill="#3f3f46" />
+    </g>
+
+    {/* Layer: Mero actor */}
+    <g class="seq-step" style="--step-i:2">
+      <rect x="60" y="102" width="640" height="58" rx="8" fill="#a5ff1114" stroke="#a5ff1155" />
+      <text x="380" y="126" text-anchor="middle" fill="#a5ff11" font-size="13" font-weight="600">Mero — actor</text>
+      <text x="380" y="145" text-anchor="middle" fill="#c4c4cc" font-size="10.5">authenticate() · setTokenData() · single-flight token refresh (401 → refresh → retry)</text>
+    </g>
+
+    {/* Layer: API + rpc clients */}
+    <g class="seq-step" style="--step-i:3">
+      <rect x="90" y="186" width="176" height="56" rx="8" fill="#58a6ff14" stroke="#58a6ff50" />
+      <text x="178" y="208" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="600">.auth</text>
+      <text x="178" y="226" text-anchor="middle" fill="#9aa4b2" font-size="9">AuthApi</text>
+
+      <rect x="292" y="186" width="176" height="56" rx="8" fill="#58a6ff14" stroke="#58a6ff50" />
+      <text x="380" y="208" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="600">.admin</text>
+      <text x="380" y="226" text-anchor="middle" fill="#9aa4b2" font-size="9">AdminApi</text>
+
+      <rect x="494" y="186" width="176" height="56" rx="8" fill="#a371f714" stroke="#a371f750" />
+      <text x="582" y="208" text-anchor="middle" fill="#a371f7" font-size="11" font-weight="600">.rpc</text>
+      <text x="582" y="226" text-anchor="middle" fill="#9aa4b2" font-size="9">RpcClient</text>
+    </g>
+
+    {/* Layer: transport */}
+    <g class="seq-step" style="--step-i:4">
+      <line x1="380" y1="242" x2="380" y2="268" stroke="#3f3f46" stroke-width="1.4" />
+      <polygon points="380,268 376,260 384,260" fill="#3f3f46" />
+      <rect x="60" y="268" width="470" height="56" rx="8" fill="#27272a" stroke="#3f3f46" />
+      <text x="295" y="291" text-anchor="middle" fill="#e4e4e7" font-size="12" font-weight="600">HttpClient — URLSession transport</text>
+      <text x="295" y="309" text-anchor="middle" fill="#9aa4b2" font-size="10">Bearer auth · single-flight refresh · retry · timeout</text>
+
+      <rect x="546" y="268" width="154" height="56" rx="8" fill="#27272a" stroke="#3f3f46" />
+      <text x="623" y="291" text-anchor="middle" fill="#e4e4e7" font-size="11" font-weight="600">TokenStore</text>
+      <text x="623" y="309" text-anchor="middle" fill="#9aa4b2" font-size="9">Keychain · Memory</text>
+    </g>
+    <g class="seq-step" style="--step-i:5">
+      <line x1="295" y1="324" x2="295" y2="350" stroke="#3f3f46" stroke-width="1.4" />
+      <polygon points="295,350 291,342 299,342" fill="#3f3f46" />
+    </g>
+
+    {/* Layer: node */}
+    <g class="seq-step" style="--step-i:6">
+      <rect x="60" y="350" width="640" height="120" rx="8" fill="#0f0f16" stroke="#a5ff1140" stroke-width="1.3" />
+      <text x="380" y="374" text-anchor="middle" fill="#a5ff11" font-size="12" font-weight="600">Remote merod node  ·  HTTP(S)</text>
+      <rect x="130" y="392" width="220" height="46" rx="6" fill="#18181b" stroke="#27272a" />
+      <text x="240" y="411" text-anchor="middle" fill="#58a6ff" font-size="10" font-weight="600">REST</text>
+      <text x="240" y="426" text-anchor="middle" fill="#9aa4b2" font-size="8.5">/admin-api · /auth</text>
+      <rect x="410" y="392" width="220" height="46" rx="6" fill="#18181b" stroke="#27272a" />
+      <text x="520" y="411" text-anchor="middle" fill="#a371f7" font-size="10" font-weight="600">JSON-RPC</text>
+      <text x="520" y="426" text-anchor="middle" fill="#9aa4b2" font-size="8.5">/jsonrpc</text>
+      <text x="380" y="458" text-anchor="middle" fill="#5a6472" font-size="8.5" font-style="italic">SSE events — on the roadmap</text>
+    </g>
+  </svg>
+</Figure>
+
+For the protocol those nodes implement, see the
+[Calimero Core docs](https://calimero-network.github.io/core/). For the
+JavaScript sibling, see [Mero.js](https://calimero-network.github.io/mero-js/).

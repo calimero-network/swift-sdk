@@ -1,0 +1,247 @@
+---
+title: Admin API
+description: The full AdminApi surface — every async method, its Swift signature, and the node endpoint it calls, grouped by area.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`mero.admin` (`AdminApi`) is the node's `/admin-api` REST surface — the full set
+of methods across applications, contexts, namespaces, groups, blobs, aliases,
+capabilities, metadata, upgrades, and TEE. It's a `Sendable` struct over the
+shared [`HttpClient`](/reference/error-model/#transport); **every method is
+`async throws`**.
+
+<Aside type="note">
+  Paths below are relative to `/admin-api`. Request/response types (`…Request`,
+  `…ResponseData`) come from `AdminTypes.swift`. The shapes you'll use most are
+  shown in the guides. Signatures are verbatim; `= nil` / `= …` mark defaults.
+</Aside>
+
+## Health & status
+
+| Method | Endpoint |
+| --- | --- |
+| `healthCheck() -> HealthStatus` | `GET /health` |
+| `isAuthed() -> AdminAuthStatus` | `GET /is-authed` |
+
+## Applications
+
+| Method | Endpoint |
+| --- | --- |
+| `installApplication(_ request: InstallApplicationRequest) -> InstallApplicationResponseData` | `POST /install-application` |
+| `installDevApplication(_ request: InstallDevApplicationRequest) -> InstallApplicationResponseData` | `POST /install-dev-application` |
+| `installFromRegistry(registryUrl:packageName:version:) -> InstallApplicationResponseData` | resolves registry manifest, then installs |
+| `getRegistryVersions(registryUrl:packageName:) -> [String]` | registry bundles (newest first) |
+| `uninstallApplication(_ appId: String) -> UninstallApplicationResponseData` | `DELETE /applications/{appId}` |
+| `listApplications() -> ListApplicationsResponseData` | `GET /applications` |
+| `getApplication(_ appId: String) -> GetApplicationResponseData` | `GET /applications/{appId}` |
+| `listApplicationVersions(_ applicationId: String) -> [ApplicationVersionEntry]` | `GET /applications/{applicationId}/versions` |
+
+A top-level helper `compareSemver(_ a: String, _ b: String) -> Int` sorts version
+strings ascending.
+
+## Packages
+
+| Method | Endpoint |
+| --- | --- |
+| `listPackages() -> ListPackagesResponseData` | `GET /packages` |
+| `listPackageVersions(_ packageName: String) -> ListVersionsResponseData` | `GET /packages/{packageName}/versions` |
+| `getLatestPackageVersion(_ packageName: String) -> GetLatestVersionResponseData` | `GET /packages/{packageName}/latest` |
+
+## Contexts
+
+| Method | Endpoint |
+| --- | --- |
+| `createContext(_ request: CreateContextRequest) -> CreateContextResponseData` | `POST /contexts` |
+| `deleteContext(_ contextId: String, request: DeleteContextRequest? = nil) -> DeleteContextResponseData` | `DELETE /contexts/{contextId}` |
+| `getContexts() -> GetContextsResponseData` | `GET /contexts` |
+| `getContext(_ contextId: String) -> Context` | `GET /contexts/{contextId}` |
+| `getContextsForApplication(_ applicationId: String) -> GetContextsResponseData` | `GET /contexts/for-application/{applicationId}` |
+| `getContextGroup(_ contextId: String) -> String?` | `GET /contexts/{contextId}/group` |
+| `getContextStorage(_ contextId: String) -> ContextStorageResponseData` | `GET /contexts/{contextId}/storage` |
+| `getContextsWithExecutorsForApplication(_ applicationId: String) -> [ContextWithExecutors]` | `GET /contexts/with-executors/for-application/{applicationId}` |
+| `joinContext(_ contextId: String) -> JoinContextResponseData` | `POST /contexts/{contextId}/join` |
+| `leaveContext(_ contextId: String, request: [String: JSONValue]? = nil)` | `POST /contexts/{contextId}/leave` |
+| `updateContextApplication(_ contextId: String, request: UpdateContextApplicationRequest)` | `POST /contexts/{contextId}/application` |
+| `syncContext(_ contextId: String? = nil)` | `POST /contexts/sync/{contextId?}` |
+| `resyncContext(_ contextId: String, request: ResyncContextRequest = .init()) -> ResyncContextResponseData` | `POST /contexts/{contextId}/resync` |
+| `inviteSpecializedNode(_ request: InviteSpecializedNodeRequest) -> InviteSpecializedNodeResponseData` | `POST /contexts/invite-specialized-node` |
+
+### Context identity
+
+| Method | Endpoint |
+| --- | --- |
+| `generateContextIdentity() -> GenerateContextIdentityResponseData` | `POST /identity/context` |
+| `getContextIdentities(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities` |
+| `getContextIdentitiesOwned(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities-owned` |
+
+## Blobs
+
+| Method | Endpoint |
+| --- | --- |
+| `uploadBlob(_ request: UploadBlobRequest) -> BlobInfo` | `PUT /blobs?hash=&context_id=` (octet-stream) |
+| `listBlobs() -> ListBlobsResponseData` | `GET /blobs` |
+| `getBlob(_ blobId: String) -> Data` | `GET /blobs/{blobId}` (raw bytes) |
+| `getBlobInfo(_ blobId: String) -> GetBlobInfoResponseData` | `HEAD /blobs/{blobId}` |
+| `deleteBlob(_ blobId: String) -> DeleteBlobResponseData` | `DELETE /blobs/{blobId}` |
+
+## Aliases
+
+| Method | Endpoint |
+| --- | --- |
+| `createContextAlias(_ request: CreateContextAliasRequest) -> CreateAliasResponseData` | `POST /alias/create/context` |
+| `createApplicationAlias(_ request: CreateApplicationAliasRequest) -> CreateAliasResponseData` | `POST /alias/create/application` |
+| `lookupContextAlias(_ name: String) -> LookupAliasResponseData` | `POST /alias/lookup/context/{name}` |
+| `lookupApplicationAlias(_ name: String) -> LookupAliasResponseData` | `POST /alias/lookup/application/{name}` |
+| `deleteContextAlias(_ name: String) -> DeleteAliasResponseData` | `POST /alias/delete/context/{name}` |
+| `deleteApplicationAlias(_ name: String) -> DeleteAliasResponseData` | `POST /alias/delete/application/{name}` |
+| `listContextAliases() -> ListAliasesResponseData` | `GET /alias/list/context` |
+| `listApplicationAliases() -> ListAliasesResponseData` | `GET /alias/list/application` |
+| `listContextIdentityAliases(_ contextId: String) -> ListContextIdentityAliasesResponseData` | `GET /alias/list/identity/{contextId}` |
+| `createContextIdentityAlias(_ contextId: String, request:) -> CreateContextIdentityAliasResponseData` | `POST /alias/create/identity/{contextId}` |
+| `lookupContextIdentityAlias(_ contextId: String, name:) -> LookupContextIdentityAliasResponseData` | `POST /alias/lookup/identity/{contextId}/{name}` |
+| `deleteContextIdentityAlias(_ contextId: String, name:) -> DeleteContextIdentityAliasResponseData` | `POST /alias/delete/identity/{contextId}/{name}` |
+
+## Namespaces
+
+| Method | Endpoint |
+| --- | --- |
+| `listNamespaces() -> [Namespace]` | `GET /namespaces` |
+| `getNamespace(_ namespaceId: String) -> Namespace` | `GET /namespaces/{namespaceId}` |
+| `getNamespaceIdentity(_ namespaceId: String) -> NamespaceIdentity` | `GET /namespaces/{namespaceId}/identity` |
+| `listNamespacesForApplication(_ applicationId: String) -> [Namespace]` | `GET /namespaces/for-application/{applicationId}` |
+| `createNamespace(_ request: CreateNamespaceRequest) -> CreateNamespaceResponseData` | `POST /namespaces` |
+| `deleteNamespace(_ namespaceId: String, request: DeleteNamespaceRequest? = nil) -> DeleteNamespaceResponseData` | `DELETE /namespaces/{namespaceId}` |
+| `createNamespaceInvitation(_ namespaceId: String, request: … = nil) -> CreateNamespaceInvitationResult` | `POST /namespaces/{namespaceId}/invite` |
+| `joinNamespace(_ namespaceId: String, request: JoinNamespaceRequest) -> JoinNamespaceResponseData` | `POST /namespaces/{namespaceId}/join` |
+| `createGroupInNamespace(_ namespaceId: String, request: … = nil) -> CreateGroupInNamespaceResponseData` | `POST /namespaces/{namespaceId}/groups` |
+| `listNamespaceGroups(_ namespaceId: String) -> [SubgroupEntry]` | `GET /namespaces/{namespaceId}/groups` |
+
+## Group management
+
+### Info, membership & contexts
+
+| Method | Endpoint |
+| --- | --- |
+| `createGroup(_ request: [String: JSONValue]) -> CreateGroupResponseData` | `POST /groups` |
+| `getGroupInfo(_ groupId: String) -> GroupInfo` | `GET /groups/{groupId}` |
+| `deleteGroup(_ groupId: String, request: DeleteGroupRequest? = nil) -> DeleteGroupResponseData` | `DELETE /groups/{groupId}` |
+| `updateGroupSettings(_ groupId: String, request: UpdateGroupSettingsRequest)` | `PATCH /groups/{groupId}` |
+| `listGroupMembers(_ groupId: String) -> ListGroupMembersResponseData` | `GET /groups/{groupId}/members` |
+| `listGroupContexts(_ groupId: String) -> [GroupContextEntry]` | `GET /groups/{groupId}/contexts` |
+| `addGroupMembers(_ groupId: String, request: AddGroupMembersRequest)` | `POST /groups/{groupId}/members` |
+| `removeGroupMembers(_ groupId: String, request: RemoveGroupMembersRequest)` | `POST /groups/{groupId}/members/remove` |
+| `updateMemberRole(_ groupId: String, identity:, request: UpdateMemberRoleRequest)` | `PUT /groups/{groupId}/members/{identity}/role` |
+| `setMemberAutoFollow(_ groupId: String, identity:, request: [String: JSONValue])` | `PUT /groups/{groupId}/members/{identity}/auto-follow` |
+| `leaveGroup(_ groupId: String, request: [String: JSONValue]? = nil)` | `POST /groups/{groupId}/leave` |
+
+### Capabilities & settings
+
+| Method | Endpoint |
+| --- | --- |
+| `getMemberCapabilities(_ groupId: String, identity:) -> MemberCapabilities` | `GET /groups/{groupId}/members/{identity}/capabilities` |
+| `setMemberCapabilities(_ groupId: String, identity:, request:)` | `PUT /groups/{groupId}/members/{identity}/capabilities` |
+| `getDefaultCapabilities(_ groupId: String) -> Int` | via `getGroupInfo` |
+| `setDefaultCapabilities(_ groupId: String, request:)` | `PUT /groups/{groupId}/settings/default-capabilities` |
+| `getSubgroupVisibility(_ groupId: String) -> String` | via `getGroupInfo` |
+| `setSubgroupVisibility(_ groupId: String, request:)` | `PUT /groups/{groupId}/settings/subgroup-visibility` |
+| `getTeeAdmissionPolicy(_ groupId: String) -> GetTeeAdmissionPolicyResponseData` | `GET /groups/{groupId}/settings/tee-admission-policy` |
+| `setTeeAdmissionPolicy(_ groupId: String, request:)` | `PUT /groups/{groupId}/settings/tee-admission-policy` |
+
+### Metadata
+
+| Method | Endpoint |
+| --- | --- |
+| `setGroupMetadata(_ groupId: String, request:)` | `PUT /groups/{groupId}/metadata` |
+| `getGroupMetadata(_ groupId: String) -> MetadataRecord?` | `GET /groups/{groupId}/metadata` |
+| `setMemberMetadata(_ groupId: String, identity:, request:)` | `PUT /groups/{groupId}/members/{identity}/metadata` |
+| `getMemberMetadata(_ groupId: String, identity:) -> MetadataRecord?` | `GET /groups/{groupId}/members/{identity}/metadata` |
+| `setContextMetadata(_ groupId: String, contextId:, request:)` | `PUT /groups/{groupId}/contexts/{contextId}/metadata` |
+| `getContextMetadata(_ groupId: String, contextId:) -> MetadataRecord?` | `GET /groups/{groupId}/contexts/{contextId}/metadata` |
+
+### Invitations, join & subgroups
+
+| Method | Endpoint |
+| --- | --- |
+| `createGroupInvitation(_ groupId: String, request: … = nil) -> CreateGroupInvitationResult` | `POST /groups/{groupId}/invite` |
+| `joinGroup(_ request: JoinGroupRequest) -> JoinGroupResponseData` | `POST /groups/join` |
+| `joinSubgroupInheritance(_ groupId: String) -> JoinSubgroupInheritanceResponseData` | `POST /groups/{groupId}/join-via-inheritance` |
+| `listSubgroups(_ groupId: String) -> [SubgroupEntry]` | `GET /groups/{groupId}/subgroups` |
+| `reparentGroup(_ childGroupId: String, request: ReparentGroupRequest) -> ReparentGroupResponseData` | `POST /groups/{childGroupId}/reparent` |
+| `detachContextFromGroup(_ groupId: String, contextId:, request: … = nil)` | `POST /groups/{groupId}/contexts/{contextId}/remove` |
+| `issueOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-ownership-proof` |
+| `issueNamespaceOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-namespace-ownership-proof` |
+
+### Sync, signing, upgrades & migration
+
+| Method | Endpoint |
+| --- | --- |
+| `syncGroup(_ groupId: String, request: … = nil) -> SyncGroupResponseData` | `POST /groups/{groupId}/sync` |
+| `registerGroupSigningKey(_ groupId: String, request:) -> RegisterGroupSigningKeyResponseData` | `POST /groups/{groupId}/signing-key` |
+| `upgradeGroup(_ groupId: String, request: UpgradeGroupRequest) -> UpgradeGroupResponseData` | `POST /groups/{groupId}/upgrade` |
+| `getGroupUpgradeStatus(_ groupId: String) -> GroupUpgradeStatus?` | `GET /groups/{groupId}/upgrade/status` |
+| `retryGroupUpgrade(_ groupId: String, request: … = nil) -> RetryGroupUpgradeResponseData` | `POST /groups/{groupId}/upgrade/retry` |
+| `getMigrationStatus(_ namespaceId: String) -> MigrationStatus` | `GET /groups/{namespaceId}/migration-status` |
+| `getCascadeStatus(_ namespaceId: String) -> [CascadeStatusEntry]` | `GET /groups/{namespaceId}/cascade-status` |
+| `abortMigration(_ namespaceId: String, request: … = nil) -> JSONValue` | `POST /groups/{namespaceId}/migration/abort` |
+
+## TEE
+
+| Method | Endpoint |
+| --- | --- |
+| `getTeeInfo() -> TeeInfoResponseData` | `GET /tee/info` |
+| `teeAttest(_ request: TeeAttestRequest) -> TeeAttestResponseData` | `POST /tee/attest` |
+| `teeVerifyQuote(_ request: TeeVerifyQuoteRequest) -> TeeVerifyQuoteResponseData` | `POST /tee/verify-quote` |
+
+## Network & node
+
+| Method | Endpoint |
+| --- | --- |
+| `getPeersCount() -> PeersCountResponseData` | `GET /peers` |
+| `getNetworkStatus() -> JSONValue` | `GET /network/status` |
+| `getUsage() -> JSONValue` | `GET /usage` |
+| `getCertificate() -> String` | `GET /certificate` (PEM) |
+
+## Key domain types
+
+```swift
+struct Context: Codable, Sendable {
+  let id: String
+  let applicationId: String
+  let serviceName: String?
+  let contextStateHash: String
+  let dagHeads: [[Int]]
+  let applicationVersion: String?
+}
+
+struct Namespace: Codable, Sendable {
+  let namespaceId, appKey, targetApplicationId, upgradePolicy: String
+  let createdAt: Int
+  let name: String?
+  let memberCount, contextCount, subgroupCount: Int
+}
+
+struct GroupInfo: Codable, Sendable {          // = GroupInfoResponseData
+  let groupId, appKey, targetApplicationId, upgradePolicy: String
+  let memberCount, contextCount, defaultCapabilities: Int
+  let subgroupVisibility: String
+  let activeUpgrade: GroupUpgradeStatus?
+  let metadata: MetadataRecord?
+}
+
+struct MetadataRecord: Codable, Sendable {
+  let name: String?
+  let data: [String: String]
+  let updatedAt: Int
+  let updatedBy: String
+}
+
+struct BlobInfo: Codable, Sendable { let blobId: String; let size: Int }
+
+enum UpgradePolicy: String, Codable, Sendable { case automatic = "Automatic"; case lazyOnAccess = "LazyOnAccess" }
+```
+
+See [`AdminTypes.swift`](https://github.com/calimero-network/swift-sdk/blob/master/Sources/MeroKit/Admin/AdminTypes.swift)
+for the complete set.

@@ -1,0 +1,120 @@
+---
+title: System Overview
+description: How MeroKit is structured — the Mero actor, the API clients, the actor-serialised token lifecycle, the URLSession transport, and the optional SwiftUI frontend.
+sidebar:
+  order: 1
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+MeroKit is a thin composition of value-type clients over one `URLSession`
+transport, fronted by the `Mero` **actor**. The device never runs a node — every
+capability is an `async` HTTP(S) call to a remote one. It's a faithful Swift port
+of the [Mero.js](https://calimero-network.github.io/mero-js/) wire contract.
+
+## The shape of a client
+
+```swift
+import MeroKit
+
+let mero = Mero(config: MeroConfig(
+  baseURL: URL(string: "https://your-node.example")!,
+  tokenStore: KeychainTokenStore()
+))
+try await mero.authenticate(Credentials(username: "alice", password: "s3cr3t"))
+
+mero.auth    // AuthApi   — login, tokens, key management
+mero.admin   // AdminApi  — contexts, apps, namespaces, groups, blobs, TEE
+mero.rpc     // RpcClient — execute WASM contract methods
+mero.http    // the transport in use (advanced callers)
+```
+
+For the visual layer map, see [The device is a thin client](/) on the home page.
+
+## Why an actor
+
+`Mero` is declared as an `actor`, so its token state and refresh logic are
+race-free without locks. This matters for one thing above all: **single-flight
+refresh**. When several concurrent requests all get a `401`, the actor serialises
+them so exactly one refresh runs; the rest await its result and retry with the
+rotated token. Refresh tokens are single-use, so this is what keeps concurrent
+traffic from revoking the token family. See
+[the token lifecycle](/get-started/authentication/#the-token-lifecycle).
+
+Practically, that means you `await` every instance member:
+
+```swift
+let authed = await mero.isAuthenticated
+await mero.logout()
+```
+
+## The layers
+
+### Transport — `HttpClient` / `URLSessionHttpClient`
+
+A `URLSession`-based client (`URLSessionHttpClient`) implementing the
+`HttpClient` protocol. It attaches `Authorization: Bearer`, runs the reactive
+`401 → refresh → retry` cycle, handles the terminal `x-auth-error` cases, and
+retries transient network/5xx failures with backoff. `Mero` builds it from your
+`MeroConfig` and wires it with `TransportHooks` back into its own token state.
+Advanced callers can reach it as `mero.http` — see the
+[error model](/reference/error-model/) and the transport types.
+
+### API clients — `AuthApi`, `AdminApi`, `RpcClient`
+
+All three are lightweight `Sendable` `struct`s built over the shared
+`HttpClient`; none manages tokens itself — the transport's hooks do.
+
+- **`AuthApi`** (`mero.auth`) — the node's `/auth` and identity/key endpoints:
+  `generateTokens`, `refreshToken`, providers, and root/client **key
+  management**. See the [auth API reference](/reference/auth-api/).
+- **`AdminApi`** (`mero.admin`) — the node's `/admin-api` surface: contexts,
+  applications, packages, namespaces, groups, blobs, aliases, capabilities,
+  metadata, upgrades/migration, and TEE. See the
+  [admin API reference](/reference/admin-api/).
+- **`RpcClient`** (`mero.rpc`) — JSON-RPC to `/jsonrpc`; executes WASM contract
+  methods and decodes the result into your type. See
+  [executing methods](/guides/executing-methods/).
+
+### Token store — `TokenStore`
+
+Where tokens persist between launches. `KeychainTokenStore` (secure, backed by
+the iOS/macOS Keychain) or `MemoryTokenStore` (ephemeral, the default). Conform
+to the `TokenStore` protocol to use your own.
+
+### Optional frontend — `MeroKitUI`
+
+A separate library product (`import MeroKitUI`) with an `@MainActor`
+`ObservableObject` `MeroClient` plus drop-in `MeroRootView` / `LoginView` /
+`HomeView` — the native analog of mero-react's `MeroProvider`/`useMero` +
+`LoginModal`. See [the SwiftUI frontend guide](/guides/swiftui-frontend/).
+
+## Zero dependencies
+
+No third-party packages. MeroKit is built entirely on the Apple platform SDKs:
+
+| Framework | Used for |
+| --- | --- |
+| `URLSession` (Foundation) | all HTTP requests |
+| `Foundation` | JSON coding, URLs, dates |
+| `Security` | the Keychain token store |
+| `SwiftUI` | the optional `MeroKitUI` layer |
+
+Swift 5.9+, iOS 15+ / macOS 12+, with Strict Concurrency enabled.
+
+## How it maps to the node
+
+Every call is HTTP to a single remote `merod` node:
+
+| Client | Node surface |
+| --- | --- |
+| `mero.auth` | `GET/POST /auth/*`, `/admin/keys*` |
+| `mero.admin` | `/admin-api/*` (REST) |
+| `mero.rpc` | `POST /jsonrpc` (JSON-RPC) |
+
+<Aside type="note">
+  Real-time events (SSE) and blob-streaming polish are on the roadmap (milestones
+  M3/M5). Until then, MeroKit covers transport + auth + the full admin/RPC
+  surface. For the protocol the node implements, see the
+  [Calimero Core docs](https://calimero-network.github.io/core/).
+</Aside>

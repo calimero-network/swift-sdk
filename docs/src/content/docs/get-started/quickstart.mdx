@@ -1,0 +1,145 @@
+---
+title: Quickstart
+description: Add MeroKit to an app, create a client, authenticate, call a contract, and log out — in a few minutes.
+sidebar:
+  order: 1
+---
+
+import { Steps, Tabs, TabItem, Aside } from '@astrojs/starlight/components';
+
+MeroKit (`import MeroKit`) is the native Swift SDK for a remote
+[Calimero](https://calimero-network.github.io/core/) node. This page takes you
+from adding the package to your first authenticated contract call.
+
+## Requirements
+
+- **Swift 5.9+** (built and tested on Swift 6)
+- **iOS 15+ / macOS 12+**
+- Zero third-party dependencies — built on `URLSession`, `Foundation`, and
+  `Security`.
+
+## Install
+
+<Tabs syncKey="pkgmgr">
+  <TabItem label="Swift Package Manager">
+    ```swift
+    // Package.swift
+    dependencies: [
+      .package(url: "https://github.com/calimero-network/swift-sdk.git", from: "0.1.0"),
+    ],
+    targets: [
+      .target(name: "MyApp", dependencies: [
+        .product(name: "MeroKit", package: "swift-sdk"),
+        // Optional SwiftUI frontend:
+        .product(name: "MeroKitUI", package: "swift-sdk"),
+      ]),
+    ]
+    ```
+  </TabItem>
+  <TabItem label="Xcode">
+    **File → Add Package Dependencies…**, paste
+    `https://github.com/calimero-network/swift-sdk.git`, and add the **MeroKit**
+    library product (and **MeroKitUI** if you want the SwiftUI layer).
+  </TabItem>
+  <TabItem label="CocoaPods">
+    ```ruby
+    # Podfile
+    pod 'MeroKit'
+    ```
+    See [`MeroKit.podspec`](https://github.com/calimero-network/swift-sdk/blob/master/MeroKit.podspec).
+  </TabItem>
+</Tabs>
+
+## Your first calls
+
+<Steps>
+
+1. **Create the client.** Point it at your node; persist tokens in the Keychain.
+
+   ```swift
+   import MeroKit
+
+   let mero = Mero(config: MeroConfig(
+     baseURL: URL(string: "https://your-node.example")!,
+     tokenStore: KeychainTokenStore()   // defaults to in-memory otherwise
+   ))
+   ```
+
+2. **Authenticate** with a username and password. `bootstrapSecret` is only
+   needed for the very first login on a fresh node.
+
+   ```swift
+   let tokens = try await mero.authenticate(
+     Credentials(username: "alice", password: "s3cr3t")
+   )
+   let authed = await mero.isAuthenticated   // true
+   ```
+
+3. **Call a contract** over JSON-RPC. The result is decoded into your `Decodable`
+   type; arguments are a `[String: JSONValue]` dictionary literal.
+
+   ```swift
+   struct Post: Decodable { let id: String; let title: String }
+
+   let post: Post = try await mero.rpc.execute(
+     contextId: "…",
+     method: "get_post",
+     argsJson: ["id": "42"]
+   )
+   ```
+
+4. **Use the admin & auth APIs** for everything else.
+
+   ```swift
+   let contexts = try await mero.admin.getContexts()
+   let providers = try await mero.auth.getProviders()
+   ```
+
+5. **Log out** — clears the token bundle from memory and the store.
+
+   ```swift
+   await mero.logout()
+   ```
+
+</Steps>
+
+<Aside type="note">
+  `Mero` is an **`actor`**, so `authenticate`, `logout`, and `isAuthenticated`
+  are accessed with `await`. That's what makes concurrent requests share a single
+  token refresh safely — see [the token lifecycle](/get-started/authentication/#the-token-lifecycle).
+</Aside>
+
+## Handle errors
+
+Failures surface as a single `MeroError` enum (plus the contract's own RPC
+errors). Match the cases you care about:
+
+```swift
+do {
+  let post: Post = try await mero.rpc.execute(
+    contextId: "…", method: "get_post", argsJson: ["id": "42"]
+  )
+} catch let error as MeroError {
+  switch error {
+  case .authRevoked:
+    // refresh token reused/revoked — prompt re-login
+  case .http(let status, _):
+    print("HTTP \(status)")
+  case .rpc(let code, let message, _):
+    print("contract error \(code): \(message)")
+  default:
+    print(error)
+  }
+}
+```
+
+See the [error model](/reference/error-model/) for every case.
+
+## Next steps
+
+- **[Authentication](/get-started/authentication/)** — direct login, Desktop SSO, and the token lifecycle.
+- **[System overview](/understand/system-overview/)** — how the SDK is layered.
+- **[Executing methods](/guides/executing-methods/)** — the RPC client and `JSONValue`.
+- **[SwiftUI frontend](/guides/swiftui-frontend/)** — drop-in `MeroClient` + views.
+- **Try it live:** `swift run MeroExample` tours the whole SDK.
+
