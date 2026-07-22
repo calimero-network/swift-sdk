@@ -1,5 +1,6 @@
 import MeroKit
 import SwiftUI
+import UIKit
 
 // MARK: - Root: routes Login ⇄ Explorer on auth state
 
@@ -24,8 +25,6 @@ struct ExplorerRootView: View {
 struct CalimeroLoginView: View {
     @EnvironmentObject private var session: MeroSession
     @State private var nodeURL = "http://localhost:4001"
-    @State private var username = ""
-    @State private var password = ""
     @State private var showLogs = false
 
     var body: some View {
@@ -76,7 +75,7 @@ struct CalimeroLoginView: View {
                     .font(.system(.title, design: .default).weight(.bold))
                     .foregroundColor(Cal.text)
                     .accessibilityIdentifier("loginTitle")
-                Text("Explore the full MeroKit SDK on any Calimero node.")
+                Text("Connect to a Calimero node. You'll sign in on the node's\nsecure login page, then land back here.")
                     .font(.subheadline)
                     .foregroundColor(Cal.textDim)
                     .multilineTextAlignment(.center)
@@ -88,10 +87,6 @@ struct CalimeroLoginView: View {
         VStack(spacing: 11) {
             MinimalField(icon: "globe", placeholder: "Node URL", text: $nodeURL)
                 .accessibilityIdentifier("nodeURLField")
-            MinimalField(icon: "person", placeholder: "Username", text: $username)
-                .accessibilityIdentifier("usernameField")
-            MinimalField(icon: "lock", placeholder: "Password", text: $password, secure: true)
-                .accessibilityIdentifier("passwordField")
 
             if let error = session.errorMessage {
                 Text(error)
@@ -102,9 +97,13 @@ struct CalimeroLoginView: View {
             }
 
             Button {
-                Task { await session.login(nodeURL: nodeURL, username: username, password: password) }
+                Task { await session.connect(nodeURL: nodeURL) }
             } label: {
-                if session.isLoading { ProgressView().tint(Cal.bg) } else { Text("Connect") }
+                if session.isLoading {
+                    ProgressView().tint(Cal.bg)
+                } else {
+                    Label("Sign in with Calimero", systemImage: "arrow.up.forward.app")
+                }
             }
             .buttonStyle(CalPrimaryButtonStyle())
             .disabled(session.isLoading)
@@ -347,7 +346,14 @@ struct LogsView: View {
                     Button("Clear") { session.clearLogs() }.foregroundColor(Cal.lime)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }.foregroundColor(Cal.lime)
+                    HStack(spacing: 16) {
+                        Button {
+                            UIPasteboard.general.string = session.logText()
+                        } label: { Image(systemName: "doc.on.doc") }
+                        ShareLink(item: session.logText()) { Image(systemName: "square.and.arrow.up") }
+                        Button("Done") { dismiss() }
+                    }
+                    .foregroundColor(Cal.lime)
                 }
             }
         }

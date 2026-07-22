@@ -22,6 +22,8 @@ final class MeroSession: ObservableObject {
     @Published private(set) var logs: [LogLine] = []
 
     private(set) var mero: Mero?
+    private let sso = SsoWebLogin()
+    private let callbackScheme = "merokit"
 
     private static let ts: DateFormatter = {
         let f = DateFormatter()
@@ -32,6 +34,9 @@ final class MeroSession: ObservableObject {
     private func log(_ level: LogLine.Level, _ text: String) {
         logs.append(LogLine(time: Date(), level: level, text: text))
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
+        // Also emit to stdout so logs are readable via Xcode console or
+        // `xcrun simctl launch --console-pty`, outside the app.
+        print("[MeroKit] \(Self.ts.string(from: Date())) \(level.rawValue) \(text)")
     }
 
     func clearLogs() { logs.removeAll() }
@@ -39,6 +44,53 @@ final class MeroSession: ObservableObject {
     /// The whole log as copy-pasteable text.
     func logText() -> String {
         logs.map { "\(Self.ts.string(from: $0.time)) \($0.level.rawValue) \($0.text)" }.joined(separator: "\n")
+    }
+
+    /// Hosted-SSO login: open the node's `/auth/login` page (admin mode), let the
+    /// user authenticate there, and adopt the tokens from the callback fragment —
+    /// the same redirect flow mero-chat/mero-react use, via ASWebAuthenticationSession.
+    func connect(nodeURL nodeURLString: String) async {
+        errorMessage = nil
+        log(.req, "SSO connect \(nodeURLString)")
+        guard let base = URL(string: nodeURLString), base.scheme != nil else {
+            errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
+            log(.err, "invalid node URL")
+            return
+        }
+        isLoading = true
+        defer { isLoading = false }
+
+        let loginURLString = Mero.buildAuthLoginUrl(
+            nodeUrl: nodeURLString,
+            options: AuthLoginOptions(
+                callbackUrl: "\(callbackScheme)://auth-callback", mode: "admin", permissions: ["admin"]))
+        log(.info, "opening \(loginURLString)")
+        guard let loginURL = URL(string: loginURLString) else {
+            errorMessage = "Could not build the login URL."
+            log(.err, "bad login URL")
+            return
+        }
+        do {
+            let callback = try await sso.authenticate(loginURL: loginURL, callbackScheme: callbackScheme)
+            log(.info, "callback received (\(callback.absoluteString.prefix(60))…)")
+            guard let result = Mero.parseAuthCallback(callback.absoluteString) else {
+                errorMessage = "The login page returned no tokens."
+                log(.err, "no access_token in callback fragment")
+                return
+            }
+            let client = Mero(config: MeroConfig(baseURL: base, tokenStore: MemoryTokenStore()))
+            await client.setTokenData(from: result)
+            self.mero = client
+            self.nodeURL = nodeURLString
+            self.username = "admin"
+            self.isAuthenticated = true
+            log(.ok, "authenticated via SSO — tokens adopted")
+            await refreshSummary()
+        } catch {
+            isAuthenticated = false
+            errorMessage = friendly(error)
+            log(.err, "SSO login failed — \(detail(error))")
+        }
     }
 
     func login(nodeURL nodeURLString: String, username: String, password: String) async {

@@ -129,6 +129,9 @@ step "Booting simulator: $DEVICE"
 UDID=$(xcrun simctl list devices available | grep -E "^\s*${DEVICE} \(" | grep -oE '[0-9A-F-]{36}' | head -1)
 [ -n "$UDID" ] || die "no available simulator named '$DEVICE' (list: xcrun simctl list devices available | grep iPhone)"
 echo "UDID: $UDID"
+# Disable the hardware keyboard BEFORE boot so the on-screen keyboard shows and
+# you can actually type credentials.
+defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false 2>/dev/null || true
 xcrun simctl boot "$UDID" 2>/dev/null || true   # already-booted is fine
 # Open the Simulator GUI so a window actually appears. NOTE: `open -a Simulator`
 # fails silently — Simulator.app lives inside Xcode, not /Applications — so open
@@ -137,6 +140,10 @@ open "$(xcode-select -p)/Applications/Simulator.app" 2>/dev/null \
   || open -a Simulator 2>/dev/null || true
 osascript -e 'tell application "Simulator" to activate' 2>/dev/null || true
 xcrun simctl bootstatus "$UDID" 2>/dev/null || sleep 5
+# Disable AutoFill Passwords so the "Save/Strong Password" system prompt never
+# covers the password field (it otherwise blocks typing → login can't proceed).
+xcrun simctl spawn "$UDID" defaults write com.apple.security.AutoFill Enabled -bool NO 2>/dev/null || true
+xcrun simctl spawn "$UDID" defaults write com.apple.WebUI AutoFillPasswords -bool NO 2>/dev/null || true
 
 # ---- generate project + build ----------------------------------------------
 step "Generating Xcode project"
@@ -145,12 +152,20 @@ step "Generating Xcode project"
   else echo "${DIM}xcodegen not installed — using committed MeroSampleApp.xcodeproj${RESET}"; fi )
 
 step "Building MeroSampleApp (Debug, simulator)"
-xcodebuild \
+BUILD_LOG="$REPO_ROOT/.mero-build.log"
+set -o pipefail
+if ! xcodebuild \
   -project "$APP_PROJECT_DIR/MeroSampleApp.xcodeproj" \
   -scheme MeroSampleApp \
   -destination "platform=iOS Simulator,id=$UDID" \
   -configuration Debug \
-  build 2>&1 | tail -3
+  build > "$BUILD_LOG" 2>&1; then
+  echo "${RED}build failed:${RESET}"
+  grep -E "error:" "$BUILD_LOG" | head -20
+  die "build failed — see $BUILD_LOG (not installing a stale app)"
+fi
+set +o pipefail
+grep -qE "BUILD SUCCEEDED" "$BUILD_LOG" && echo "** BUILD SUCCEEDED **"
 # find the freshly built .app
 APP=$(find "$HOME/Library/Developer/Xcode/DerivedData/MeroSampleApp-"*/Build/Products/Debug-iphonesimulator \
         -maxdepth 1 -name "MeroSampleApp.app" 2>/dev/null | head -1)
