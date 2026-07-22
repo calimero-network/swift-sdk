@@ -6,3 +6,11 @@ DerivedData/
 .swiftpm/
 *.xcodeproj
 .netrc
+
+# Local merod node data + logs (run-app.sh / test-all.sh)
+.mero-node/
+.mero-node.log
+.mero-node.pid
+e2e-node/
+merod.log
+merod.pid
