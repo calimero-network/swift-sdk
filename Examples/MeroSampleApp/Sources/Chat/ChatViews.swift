@@ -34,7 +34,9 @@ struct ChatHomeView: View {
                         Menu {
                             Button("New space") { showNewSpace = true }
                             Button("Join with invite") { showJoin = true }
-                        } label: { Image(systemName: "plus") }.foregroundColor(Cal.lime)
+                        } label: { Image(systemName: "plus") }
+                        .foregroundColor(Cal.lime)
+                        .accessibilityIdentifier("chatAdd")
                     }
                 }
             }
@@ -64,6 +66,7 @@ struct ChatHomeView: View {
                 if service.busy { ProgressView().tint(Cal.bg) } else { Text("Install mero-chat") }
             }
             .buttonStyle(CalPrimaryButtonStyle()).disabled(service.busy).frame(maxWidth: 280)
+            .accessibilityIdentifier("installChat")
             statusLine
         }
         .padding(24)
@@ -142,7 +145,9 @@ struct ChannelsView: View {
                 Menu {
                     Button("New channel") { showNew = true }
                     Button("Invite people") { Task { invite = await service.makeInvite(space) } }
-                } label: { Image(systemName: "plus") }.foregroundColor(Cal.lime)
+                } label: { Image(systemName: "plus") }
+                .foregroundColor(Cal.lime)
+                .accessibilityIdentifier("channelAdd")
             }
         }
         .task { await service.loadChannels(space) }
@@ -213,6 +218,7 @@ struct ChannelView: View {
                 .padding(.horizontal, 12).padding(.vertical, 10)
                 .background(Cal.surface2)
                 .overlay(RoundedRectangle(cornerRadius: 20).stroke(Cal.border, lineWidth: 1)).cornerRadius(20)
+                .accessibilityIdentifier("messageField")
             Button {
                 let t = draft; draft = ""
                 Task { await service.sendMessage(channel, t) }
@@ -220,6 +226,7 @@ struct ChannelView: View {
                 Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundColor(Cal.lime)
             }
             .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            .accessibilityIdentifier("sendMessage")
         }
         .padding(10).background(Cal.bg)
     }
