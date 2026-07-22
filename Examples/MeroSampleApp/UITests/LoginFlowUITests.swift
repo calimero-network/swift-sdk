@@ -30,7 +30,11 @@ final class LoginFlowUITests: XCTestCase {
         XCTAssertTrue(button.waitForExistence(timeout: timeout), "button not found. \(message)", file: file, line: line)
         for _ in 0...retries {
             if expected.exists { return }
-            if button.exists, button.isHittable { button.tap() }
+            // Tap if the button is still present. Don't gate on `isHittable`: it can
+            // return a transient false negative during layout (observed on CI's
+            // iPhone 16 Pro), which would skip the tap entirely. `.tap()` already
+            // waits for the element to become hittable before dispatching.
+            if button.exists { button.tap() }
             if expected.waitForExistence(timeout: timeout) { return }
         }
         XCTFail("expected element never appeared after tapping. \(message)", file: file, line: line)
