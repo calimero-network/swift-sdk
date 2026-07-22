@@ -8,23 +8,39 @@ import MeroKit
 struct ChatMessage: Decodable, Identifiable {
     let id: String
     let text: String
-    let sender_username: String
+    let senderUsername: String
     let sender: String
     let timestamp: Int
     let deleted: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id, text, sender, timestamp, deleted
+        case senderUsername = "sender_username"
+    }
 }
 
 struct ChatMessagePage: Decodable {
-    let total_count: Int
+    let totalCount: Int
     let messages: [ChatMessage]
-    let start_position: Int
+    let startPosition: Int
+
+    enum CodingKeys: String, CodingKey {
+        case messages
+        case totalCount = "total_count"
+        case startPosition = "start_position"
+    }
 }
 
 /// curb `get_info` → the channel/DM shape.
 struct ChatContextInfo: Decodable {
     let name: String
-    let context_type: String
+    let contextType: String
     let description: String
+
+    enum CodingKeys: String, CodingKey {
+        case name, description
+        case contextType = "context_type"
+    }
 }
 
 // MARK: - View models
@@ -92,6 +108,24 @@ final class ChatService: ObservableObject {
         }
     }
 
+    /// If curb is already installed on the node, adopt its app id so we skip the
+    /// install gate (fixes re-opening chat asking to install again).
+    func detectInstalled() async {
+        guard appId == nil else { return }
+        if let apps = try? await mero.admin.listApplications(),
+            let curb = apps.apps.first(where: { $0.package == Self.packageName })
+        {
+            appId = curb.id
+            status = "\(Self.packageName) already installed"
+            await loadSpaces()
+        }
+    }
+
+    /// Live SSE event stream for a channel's context (new messages, etc.).
+    func eventStream(_ channel: ChatChannel) -> AsyncThrowingStream<ContextEvent, Error> {
+        mero.events(contextIds: [channel.contextId])
+    }
+
     // MARK: spaces
 
     func loadSpaces() async {
@@ -126,9 +160,10 @@ final class ChatService: ObservableObject {
                 var name = sg.name ?? ctx.name ?? "channel"
                 var kind = "Channel"
                 if !executor.isEmpty,
-                    let info: ChatContextInfo = try? await rpc(ctx.contextId, "get_info", executor: executor) {
+                    let info: ChatContextInfo = try? await rpc(ctx.contextId, "get_info", executor: executor)
+                {
                     name = info.name
-                    kind = info.context_type
+                    kind = info.contextType
                 }
                 if kind == "Dm" { continue }
                 out.append(
@@ -211,7 +246,8 @@ final class ChatService: ObservableObject {
         await run("joining space…") {
             let invite = try JSONDecoder().decode(ChatInvite.self, from: Data(inviteJSON.utf8))
             let joined = try await self.mero.admin.joinNamespace(
-                invite.namespaceId, request: JoinNamespaceRequest(invitation: invite.invitation, groupName: invite.spaceName))
+                invite.namespaceId,
+                request: JoinNamespaceRequest(invitation: invite.invitation, groupName: invite.spaceName))
             _ = try? await self.mero.admin.syncGroup(joined.groupId)
             self.status = "joined \(invite.spaceName)"
             await self.loadSpaces()
@@ -240,7 +276,9 @@ final class ChatService: ObservableObject {
         busy = true
         status = message
         defer { busy = false }
-        do { try await body() } catch { status = "\(message.replacingOccurrences(of: "…", with: "")) failed: \(short(error))" }
+        do { try await body() } catch {
+            status = "\(message.replacingOccurrences(of: "…", with: "")) failed: \(short(error))"
+        }
     }
 
     private func short(_ error: Error) -> String {

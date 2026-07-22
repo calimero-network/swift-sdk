@@ -52,6 +52,17 @@ public actor Mero {
     public var admin: AdminApi { AdminApi(http: httpClient) }
     public var rpc: RpcClient { RpcClient(http: httpClient) }
 
+    /// Live node events for the given contexts, over SSE (auto-reconnecting).
+    /// Cancel the consuming task to close the stream. Powers push updates
+    /// (new messages, etc.) without polling. `nonisolated` — reads only the
+    /// immutable config and defers the token read to the async provider.
+    public nonisolated func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error> {
+        let provider: @Sendable () async -> String? = { [weak self] in
+            await self?.currentTokenData()?.accessToken
+        }
+        return SseClient(baseURL: config.baseURL, token: provider).events(contextIds: contextIds)
+    }
+
     /// The transport in use (for advanced/custom callers).
     public var http: any HttpClient { httpClient }
 

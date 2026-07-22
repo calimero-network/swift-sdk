@@ -4,16 +4,12 @@ import SwiftUI
 // MARK: - Chat home (spaces)
 
 struct ChatHomeView: View {
-    @StateObject private var service: ChatService
+    @ObservedObject var service: ChatService
     @Environment(\.dismiss) private var dismiss
     @State private var newSpace = ""
     @State private var showNewSpace = false
     @State private var showJoin = false
     @State private var joinText = ""
-
-    init(mero: Mero, username: String) {
-        _service = StateObject(wrappedValue: ChatService(mero: mero, username: username))
-    }
 
     var body: some View {
         NavigationStack {
@@ -34,7 +30,9 @@ struct ChatHomeView: View {
                         Menu {
                             Button("New space") { showNewSpace = true }
                             Button("Join with invite") { showJoin = true }
-                        } label: { Image(systemName: "plus") }
+                        } label: {
+                            Image(systemName: "plus")
+                        }
                         .foregroundColor(Cal.lime)
                         .accessibilityIdentifier("chatAdd")
                     }
@@ -44,21 +42,30 @@ struct ChatHomeView: View {
         }
         .preferredColorScheme(.dark)
         .task {
+            let env = ProcessInfo.processInfo.environment
             // e2e hook: with E2E_JOIN=<invite json> set, auto-install then join —
             // lets the multi-user harness hand a guest an invite without typing it.
-            let env = ProcessInfo.processInfo.environment
             if let invite = env["E2E_JOIN"], !invite.isEmpty, service.appId == nil {
                 await service.setup()
                 await service.joinSpace(invite)
+            } else {
+                // Skip the install gate if curb is already installed on this node.
+                await service.detectInstalled()
             }
         }
         .alert("New space", isPresented: $showNewSpace) {
             TextField("Space name", text: $newSpace)
-            Button("Create") { let n = newSpace; newSpace = ""; Task { await service.createSpace(n) } }
+            Button("Create") {
+                let n = newSpace; newSpace = ""; Task { await service.createSpace(n) }
+            }
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showJoin) {
-            JoinSheet(text: $joinText) { Task { await service.joinSpace(joinText); showJoin = false } }
+            JoinSheet(text: $joinText) {
+                Task {
+                    await service.joinSpace(joinText); showJoin = false
+                }
+            }
         }
     }
 
@@ -88,7 +95,9 @@ struct ChatHomeView: View {
                     Text("No spaces yet. Tap + to create one.").font(.footnote).foregroundColor(Cal.textDim)
                 }
                 ForEach(service.spaces) { space in
-                    NavigationLink { ChannelsView(service: service, space: space) } label: {
+                    NavigationLink {
+                        ChannelsView(service: service, space: space)
+                    } label: {
                         HStack {
                             Image(systemName: "number.square.fill").foregroundColor(Cal.lime)
                             Text(space.name).font(.headline).foregroundColor(Cal.text)
@@ -131,7 +140,9 @@ struct ChannelsView: View {
                     Text("No channels yet. Tap + to create one.").font(.footnote).foregroundColor(Cal.textDim)
                 }
                 ForEach(service.channels) { ch in
-                    NavigationLink { ChannelView(service: service, channel: ch) } label: {
+                    NavigationLink {
+                        ChannelView(service: service, channel: ch)
+                    } label: {
                         HStack {
                             Image(systemName: ch.kind == "Dm" ? "person.fill" : "number").foregroundColor(Cal.lime)
                             Text(ch.name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
@@ -153,7 +164,9 @@ struct ChannelsView: View {
                 Menu {
                     Button("New channel") { showNew = true }
                     Button("Invite people") { Task { invite = await service.makeInvite(space) } }
-                } label: { Image(systemName: "plus") }
+                } label: {
+                    Image(systemName: "plus")
+                }
                 .foregroundColor(Cal.lime)
                 .accessibilityIdentifier("channelAdd")
             }
@@ -190,13 +203,15 @@ struct ChannelView: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(service.messages) { m in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(m.sender_username.isEmpty ? String(m.sender.prefix(8)) : m.sender_username)
+                                Text(m.senderUsername.isEmpty ? String(m.sender.prefix(8)) : m.senderUsername)
                                     .font(.caption2.weight(.bold)).foregroundColor(Cal.lime)
                                 Text(m.text).font(.subheadline).foregroundColor(Cal.text)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(10).background(Cal.surface)
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(10)
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(
+                                10
+                            )
                             .id(m.id)
                         }
                     }
@@ -212,10 +227,14 @@ struct ChannelView: View {
         .navigationTitle("#\(channel.name)")
         .navigationBarTitleDisplayMode(.inline)
         .task(id: channel.id) {
-            while !Task.isCancelled {
-                await service.loadMessages(channel)
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-            }
+            // Live updates over SSE — reload messages on each node event for this
+            // context (no polling). Cancelling the task closes the SSE stream.
+            await service.loadMessages(channel)
+            do {
+                for try await _ in service.eventStream(channel) {
+                    await service.loadMessages(channel)
+                }
+            } catch {}
         }
     }
 
@@ -282,7 +301,9 @@ struct JoinSheet: View {
             }
             .padding(16).background(Cal.bg)
             .navigationTitle("Join").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Cal.lime) } }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Cal.lime) }
+            }
         }
         .preferredColorScheme(.dark)
     }

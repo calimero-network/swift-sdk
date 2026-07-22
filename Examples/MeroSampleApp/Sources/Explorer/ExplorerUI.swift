@@ -158,7 +158,11 @@ struct ExplorerView: View {
                                 .foregroundColor(Cal.lime)
                             VStack(spacing: 0) {
                                 ForEach(Array(section.ops.enumerated()), id: \.element.id) { idx, op in
-                                    NavigationLink { OperationRunnerView(op: op) } label: { row(op) }
+                                    NavigationLink {
+                                        OperationRunnerView(op: op)
+                                    } label: {
+                                        row(op)
+                                    }
                                     if idx < section.ops.count - 1 {
                                         Divider().overlay(Cal.border)
                                     }
@@ -178,8 +182,12 @@ struct ExplorerView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) { CalLogo(size: 22) }
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { showLogs = true } label: { Image(systemName: "terminal") }
-                        .foregroundColor(Cal.lime)
+                    Button {
+                        showLogs = true
+                    } label: {
+                        Image(systemName: "terminal")
+                    }
+                    .foregroundColor(Cal.lime)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Log Out") { Task { await session.logout() } }
@@ -190,8 +198,8 @@ struct ExplorerView: View {
         .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
         .sheet(isPresented: $showLogs) { LogsView() }
         .sheet(isPresented: $showChat) {
-            if let mero = session.mero {
-                ChatHomeView(mero: mero, username: session.username)
+            if let chat = session.chat {
+                ChatHomeView(service: chat)
             }
         }
     }
@@ -313,9 +321,13 @@ struct OperationRunnerView: View {
         Task {
             do {
                 let result = try await op.run(mero, captured)
-                await MainActor.run { output = result; failed = false; running = false }
+                await MainActor.run {
+                    output = result; failed = false; running = false
+                }
             } catch {
-                await MainActor.run { output = "\(error)"; failed = true; running = false }
+                await MainActor.run {
+                    output = "\(error)"; failed = true; running = false
+                }
             }
         }
     }
@@ -368,7 +380,9 @@ struct LogsView: View {
                     HStack(spacing: 16) {
                         Button {
                             UIPasteboard.general.string = session.logText()
-                        } label: { Image(systemName: "doc.on.doc") }
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                        }
                         ShareLink(item: session.logText()) { Image(systemName: "square.and.arrow.up") }
                         Button("Done") { dismiss() }
                     }

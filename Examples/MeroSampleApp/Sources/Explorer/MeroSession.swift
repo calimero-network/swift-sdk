@@ -20,6 +20,9 @@ final class MeroSession: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var nodeSummary = ""
     @Published private(set) var logs: [LogLine] = []
+    /// One chat service for the whole session, so its installed-app state
+    /// survives closing/reopening the chat sheet.
+    @Published private(set) var chat: ChatService?
 
     private(set) var mero: Mero?
     private let sso = SsoWebLogin()
@@ -84,6 +87,7 @@ final class MeroSession: ObservableObject {
             self.nodeURL = nodeURLString
             self.username = "admin"
             self.isAuthenticated = true
+            self.chat = ChatService(mero: client, username: self.username)
             log(.ok, "authenticated via SSO — tokens adopted")
             await refreshSummary()
         } catch {
@@ -117,6 +121,7 @@ final class MeroSession: ObservableObject {
             self.nodeURL = nodeURLString
             self.username = username
             self.isAuthenticated = true
+            self.chat = ChatService(mero: client, username: self.username)
             log(.ok, "authenticated — token acquired")
             await refreshSummary()
         } catch {
@@ -130,6 +135,7 @@ final class MeroSession: ObservableObject {
         log(.req, "logout")
         if let mero { await mero.logout() }
         mero = nil
+        chat = nil
         isAuthenticated = false
         nodeSummary = ""
         log(.ok, "signed out")
