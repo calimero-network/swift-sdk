@@ -22,7 +22,7 @@ jobs:
       # test passes it explicitly, so the first login mints the root key.
       MERO_AUTH_BOOTSTRAP_SECRET: swift-sdk-e2e-bootstrap
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download released merod (aarch64-apple-darwin)
         env:
