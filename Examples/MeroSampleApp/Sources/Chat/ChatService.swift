@@ -65,6 +65,27 @@ struct ChatInvite: Codable {
     let namespaceId: String
     let spaceName: String
     let invitation: SignedGroupOpenInvitation
+
+    /// A compact, single-line invite code — zlib-compressed JSON, base64'd —
+    /// so it's easy to copy-paste between simulators (like mero-chat's codes).
+    func encoded() throws -> String {
+        let json = try JSONEncoder().encode(self)
+        let compressed = try (json as NSData).compressed(using: .zlib) as Data
+        return compressed.base64EncodedString()
+    }
+
+    /// Decode an invite code. Tries the compact form first, then falls back to
+    /// raw JSON (tolerant of older/hand-pasted invites).
+    static func decode(_ code: String) -> ChatInvite? {
+        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = Data(base64Encoded: trimmed),
+            let json = try? (data as NSData).decompressed(using: .zlib) as Data,
+            let invite = try? JSONDecoder().decode(ChatInvite.self, from: json)
+        {
+            return invite
+        }
+        return try? JSONDecoder().decode(ChatInvite.self, from: Data(trimmed.utf8))
+    }
 }
 
 // MARK: - ChatService
@@ -236,15 +257,16 @@ final class ChatService: ObservableObject {
                 status = "recursive invitations not supported here"; return nil
             }
             let invite = ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: data.invitation)
-            let enc = JSONEncoder()
-            let json = try enc.encode(invite)
-            return String(data: json, encoding: .utf8)
+            return try invite.encoded()
         } catch { status = "invite failed: \(short(error))"; return nil }
     }
 
-    func joinSpace(_ inviteJSON: String) async {
+    func joinSpace(_ inviteCode: String) async {
         await run("joining space…") {
-            let invite = try JSONDecoder().decode(ChatInvite.self, from: Data(inviteJSON.utf8))
+            guard let invite = ChatInvite.decode(inviteCode) else {
+                self.status = "invalid invite code"
+                throw MeroError.decoding("invalid invite code")
+            }
             let joined = try await self.mero.admin.joinNamespace(
                 invite.namespaceId,
                 request: JoinNamespaceRequest(invitation: invite.invitation, groupName: invite.spaceName))
