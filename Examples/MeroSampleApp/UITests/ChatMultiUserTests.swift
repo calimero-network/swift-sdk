@@ -30,7 +30,7 @@ final class ChatMultiUserTests: XCTestCase {
         type(app, "usernameField", "dev")
         type(app, "passwordField", "dev-password")
         app.buttons["loginButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(app.buttons["Open Chat"].waitForExistence(timeout: 20), "no explorer")
+        XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "no explorer")
     }
 
     private func openChannel(_ app: XCUIApplication, space: String, channel: String, timeout: TimeInterval) {
@@ -52,7 +52,7 @@ final class ChatMultiUserTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         login(app)
-        app.buttons["Open Chat"].tap()
+        app.buttons["openChat"].tap()
         app.buttons["installChat"].tap()
         XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 90), "install failed")
 
@@ -92,7 +92,7 @@ final class ChatMultiUserTests: XCTestCase {
         app.launchEnvironment["E2E_NODE"] = "http://localhost:4011"  // guest talks to node B
         app.launch()
         login(app)
-        app.buttons["Open Chat"].tap()
+        app.buttons["openChat"].tap()
         // E2E_JOIN hook auto-installs + joins; wait for the shared space, then open.
         openChannel(app, space: "shared", channel: "general", timeout: 90)
         // cross-node sync: the host's message should arrive
@@ -106,7 +106,7 @@ final class ChatMultiUserTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         login(app)
-        app.buttons["Open Chat"].tap()
+        app.buttons["openChat"].tap()
         openChannel(app, space: "shared", channel: "general", timeout: 30)
         XCTAssertTrue(app.staticTexts["hi from guest"].waitForExistence(timeout: 60), "guest reply did not sync")
     }

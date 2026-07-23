@@ -480,6 +480,13 @@ public struct GroupInvitationFromAdmin: Codable, Sendable {
         self.inviterIdentity = inviterIdentity; self.groupId = groupId
         self.expirationTimestamp = expirationTimestamp; self.secretSalt = secretSalt; self.invitedRole = invitedRole
     }
+    enum CodingKeys: String, CodingKey {
+        case inviterIdentity = "inviter_identity"
+        case groupId = "group_id"
+        case expirationTimestamp = "expiration_timestamp"
+        case secretSalt = "secret_salt"
+        case invitedRole = "invited_role"
+    }
 }
 
 public struct SignedGroupOpenInvitation: Codable, Sendable {
@@ -487,6 +494,12 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
     public var inviterSignature: String
     public init(invitation: GroupInvitationFromAdmin, inviterSignature: String) {
         self.invitation = invitation; self.inviterSignature = inviterSignature
+    }
+    // core serializes this type snake_case (it lives in calimero_context_config,
+    // which has no rename_all), unlike the camelCase admin DTOs.
+    enum CodingKeys: String, CodingKey {
+        case invitation
+        case inviterSignature = "inviter_signature"
     }
 }
 

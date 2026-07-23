@@ -206,6 +206,7 @@ struct ExplorerView: View {
                 .padding(12).background(Cal.surface)
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1)).cornerRadius(12)
             }
+            .accessibilityIdentifier("openChat")
         }
     }
 

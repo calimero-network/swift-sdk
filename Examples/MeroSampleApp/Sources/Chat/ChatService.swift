@@ -253,12 +253,27 @@ final class ChatService: ObservableObject {
     func makeInvite(_ space: ChatSpace) async -> String? {
         do {
             let result = try await mero.admin.createNamespaceInvitation(space.id)
-            guard case .single(let data) = result else {
-                status = "recursive invitations not supported here"; return nil
+            let signed: SignedGroupOpenInvitation
+            switch result {
+            case .single(let data):
+                signed = data.invitation
+            case .recursive(let data):
+                guard let first = data.invitations.first else {
+                    status = "invite: node returned no invitations"
+                    return nil
+                }
+                signed = first.invitation
             }
-            let invite = ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: data.invitation)
-            return try invite.encoded()
-        } catch { status = "invite failed: \(short(error))"; return nil }
+            let invite = ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: signed)
+            let code = try invite.encoded()
+            print("[MeroKit] invite code for “\(space.name)”:\n\(code)")  // also grabbable via console
+            status = "invite ready — Copy or Share it"
+            return code
+        } catch {
+            status = "invite failed: \(short(error))"
+            print("[MeroKit] invite failed: \(String(reflecting: error))")
+            return nil
+        }
     }
 
     func joinSpace(_ inviteCode: String) async {

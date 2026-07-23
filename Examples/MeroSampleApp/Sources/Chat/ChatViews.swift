@@ -132,6 +132,7 @@ struct ChannelsView: View {
     @State private var showNew = false
     @State private var openChannel = true
     @State private var invite: String?
+    @State private var inviteError = false
 
     var body: some View {
         ScrollView {
@@ -163,7 +164,12 @@ struct ChannelsView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("New channel") { showNew = true }
-                    Button("Invite people") { Task { invite = await service.makeInvite(space) } }
+                    Button("Invite people") {
+                        Task {
+                            let code = await service.makeInvite(space)
+                            if let code { invite = code } else { inviteError = true }
+                        }
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -182,7 +188,12 @@ struct ChannelsView: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(item: Binding(get: { invite.map { InviteBox(text: $0) } }, set: { _ in invite = nil })) { box in
-            InviteSheet(text: box.text)
+            InviteSheet(text: box.text, spaceName: space.name)
+        }
+        .alert("Couldn't create invite", isPresented: $inviteError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(service.status.isEmpty ? "The node did not return an invitation." : service.status)
         }
     }
 }
@@ -254,24 +265,46 @@ struct ChannelView: View {
 
 struct InviteSheet: View {
     let text: String
+    var spaceName: String = "space"
     @Environment(\.dismiss) private var dismiss
+    @State private var copied = false
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                Text(text).font(Cal.mono).foregroundColor(Cal.text).textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            VStack(spacing: 14) {
+                Text("Share this invite code so someone can join “\(spaceName)”.")
+                    .font(.footnote).foregroundColor(Cal.textDim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                ScrollView {
+                    Text(text).font(Cal.mono).foregroundColor(Cal.text).textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                }
+                .frame(maxHeight: 220)
+                .background(Cal.surface2)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(10)
+                HStack(spacing: 10) {
+                    Button {
+                        UIPasteboard.general.string = text
+                        copied = true
+                    } label: {
+                        Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(CalSecondaryButtonStyle())
+                    ShareLink(item: text) { Label("Share", systemImage: "square.and.arrow.up") }
+                        .buttonStyle(CalSecondaryButtonStyle())
+                }
+                Spacer()
             }
+            .padding(16)
             .background(Cal.bg)
             .navigationTitle("Invite")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Copy") { UIPasteboard.general.string = text }.foregroundColor(Cal.lime)
-                }
                 ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.foregroundColor(Cal.lime) }
             }
         }
         .preferredColorScheme(.dark)
+        .tint(Cal.lime)
     }
 }
 

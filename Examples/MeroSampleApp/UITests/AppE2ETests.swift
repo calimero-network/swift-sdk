@@ -41,7 +41,7 @@ final class AppE2ETests: XCTestCase {
         type("usernameField", "dev")
         type("passwordField", "dev-password")
         tap(app.buttons["loginButton"], "login button")
-        XCTAssertTrue(app.buttons["Open Chat"].waitForExistence(timeout: 20), "did not reach explorer")
+        XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "did not reach explorer")
     }
 
     // MARK: tests
@@ -49,6 +49,11 @@ final class AppE2ETests: XCTestCase {
     /// Explorer: run a live admin method and assert a real response comes back.
     func testExplorerRunsLiveMethod() throws {
         login()
+        // Categories are collapsed; search reveals (auto-expands) the method.
+        let field = app.searchFields.firstMatch
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "search field")
+        field.tap(); field.typeText("getContexts")
+        XCTAssertTrue(app.staticTexts["getContexts"].waitForExistence(timeout: 5), "getContexts row")
         app.staticTexts["getContexts"].firstMatch.tap()
         tap(app.buttons["Run"], "Run button")
         // The response viewer shows the "RESPONSE" label with JSON on success.
@@ -58,7 +63,7 @@ final class AppE2ETests: XCTestCase {
     /// Chat: install curb, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         login()
-        app.buttons["Open Chat"].tap()
+        app.buttons["openChat"].tap()
         XCTAssertTrue(app.buttons["installChat"].waitForExistence(timeout: 5), "install button")
         app.buttons["installChat"].tap()
         // registry fetch + install can be slow — wait, do NOT tap yet
@@ -85,9 +90,16 @@ final class AppE2ETests: XCTestCase {
         channelField.tap(); channelField.typeText("general")
         app.alerts.buttons["Create"].tap()
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 30), "channel not created")
-        app.staticTexts["general"].firstMatch.tap()
+
+        // invite: generate a code (still on the channels list)
+        app.buttons["channelAdd"].tap()
+        XCTAssertTrue(app.buttons["Invite people"].waitForExistence(timeout: 5), "Invite item")
+        app.buttons["Invite people"].tap()
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 20), "invite code not generated")
+        app.buttons["Done"].tap()
 
         // send + read a message
+        app.staticTexts["general"].firstMatch.tap()
         let composer = app.textFields["messageField"]
         XCTAssertTrue(composer.waitForExistence(timeout: 10))
         composer.tap(); composer.typeText("e2e hello")

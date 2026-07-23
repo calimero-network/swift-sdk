@@ -23,3 +23,6 @@ merod.pid
 .mero-b/
 .mero-*.log
 .mero-*.pid
+.mero-cap/
+.mero-cap.log
+.mero-cap.pid
