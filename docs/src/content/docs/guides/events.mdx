@@ -1,0 +1,104 @@
+---
+title: Live events
+description: Stream a node's real-time context events over SSE with mero.events(contextIds:) — consume them with for-try-await, handle reconnection, and cancel cleanly.
+sidebar:
+  order: 3
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Instead of polling, subscribe to a context's real-time events. `mero.events(contextIds:)`
+opens a Server-Sent-Events stream and yields a `ContextEvent` for each emission —
+new messages, application-version flips, and other context activity — so a view
+can react as changes arrive.
+
+## Subscribe
+
+`events(contextIds:)` returns an `AsyncThrowingStream<ContextEvent, Error>`.
+Consume it with `for try await`, inside a `Task` you can cancel:
+
+```swift
+let task = Task {
+    do {
+        for try await event in mero.events(contextIds: [contextId]) {
+            switch event.kind {
+            case "ExecutionEvent":
+                await reloadMessages()
+            default:
+                print("event on \(event.contextId): \(event.kind)")
+            }
+        }
+    } catch {
+        // the stream ended with an error (e.g. auth lost)
+    }
+}
+```
+
+Each event is:
+
+```swift
+public struct ContextEvent: Sendable {
+    public let contextId: String
+    public let kind: String        // e.g. "ExecutionEvent"
+    public let payload: JSONValue  // raw event JSON
+}
+```
+
+For a contract emission (`kind == "ExecutionEvent"`) the encoded contract events
+are nested under `payload`'s `data.events[].data`.
+
+## Reconnection
+
+The stream reconnects automatically ~3 seconds after a drop and re-subscribes to
+your context ids (the node persists the session's subscriptions). You don't need
+to rebuild the stream on a transient network blip — the `for try await` loop
+keeps delivering events across reconnects.
+
+## Closing the stream
+
+The stream's lifetime is owned by the `Task` consuming it — **cancel that task**
+to close the SSE connection:
+
+```swift
+task.cancel()   // closes the connection
+```
+
+<Aside type="caution">
+  `mero.close()` and `mero.logout()` do **not** stop an in-flight event stream.
+  Track the `Task` you started the loop in and cancel it on teardown (for
+  example in SwiftUI, start the loop in `.task { }` so the framework cancels it
+  when the view disappears).
+</Aside>
+
+## In SwiftUI
+
+`.task` ties the stream to a view's lifetime — it's started when the view
+appears and cancelled automatically when it disappears:
+
+```swift
+struct MessagesView: View {
+    let contextId: String
+    @State private var messages: [Message] = []
+
+    var body: some View {
+        List(messages) { Text($0.text) }
+            .task {
+                do {
+                    for try await _ in mero.events(contextIds: [contextId]) {
+                        messages = await load()
+                    }
+                } catch { /* stream ended */ }
+            }
+    }
+}
+```
+
+<Aside type="note">
+  `events(contextIds:)` is `nonisolated`, so you can call it without `await`; it
+  reads the token lazily when it connects.
+</Aside>
+
+## See also
+
+- [RPC client](/reference/rpc/) — trigger the state changes you're observing.
+- [Events reference](/reference/events/) — `SseClient` and the full API surface.

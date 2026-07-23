@@ -116,6 +116,7 @@ strings ascending.
 | `deleteNamespace(_ namespaceId: String, request: DeleteNamespaceRequest? = nil) -> DeleteNamespaceResponseData` | `DELETE /namespaces/{namespaceId}` |
 | `createNamespaceInvitation(_ namespaceId: String, request: … = nil) -> CreateNamespaceInvitationResult` | `POST /namespaces/{namespaceId}/invite` |
 | `joinNamespace(_ namespaceId: String, request: JoinNamespaceRequest) -> JoinNamespaceResponseData` | `POST /namespaces/{namespaceId}/join` |
+| `leaveNamespace(_ namespaceId: String, request: [String: JSONValue]? = nil)` | `POST /namespaces/{namespaceId}/leave` |
 | `createGroupInNamespace(_ namespaceId: String, request: … = nil) -> CreateGroupInNamespaceResponseData` | `POST /namespaces/{namespaceId}/groups` |
 | `listNamespaceGroups(_ namespaceId: String) -> [SubgroupEntry]` | `GET /namespaces/{namespaceId}/groups` |
 

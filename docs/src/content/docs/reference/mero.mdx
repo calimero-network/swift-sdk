@@ -35,8 +35,14 @@ transport:
 | --- | --- | --- |
 | `mero.auth` | `AuthApi` | login, tokens, key management — [reference](/reference/auth-api/) |
 | `mero.admin` | `AdminApi` | contexts, apps, namespaces, groups, blobs, TEE — [reference](/reference/admin-api/) |
-| `mero.rpc` | `RpcClient` | execute WASM methods — [guide](/guides/executing-methods/) |
+| `mero.rpc` | `RpcClient` | execute WASM methods — [reference](/reference/rpc/) |
 | `mero.http` | `any HttpClient` | the transport in use (advanced) |
+
+Plus one method, not an accessor:
+
+| Method | Returns | Description |
+| --- | --- | --- |
+| `mero.events(contextIds:)` | `AsyncThrowingStream<ContextEvent, Error>` | live SSE events — [reference](/reference/events/) |
 
 ## Authentication
 
@@ -58,12 +64,19 @@ func setTokenData(_ data: TokenData)          // set directly; derives expiresAt
 func setTokenData(from callback: AuthCallbackResult)  // from a parsed SSO callback
 func clearToken()                             // drop the bundle + clear the store
 func logout()                                 // clearToken() + close()
-func close()                                  // release long-lived resources
+func close()                                  // release long-lived actor resources
 ```
 
 <Aside type="note">
   All of the above are actor-isolated — call them with `await`
   (e.g. `let ok = await mero.isAuthenticated`).
+</Aside>
+
+<Aside type="caution">
+  `close()` (and `logout()`) do **not** stop an in-flight
+  [`events(contextIds:)`](/reference/events/) stream — the stream's lifetime is
+  owned by the `Task` you consume it in. Cancel that `Task` to close the SSE
+  connection.
 </Aside>
 
 ## SSO statics
@@ -157,7 +170,9 @@ public final class MemoryTokenStore: TokenStore { public init() }
 
 ## Sub-client references
 
-- [`RpcClient`](/guides/executing-methods/) — `execute`, `migrateMyEntries`, `countMyPending`.
+- [`RpcClient`](/reference/rpc/) — `execute`, `migrateMyEntries`, `countMyPending`.
 - [`AdminApi`](/reference/admin-api/) — the full admin surface.
 - [`AuthApi`](/reference/auth-api/) — the full auth surface.
+- [SSE events](/reference/events/) — `SseClient`, `ContextEvent`, `mero.events(contextIds:)`.
+- [Capabilities](/reference/capabilities/) — the member-capability bitmask helpers.
 - [`MeroClient`](/guides/swiftui-frontend/) — the SwiftUI view-model (`MeroKitUI`).

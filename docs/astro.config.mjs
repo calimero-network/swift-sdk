@@ -63,6 +63,7 @@ export default defineConfig({
           items: [
             'guides/contexts-and-apps',
             'guides/executing-methods',
+            'guides/events',
             'guides/groups-and-governance',
             'guides/blobs',
             'guides/swiftui-frontend',
@@ -74,6 +75,9 @@ export default defineConfig({
             'reference/mero',
             'reference/admin-api',
             'reference/auth-api',
+            'reference/rpc',
+            'reference/events',
+            'reference/capabilities',
             'reference/error-model',
           ],
         },

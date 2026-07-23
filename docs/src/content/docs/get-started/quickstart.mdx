@@ -123,10 +123,10 @@ do {
   switch error {
   case .authRevoked:
     // refresh token reused/revoked — prompt re-login
-  case .http(let status, _):
-    print("HTTP \(status)")
-  case .rpc(let code, let message, _):
-    print("contract error \(code): \(message)")
+  case .http(let http):
+    print("HTTP \(http.status)")
+  case .rpc(let rpc):
+    print("contract error \(rpc.code): \(rpc.message)")
   default:
     print(error)
   }

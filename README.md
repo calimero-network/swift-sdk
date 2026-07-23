@@ -2,15 +2,12 @@
 
 Native Swift SDK for building iOS apps against a **remote** [Calimero](https://calimero.network)
 node. It's a faithful port of [`@calimero-network/mero-js`](https://github.com/calimero-network/mero-js)'s
-wire contract — auth + token refresh, JSON-RPC contract calls, the admin API, and
-SSO deep-link login — in idiomatic `async/await` Swift.
+wire contract — auth + token refresh, JSON-RPC contract calls, the admin API,
+SSO deep-link login, and live SSE events — in idiomatic `async/await` Swift, with
+an optional SwiftUI layer (`MeroKitUI`).
 
 The device is a **thin client**: it never runs a node. Every capability is an
 HTTP(S) call to a remote node's endpoints.
-
-> Status: **M1 — transport + auth core + full Admin API.** Events (SSE), the
-> optional SwiftUI UI kit (`MeroKitUI`), and blob streaming polish are on the
-> roadmap (`ROADMAP` milestones M3/M5). See `ROADMAP-TASKS/task-1-ios-sdk.md`.
 
 ## Requirements
 
@@ -90,11 +87,23 @@ let post: Post = try await mero.rpc.execute(
 ### 4. Admin / auth APIs
 
 ```swift
-let contexts = try await mero.admin.listContexts()
+let contexts = try await mero.admin.getContexts()
 let providers = try await mero.auth.getProviders()
 ```
 
-### 5. Log out
+### 5. Live events (SSE)
+
+```swift
+let task = Task {
+    for try await event in mero.events(contextIds: [contextId]) {
+        // event: ContextEvent { contextId, kind, payload }
+        await reload()
+    }
+}
+// task.cancel() closes the stream.
+```
+
+### 6. Log out
 
 ```swift
 await mero.logout() // clears the token bundle from memory and the store

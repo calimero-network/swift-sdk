@@ -1,0 +1,65 @@
+---
+title: Capabilities
+description: The Capabilities enum — the member-capability bitmask constants and the hasCap / withCap / withoutCap helpers for reading and building capability masks.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A group member's capabilities are a single `UInt32` **bitmask**. `Capabilities`
+exposes the bit constants core assigns, plus helpers for reading and editing a
+mask. Use them with the group capability methods on
+[`mero.admin`](/reference/admin-api/#group-management) (`getMemberCapabilities`,
+`setMemberCapabilities`, `getDefaultCapabilities`, `setDefaultCapabilities`). The
+[groups & governance guide](/guides/groups-and-governance/) shows a full flow.
+
+## Constants
+
+Core `MemberCapabilities`, bits 0–8:
+
+```swift
+public enum Capabilities {
+    public static let canCreateContext:     UInt32 = 1 << 0
+    public static let canInviteMembers:      UInt32 = 1 << 1
+    public static let canJoinOpenSubgroups:  UInt32 = 1 << 2
+    public static let manageMembers:         UInt32 = 1 << 3
+    public static let manageApplication:     UInt32 = 1 << 4
+    public static let canCreateSubgroup:     UInt32 = 1 << 5
+    public static let canDeleteSubgroup:     UInt32 = 1 << 6
+    public static let canManageVisibility:   UInt32 = 1 << 7
+    public static let canManageMetadata:     UInt32 = 1 << 8
+}
+```
+
+<Aside type="caution">
+  Bits 9 and above are unassigned and reserved for future core releases — do
+  **not** repurpose them for application data.
+</Aside>
+
+## Helpers
+
+```swift
+static func hasCap(_ mask: UInt32, _ cap: UInt32) -> Bool     // every bit of cap set?
+static func withCap(_ mask: UInt32, _ cap: UInt32) -> UInt32  // mask with cap set
+static func withoutCap(_ mask: UInt32, _ cap: UInt32) -> UInt32 // mask with cap cleared
+```
+
+## Example
+
+```swift
+let current = try await mero.admin.getMemberCapabilities(groupId, identity: identity)
+// MemberCapabilities.capabilities is Int; the bit helpers work on UInt32.
+var mask = UInt32(current.capabilities)
+
+if !Capabilities.hasCap(mask, Capabilities.canInviteMembers) {
+    mask = Capabilities.withCap(mask, Capabilities.canInviteMembers)
+    mask = Capabilities.withCap(mask, Capabilities.canCreateSubgroup)
+    mask = Capabilities.withoutCap(mask, Capabilities.canManageMetadata)
+    try await mero.admin.setMemberCapabilities(
+        groupId,
+        identity: identity,
+        request: SetMemberCapabilitiesRequest(capabilities: Int(mask))
+    )
+}
+```

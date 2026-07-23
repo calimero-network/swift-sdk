@@ -97,10 +97,20 @@ see an error if the refresh *itself* fails:
   accidentally replay a consumed refresh token and revoke the whole family.
 </Aside>
 
+## Retries & timeouts
+
+Each request has a per-request timeout of `MeroConfig.timeout` (default **10s**).
+The retry engine is internal (not caller-invokable), but it's worth knowing what
+it does: up to **3 attempts** with exponential backoff (base 250 ms, ±20%
+jitter). It retries transient failures only — network errors, HTTP `5xx`/`429`,
+and `URLError` timeouts / connection loss / DNS failures. It never retries `4xx`
+(including `401`/`403`) or `MeroError.authRevoked`. A `401 token_expired` is
+handled separately by the refresh path below, not by this retry loop.
+
 ## Transport
 
-The retry engine (transient network/5xx backoff) lives inside the transport and
-isn't part of the public API. The public transport surface:
+The retry engine above lives inside the transport and isn't part of the public
+API. The public transport surface:
 
 ```swift
 public protocol HttpClient: Sendable {
