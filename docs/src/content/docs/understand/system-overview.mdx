@@ -111,10 +111,10 @@ Every call is HTTP to a single remote `merod` node:
 | `mero.auth` | `GET/POST /auth/*`, `/admin/keys*` |
 | `mero.admin` | `/admin-api/*` (REST) |
 | `mero.rpc` | `POST /jsonrpc` (JSON-RPC) |
+| `mero.events(contextIds:)` | `GET /sse` + `POST /sse/subscription` (SSE stream) |
 
 <Aside type="note">
-  Real-time events (SSE) and blob-streaming polish are on the roadmap (milestones
-  M3/M5). Until then, MeroKit covers transport + auth + the full admin/RPC
-  surface. For the protocol the node implements, see the
+  MeroKit covers transport, auth, the full admin/RPC surface, and live
+  [SSE events](/guides/events/). For the protocol the node implements, see the
   [Calimero Core docs](https://calimero-network.github.io/core/).
 </Aside>

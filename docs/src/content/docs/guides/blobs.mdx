@@ -54,6 +54,13 @@ let data: Data = try await mero.admin.getBlob(blobId)
   metadata; reserve `getBlob()` for when you actually need the bytes.
 </Aside>
 
+<Aside type="caution">
+  `getBlob()` buffers the **entire** blob into memory as `Data`. For large
+  objects, stream to disk instead via the transport's
+  `download(_:to:)` on `mero.http` (`URLSessionHttpClient`), which writes the
+  response to a file URL without holding it all in memory.
+</Aside>
+
 ## Delete
 
 ```swift

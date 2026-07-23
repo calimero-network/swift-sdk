@@ -1,0 +1,73 @@
+---
+title: RPC client
+description: mero.rpc (RpcClient) — execute a context's WASM methods over JSON-RPC, plus the owner-driven migration helpers.
+sidebar:
+  order: 5
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+`mero.rpc` (`RpcClient`) calls the methods a context's WASM application exposes,
+over the node's `/jsonrpc` endpoint. It shares the SDK's transport, so
+authentication, refresh, and the [error model](/reference/error-model/) apply. A
+contract-level failure surfaces as `MeroError.rpc(RpcError)`.
+
+See the [executing methods guide](/guides/executing-methods/) for task-oriented
+examples.
+
+## `execute<T: Decodable>(...)`
+
+```swift
+func execute<T: Decodable>(
+    contextId: String,
+    method: String,
+    argsJson: [String: JSONValue] = [:],
+    executorPublicKey: String? = nil
+) async throws -> T
+```
+
+Calls `method` on the application in `contextId` and decodes `result.output`
+into `T`. `argsJson` is a `[String: JSONValue]` map (`JSONValue` is
+`ExpressibleBy…Literal`, so `["id": "42", "n": 3]` works). A JSON-RPC `error`
+object is mapped to `MeroError.rpc(RpcError)`.
+
+```swift
+struct Post: Decodable { let id: String; let title: String }
+
+let post: Post = try await mero.rpc.execute(
+    contextId: contextId,
+    method: "get_post",
+    argsJson: ["id": "42"]
+)
+```
+
+<Aside type="note">
+  `executorPublicKey` names the context identity executing the call. Leave it
+  `nil` to use the context's default/owning identity; set it for apps that key
+  state on the caller identity. (Unlike mero-js, where the field is deprecated,
+  it is honored here.)
+</Aside>
+
+## `migrateMyEntries(_ contextId:) -> MigrateMyEntriesSummary`
+
+Owner-driven migration: re-signs the caller's identity-gated entries to the
+current schema in a single sweep (it does not loop). Returns the counts.
+
+```swift
+public struct MigrateMyEntriesSummary: Codable, Sendable, Equatable {
+    public let converted: Int   // entries re-signed this call
+    public let remaining: Int   // still below the target schema
+}
+
+let summary = try await mero.rpc.migrateMyEntries(contextId)
+```
+
+## `countMyPending(_ contextId:) -> Int`
+
+Read-only count of the caller's entries still below the target schema — decide
+whether to migrate, or show progress.
+
+```swift
+let pending = try await mero.rpc.countMyPending(contextId)
+if pending > 0 { _ = try await mero.rpc.migrateMyEntries(contextId) }
+```

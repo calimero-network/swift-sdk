@@ -1,0 +1,77 @@
+---
+title: Live events (SSE)
+description: mero.events(contextIds:) and SseClient — stream a node's real-time context events over Server-Sent Events, with automatic reconnection.
+sidebar:
+  order: 6
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+MeroKit streams a node's real-time context events over Server-Sent Events. The
+task-oriented walkthrough is the [live events guide](/guides/events/); this page
+is the API surface.
+
+## `mero.events(contextIds:)`
+
+```swift
+nonisolated func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error>
+```
+
+Opens `GET /sse` and subscribes to the given context ids via
+`POST /sse/subscription`, then yields a `ContextEvent` per emission. It is
+`nonisolated` — callable without `await` — and reconnects automatically ~3s
+after a drop (the node persists session subscriptions). Consume it with
+`for try await`; **cancel the enclosing `Task` to close the connection**.
+
+```swift
+let task = Task {
+    for try await event in mero.events(contextIds: [contextId]) {
+        print(event.contextId, event.kind)
+        await reload()
+    }
+}
+// later:
+task.cancel()   // closes the SSE stream
+```
+
+<Aside type="caution">
+  `mero.close()` / `mero.logout()` do **not** stop an active stream — its
+  lifetime is owned by the `Task`. Always cancel that `Task` yourself.
+</Aside>
+
+## `ContextEvent`
+
+```swift
+public struct ContextEvent: Sendable {
+    public let contextId: String
+    public let kind: String        // event discriminator, e.g. "ExecutionEvent"
+    public let payload: JSONValue  // raw event JSON
+}
+```
+
+For a contract emission (`kind == "ExecutionEvent"`) the encoded contract events
+live under `payload`'s `data.events[].data`.
+
+## `SseClient`
+
+`mero.events(...)` builds an `SseClient` for you; use it directly only if you
+need to manage the connection yourself.
+
+```swift
+public final class SseClient: @unchecked Sendable {
+    public init(
+        baseURL: URL,
+        token: @escaping @Sendable () async -> String?,
+        session: URLSession = .shared
+    )
+    public func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error>
+}
+```
+
+<Aside type="note">
+  The stream uses a long-lived `URLSession.bytes(for:)` request. Don't back it
+  with a background `URLSessionConfiguration` — streaming needs a standard
+  (default/ephemeral) session. `SseClient` also imports `FoundationNetworking`,
+  so it builds on Linux, but live streaming is intended for the Apple platforms
+  MeroKit targets (iOS 15+ / macOS 12+).
+</Aside>
