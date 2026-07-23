@@ -25,7 +25,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: brew install xcodegen
@@ -61,7 +61,7 @@ jobs:
     # Informational: cross-node sync between co-located merods is flaky on one host.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install tools
         run: brew install xcodegen
