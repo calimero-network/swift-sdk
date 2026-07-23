@@ -200,22 +200,13 @@ struct ChannelView: View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        ForEach(service.messages) { m in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(m.senderUsername.isEmpty ? String(m.sender.prefix(8)) : m.senderUsername)
-                                    .font(.caption2.weight(.bold)).foregroundColor(Cal.lime)
-                                Text(m.text).font(.subheadline).foregroundColor(Cal.text)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10).background(Cal.surface)
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(
-                                10
-                            )
-                            .id(m.id)
+                    LazyVStack(alignment: .leading, spacing: 14) {
+                        ForEach(service.messages) { message in
+                            MessageRow(message: message).id(message.id)
                         }
                     }
-                    .padding(16)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
                 }
                 .onChange(of: service.messages.count) { _ in
                     if let last = service.messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
@@ -306,5 +297,73 @@ struct JoinSheet: View {
             }
         }
         .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Message row (mero-chat style: avatar + name + time + text)
+
+struct MessageRow: View {
+    let message: ChatMessage
+
+    private var name: String {
+        message.senderUsername.isEmpty ? String(message.sender.prefix(6)) : message.senderUsername
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ChatAvatar(name: name)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+                    Text(ChatTime.short(message.timestamp)).font(.caption2).foregroundColor(Cal.textDim)
+                }
+                Text(message.text)
+                    .font(.subheadline)
+                    .foregroundColor(Cal.text.opacity(0.92))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A colored initials avatar (deterministic color per name).
+struct ChatAvatar: View {
+    let name: String
+    var size: CGFloat = 34
+
+    private var initials: String {
+        let parts = name.split(separator: " ")
+        let joined = parts.prefix(2).map { String($0.prefix(1)) }.joined()
+        return (joined.isEmpty ? String(name.prefix(1)) : joined).uppercased()
+    }
+
+    private var color: Color {
+        let palette: [UInt] = [0xA5FF11, 0xFF7A00, 0x38BD_F8, 0xF472_B6, 0xA78B_FA, 0x34D3_99, 0xFBBF_24]
+        var hash = 5381
+        for byte in name.utf8 { hash = ((hash << 5) &+ hash) &+ Int(byte) }
+        let index = ((hash % palette.count) + palette.count) % palette.count
+        return Color(hex: palette[index])
+    }
+
+    var body: some View {
+        Text(initials)
+            .font(.system(size: size * 0.4, weight: .bold))
+            .foregroundColor(Cal.bg)
+            .frame(width: size, height: size)
+            .background(color)
+            .clipShape(Circle())
+    }
+}
+
+enum ChatTime {
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+    static func short(_ milliseconds: Int) -> String {
+        formatter.string(from: Date(timeIntervalSince1970: Double(milliseconds) / 1000))
     }
 }

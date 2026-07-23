@@ -127,6 +127,7 @@ struct ExplorerView: View {
     @State private var search = ""
     @State private var showLogs = false
     @State private var showChat = false
+    @State private var expanded: Set<String> = []
 
     private var filtered: [(category: String, ops: [SDKOperation])] {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
@@ -143,36 +144,10 @@ struct ExplorerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 22) {
                     header
-                    Button {
-                        showChat = true
-                    } label: {
-                        Label("Open Chat", systemImage: "bubble.left.and.bubble.right.fill")
-                    }
-                    .buttonStyle(CalPrimaryButtonStyle())
-                    ForEach(filtered, id: \.category) { section in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(section.category.uppercased())
-                                .font(.caption.weight(.bold))
-                                .foregroundColor(Cal.lime)
-                            VStack(spacing: 0) {
-                                ForEach(Array(section.ops.enumerated()), id: \.element.id) { idx, op in
-                                    NavigationLink {
-                                        OperationRunnerView(op: op)
-                                    } label: {
-                                        row(op)
-                                    }
-                                    if idx < section.ops.count - 1 {
-                                        Divider().overlay(Cal.border)
-                                    }
-                                }
-                            }
-                            .background(Cal.surface)
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1))
-                            .cornerRadius(12)
-                        }
-                    }
+                    if search.isEmpty { chatSection }
+                    sdkSection
                 }
                 .padding(16)
             }
@@ -202,6 +177,82 @@ struct ExplorerView: View {
                 ChatHomeView(service: chat)
             }
         }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text.uppercased())
+            .font(.caption.weight(.bold))
+            .tracking(0.8)
+            .foregroundColor(Cal.textDim)
+    }
+
+    private var chatSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel("Chat")
+            Button {
+                showChat = true
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .font(.title3).foregroundColor(Cal.bg)
+                        .frame(width: 38, height: 38).background(Cal.lime).cornerRadius(10)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Open Chat").font(.headline).foregroundColor(Cal.text)
+                        Text("Spaces, channels & messaging on curb").font(.caption).foregroundColor(Cal.textDim)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.caption).foregroundColor(Cal.textDim)
+                }
+                .padding(12).background(Cal.surface)
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1)).cornerRadius(12)
+            }
+        }
+    }
+
+    private var sdkSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
+            ForEach(filtered, id: \.category) { section in
+                categoryCard(section)
+            }
+        }
+    }
+
+    private var matchCount: Int { filtered.reduce(0) { $0 + $1.ops.count } }
+
+    private func expandBinding(_ category: String) -> Binding<Bool> {
+        Binding(
+            get: { !search.isEmpty || expanded.contains(category) },
+            set: { isOn in
+                if isOn { expanded.insert(category) } else { expanded.remove(category) }
+            })
+    }
+
+    private func categoryCard(_ section: (category: String, ops: [SDKOperation])) -> some View {
+        DisclosureGroup(isExpanded: expandBinding(section.category)) {
+            VStack(spacing: 0) {
+                ForEach(Array(section.ops.enumerated()), id: \.element.id) { idx, op in
+                    NavigationLink {
+                        OperationRunnerView(op: op)
+                    } label: {
+                        row(op)
+                    }
+                    if idx < section.ops.count - 1 { Divider().overlay(Cal.border) }
+                }
+            }
+            .padding(.top, 6)
+        } label: {
+            HStack {
+                Text(section.category).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+                Spacer()
+                Text("\(section.ops.count)").font(.caption).foregroundColor(Cal.textDim)
+            }
+        }
+        .padding(12)
+        .background(Cal.surface)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1))
+        .cornerRadius(12)
+        .tint(Cal.lime)
     }
 
     private var header: some View {
