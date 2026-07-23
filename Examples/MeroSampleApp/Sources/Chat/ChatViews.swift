@@ -9,7 +9,6 @@ struct ChatHomeView: View {
     @State private var newSpace = ""
     @State private var showNewSpace = false
     @State private var showJoin = false
-    @State private var joinText = ""
 
     var body: some View {
         NavigationStack {
@@ -20,6 +19,7 @@ struct ChatHomeView: View {
                 } else {
                     spacesList
                 }
+                if service.busy { busyOverlay }
             }
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
@@ -61,12 +61,26 @@ struct ChatHomeView: View {
             Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $showJoin) {
-            JoinSheet(text: $joinText) {
-                Task {
-                    await service.joinSpace(joinText); showJoin = false
-                }
-            }
+            JoinSheet(service: service)
         }
+    }
+
+    private var busyOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.55).ignoresSafeArea()
+            VStack(spacing: 12) {
+                ProgressView().tint(Cal.lime).scaleEffect(1.3)
+                Text(service.status.isEmpty ? "Working…" : service.status)
+                    .font(.footnote).foregroundColor(Cal.text)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(22)
+            .frame(maxWidth: 280)
+            .background(Cal.surface)
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Cal.border, lineWidth: 1))
+            .cornerRadius(16)
+        }
+        .transition(.opacity)
     }
 
     private var installGate: some View {
@@ -137,8 +151,27 @@ struct ChannelsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                if service.channels.isEmpty {
-                    Text("No channels yet. Tap + to create one.").font(.footnote).foregroundColor(Cal.textDim)
+                if !service.status.isEmpty {
+                    HStack(spacing: 8) {
+                        if service.busy { ProgressView().tint(Cal.lime) }
+                        Text(service.status).font(.caption2).foregroundColor(Cal.textDim)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                if service.channels.isEmpty && !service.busy {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("No channels yet.").font(.subheadline).foregroundColor(Cal.text)
+                        Text("If you just joined, channels sync from the inviter — tap Sync. Or create one with +.")
+                            .font(.caption).foregroundColor(Cal.textDim)
+                        Button {
+                            Task { await service.resync(space) }
+                        } label: {
+                            Label("Sync now", systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(CalSecondaryButtonStyle())
+                    }
+                    .padding(14).background(Cal.surface)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1)).cornerRadius(12)
                 }
                 ForEach(service.channels) { ch in
                     NavigationLink {
@@ -170,6 +203,7 @@ struct ChannelsView: View {
                             if let code { invite = code } else { inviteError = true }
                         }
                     }
+                    Button("Sync now") { Task { await service.resync(space) } }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -309,27 +343,57 @@ struct InviteSheet: View {
 }
 
 struct JoinSheet: View {
-    @Binding var text: String
-    let onJoin: () -> Void
+    @ObservedObject var service: ChatService
     @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Paste an invite").font(.headline).foregroundColor(Cal.text)
+                Text("Paste an invite code").font(.headline).foregroundColor(Cal.text)
                 TextEditor(text: $text)
                     .font(Cal.mono).foregroundColor(Cal.text).scrollContentBackground(.hidden)
-                    .padding(8).frame(minHeight: 160).background(Cal.surface2)
+                    .padding(8).frame(minHeight: 140).background(Cal.surface2)
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(10)
-                Button("Join space") { onJoin() }.buttonStyle(CalPrimaryButtonStyle())
+                    .disabled(service.busy)
+                Button {
+                    Task {
+                        await service.joinSpace(text)
+                        if service.status.hasPrefix("✓") { dismiss() }
+                    }
+                } label: {
+                    if service.busy {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(Cal.bg); Text("Joining…")
+                        }
+                    } else {
+                        Text("Join space")
+                    }
+                }
+                .buttonStyle(CalPrimaryButtonStyle())
+                .disabled(service.busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+
+                if !service.status.isEmpty {
+                    HStack(spacing: 8) {
+                        if service.busy { ProgressView().tint(Cal.lime) }
+                        Text(service.status)
+                            .font(.caption)
+                            .foregroundColor(service.status.hasPrefix("✗") ? Cal.error : Cal.textDim)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 Spacer()
             }
             .padding(16).background(Cal.bg)
-            .navigationTitle("Join").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Join a space").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() }.foregroundColor(Cal.lime) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Close") { dismiss() }.foregroundColor(Cal.lime).disabled(service.busy)
+                }
             }
         }
         .preferredColorScheme(.dark)
+        .tint(Cal.lime)
     }
 }
 

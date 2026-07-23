@@ -177,7 +177,13 @@ final class ChatService: ObservableObject {
             for sg in subgroups {
                 let ctxs = try await mero.admin.listGroupContexts(sg.groupId)
                 guard let ctx = ctxs.first else { continue }
-                let executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
+                var executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
+                if executor.isEmpty {
+                    // Joined space whose context we haven't joined yet — join it so
+                    // we get a member identity (otherwise it looks uninitialized).
+                    _ = try? await mero.admin.joinContext(ctx.contextId)
+                    executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
+                }
                 var name = sg.name ?? ctx.name ?? "channel"
                 var kind = "Channel"
                 if !executor.isEmpty,
@@ -277,17 +283,64 @@ final class ChatService: ObservableObject {
     }
 
     func joinSpace(_ inviteCode: String) async {
-        await run("joining space…") {
-            guard let invite = ChatInvite.decode(inviteCode) else {
-                self.status = "invalid invite code"
-                throw MeroError.decoding("invalid invite code")
-            }
-            let joined = try await self.mero.admin.joinNamespace(
+        busy = true
+        defer { busy = false }
+        status = "Reading invite…"
+        guard let invite = ChatInvite.decode(inviteCode) else {
+            status = "✗ Invalid invite code"
+            return
+        }
+        do {
+            status = "Joining “\(invite.spaceName)”…"
+            let joined = try await mero.admin.joinNamespace(
                 invite.namespaceId,
                 request: JoinNamespaceRequest(invitation: invite.invitation, groupName: invite.spaceName))
-            _ = try? await self.mero.admin.syncGroup(joined.groupId)
-            self.status = "joined \(invite.spaceName)"
-            await self.loadSpaces()
+            // Cross-node sync is async — pull the group, then JOIN each channel's
+            // context so it's initialized on this node (the step mero-chat does and
+            // the reason a joined space looked "uninitialized" before). Retry until
+            // the contexts arrive + join, showing progress the whole way.
+            var synced = false
+            for attempt in 1...6 {
+                status = "Syncing “\(invite.spaceName)” from the inviter… (\(attempt)/6)"
+                _ = try? await mero.admin.syncGroup(joined.groupId)
+                let contexts = (try? await mero.admin.listGroupContexts(joined.groupId)) ?? []
+                for ctx in contexts {
+                    // Join the context (idempotent) so we get a member identity...
+                    _ = try? await mero.admin.joinContext(ctx.contextId)
+                    // ...then register our display name in it.
+                    let owned = try? await mero.admin.getContextIdentitiesOwned(ctx.contextId)
+                    if let executor = owned?.identities.first {
+                        let _: String? = try? await rpc(
+                            ctx.contextId, "set_profile", executor: executor,
+                            args: ["username": .string(username), "avatar": .null])
+                    }
+                }
+                await loadSpaces()
+                if let space = spaces.first(where: { $0.id == invite.namespaceId }) {
+                    await loadChannels(space)
+                    if !channels.isEmpty { synced = true; break }
+                }
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            await loadSpaces()
+            status =
+                synced
+                ? "✓ Joined “\(invite.spaceName)” — \(channels.count) channel(s)"
+                : "Joined “\(invite.spaceName)”. Channels still syncing — open it and pull to refresh."
+        } catch {
+            status = "✗ Join failed: \(short(error))"
+        }
+    }
+
+    /// Manually re-sync a space's channels (for when cross-node sync lags).
+    func resync(_ space: ChatSpace) async {
+        await run("Syncing “\(space.name)”…") {
+            _ = try? await self.mero.admin.syncGroup(space.id)
+            let contexts = (try? await self.mero.admin.listGroupContexts(space.id)) ?? []
+            for ctx in contexts { _ = try? await self.mero.admin.joinContext(ctx.contextId) }
+            await self.loadChannels(space)
+            self.status =
+                self.channels.isEmpty ? "No channels yet — still syncing" : "✓ \(self.channels.count) channel(s)"
         }
     }
 
