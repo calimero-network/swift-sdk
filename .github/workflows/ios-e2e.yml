@@ -34,12 +34,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
-          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
-          test -n "$URL" || { echo "no merod darwin asset on $TAG"; exit 1; }
-          curl -sL "$URL" | tar xz && chmod +x ./merod && sudo mv ./merod /usr/local/bin/merod
-          merod --version
+          # Retry the whole resolve+download — the release API / asset fetch
+          # occasionally blips and used to fail the job before any test ran.
+          for attempt in 1 2 3; do
+            TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName') \
+              && URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
+                   -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url') \
+              && [ -n "$URL" ] \
+              && curl -fSL "$URL" | tar xz \
+              && chmod +x ./merod \
+              && sudo mv ./merod /usr/local/bin/merod \
+              && merod --version \
+              && exit 0
+            echo "merod download attempt $attempt failed; retrying…"; sleep 5
+          done
+          echo "::error::merod download failed after 3 attempts"; exit 1
 
       - name: Run AppE2ETests (boots node + sim)
         run: ./e2e-ios.sh
