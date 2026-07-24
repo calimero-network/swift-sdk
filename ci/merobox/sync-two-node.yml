@@ -1,0 +1,93 @@
+# Two-node cross-node sync check.
+#
+# Proves the thing the iOS chat e2e implicitly depends on: a write made on one
+# node replicates to a second node that shares the context, and the context
+# state hash converges across both (i.e. it actually initializes — not the
+# all-ones "uninitialized" hash). Uses the canonical kv_store app so the test
+# exercises node + WASM + sync, independent of the curb chat app or iOS.
+#
+# Run:  merobox bootstrap run ci/merobox/sync-two-node.yml   (from repo root)
+#
+# Node images: merod has no published 0.11.x Docker tag (the iOS e2e uses the
+# 0.11.0-rc.x darwin *binary* from GitHub releases, which has no Docker build),
+# so we track `edge`. Override with MEROD_IMAGE in the CI job if needed.
+name: Two-node cross-node sync (kv_store)
+description: Write on node 1 must replicate to node 2 and the context hash must converge.
+
+nodes:
+  count: 2
+  image: ghcr.io/calimero-network/merod:edge
+  prefix: calimero-node
+
+# Fresh state each run so the check is deterministic.
+nuke_on_start: true
+nuke_on_end: true
+stop_all_nodes: true
+wait_timeout: 120
+
+steps:
+  - name: Install kv_store on node 1
+    type: install_application
+    node: calimero-node-1
+    path: ./ci/merobox/res/kv_store.wasm
+    dev: true
+    outputs:
+      app_id: applicationId
+
+  # Creates the context on node 1 and wires node 2 into it (pre-installs the
+  # app on node 2, invites + joins). The join protocol no longer ships the app
+  # blob, so the pre-install (auto-resolved from the step above) is what lets
+  # node 2's context state initialize instead of staying uninitialized.
+  - name: Mesh the context across node 1 + node 2
+    type: create_mesh
+    context_node: calimero-node-1
+    application_id: "{{app_id}}"
+    nodes:
+      - calimero-node-2
+    outputs:
+      context_id: contextId
+      member_public_key: memberPublicKey
+
+  - name: Write sync_key on node 1
+    type: call
+    node: calimero-node-1
+    context_id: "{{context_id}}"
+    method: set
+    args:
+      key: sync_key
+      value: synced_from_node_1
+
+  # Poll contextStateHash on BOTH nodes until they converge. This is the core
+  # assertion: if node 2 never initializes / never catches up, this times out
+  # and the job fails loudly instead of silently passing.
+  - name: Wait for the context hash to converge across both nodes
+    type: wait_for_sync
+    context_id: "{{context_id}}"
+    nodes:
+      - calimero-node-1
+      - calimero-node-2
+    trigger_sync: true
+    timeout: 90
+
+  - name: Read sync_key back on node 2
+    type: call
+    node: calimero-node-2
+    context_id: "{{context_id}}"
+    method: get
+    args:
+      key: sync_key
+    outputs:
+      read_back: result
+
+  - name: Assert node 2 sees node 1's write
+    type: assert
+    statements:
+      - "is_set({{context_id}})"
+      - "is_set({{member_public_key}})"
+      - "contains({{read_back}}, 'synced_from_node_1')"
+
+  # Belt-and-suspenders: the structured JSON shape kv_store returns from `get`.
+  - name: Assert the read value exactly
+    type: json_assert
+    statements:
+      - 'json_subset({{read_back}}, {"output": "synced_from_node_1"})'
