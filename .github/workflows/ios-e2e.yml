@@ -70,7 +70,11 @@ jobs:
   multi-node-e2e:
     name: Multi-user chat e2e (2 nodes / 2 sims)
     runs-on: macos-15
-    timeout-minutes: 50
+    # Headroom so the two-sim run reaches a real pass/FAIL conclusion rather than
+    # being CANCELLED at the job timeout — a cancellation is NOT absorbed by
+    # continue-on-error and would fail the whole workflow run, whereas a clean
+    # failure is absorbed (this job is informational).
+    timeout-minutes: 75
     # Informational: cross-node sync between co-located merods is flaky on one host.
     continue-on-error: true
     steps:
