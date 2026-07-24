@@ -104,14 +104,18 @@ pass=0; fail=0
 step "1/3 HOST creates space + invite + posts (sim A / node A)"
 run_role "$UDID_A" testHostCreateInviteAndPost "host" && pass=$((pass+1)) || { fail=$((fail+1)); die "host role failed"; }
 
-step "Handoff invite A → B via pasteboard"
+step "Handoff invite A → B"
 INV=$(xcrun simctl pbpaste "$UDID_A" 2>/dev/null)
 [ -n "$INV" ] || die "no invite on sim A pasteboard"
-printf '%s' "$INV" | xcrun simctl pbcopy "$UDID_B"
-echo "invite (${#INV} chars) copied to sim B"
+printf '%s' "$INV" | xcrun simctl pbcopy "$UDID_B" 2>/dev/null || true  # pasteboard (fallback)
+echo "invite (${#INV} chars) → guest"
 
 step "2/3 GUEST joins + sees host msg + replies (sim B / node B)"
+# Hand the invite to the guest test via env (xcodebuild strips TEST_RUNNER_);
+# avoids the iOS paste prompt that blocked the pasteboard handoff.
+export TEST_RUNNER_E2E_JOIN="$INV"
 run_role "$UDID_B" testGuestJoinAndReply "guest" && pass=$((pass+1)) || fail=$((fail+1))
+unset TEST_RUNNER_E2E_JOIN
 
 step "3/3 HOST sees the guest reply (sim A / node A)"
 run_role "$UDID_A" testHostSeesReply "verify" && pass=$((pass+1)) || fail=$((fail+1))
