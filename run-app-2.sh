@@ -94,14 +94,17 @@ for u in "$UDID_A" "$UDID_B"; do
   xcrun simctl uninstall "$u" "${BUNDLE_ID}.uitests.xctrunner" >/dev/null 2>&1 || true
   xcrun simctl install "$u" "$APP" || die "install failed"
 done
-xcrun simctl launch "$UDID_A" "$BUNDLE_ID" >/dev/null 2>&1                                    # sim A → :4001
-SIMCTL_CHILD_E2E_NODE="http://localhost:4011" xcrun simctl launch "$UDID_B" "$BUNDLE_ID" >/dev/null 2>&1  # sim B → :4011
+# sim A → node A :4001 (chat name dev1); sim B → node B :4011 (chat name dev2)
+SIMCTL_CHILD_E2E_USERNAME="dev1" \
+  xcrun simctl launch "$UDID_A" "$BUNDLE_ID" >/dev/null 2>&1
+SIMCTL_CHILD_E2E_NODE="http://localhost:4011" SIMCTL_CHILD_E2E_USERNAME="dev2" \
+  xcrun simctl launch "$UDID_B" "$BUNDLE_ID" >/dev/null 2>&1
 osascript -e 'tell application "Simulator" to activate' 2>/dev/null || true
 
 echo
 echo "${GREEN}${BOLD}✔ two apps launched.${RESET}"
-echo "  sim A ($DEV_A) → node A :4001    sim B ($DEV_B) → node B :4011"
-echo "  Sign in as ${BOLD}dev / dev-password${RESET} on both."
+echo "  sim A ($DEV_A) → node A :4001 (chat name dev1)    sim B ($DEV_B) → node B :4011 (chat name dev2)"
+echo "  Sign in as ${BOLD}dev / dev-password${RESET} on both (chat display names are dev1/dev2)."
 echo "  On A: Open Chat → create a space + channel → Invite people → Copy."
 echo "  Move the invite A→B (both sims share the Mac clipboard if Simulator ▸ Edit ▸ Automatically Sync Pasteboard is on),"
 echo "  then on B: Open Chat → + → Join with invite → paste → Join."
