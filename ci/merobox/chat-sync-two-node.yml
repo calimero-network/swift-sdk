@@ -1,0 +1,93 @@
+# Two-node mero-chat (curb) message-sync check.
+#
+# Exercises the REAL published curb app (com.calimero.curb 7.0.10, downloaded
+# from apps.calimero.network in CI) — the same app the iOS chat sample installs —
+# but on two Docker nodes instead of simulators. Creates a curb "Channel"
+# context meshed across both nodes, sends a message on node 1, waits for the
+# context hash to converge, and asserts node 2 reads the message back. This is
+# the chat-app analog of sync-two-node.yml (kv_store), and the definitive,
+# simulator-free proof that mero-chat cross-node message sync works.
+#
+# curb's channel/message contract shape mirrors Examples/MeroSampleApp
+# Sources/Chat/ChatService.swift (init params + send_message/get_messages args).
+#
+# The wasm is downloaded + extracted by the CI job to ./ci/merobox/res/curb-app.wasm
+# (see .github/workflows/merobox-chat-sync.yml).
+name: Two-node mero-chat (curb) message sync
+description: A message sent on node 1 in a curb channel must replicate to node 2.
+
+nodes:
+  count: 2
+  image: ghcr.io/calimero-network/merod:edge
+  prefix: calimero-node
+
+nuke_on_start: true
+nuke_on_end: true
+stop_all_nodes: true
+wait_timeout: 120
+
+steps:
+  - name: Install curb (mero-chat) on node 1
+    type: install_application
+    node: calimero-node-1
+    path: ./ci/merobox/res/curb-app.wasm
+    dev: true
+    outputs:
+      app_id: applicationId
+
+  # Create a curb "Channel" context (init params mirror ChatService.initParams)
+  # and mesh node 2 into it. created_at is a fixed epoch — merobox scripts can't
+  # call Date.now(), and curb only stores it.
+  - name: Mesh a curb channel across node 1 + node 2
+    type: create_mesh
+    context_node: calimero-node-1
+    application_id: "{{app_id}}"
+    params: '{"name":"general","context_type":"Channel","description":"","created_at":1721800000,"creator_username":"host"}'
+    nodes:
+      - calimero-node-2
+    outputs:
+      context_id: contextId
+      member_public_key: memberPublicKey
+
+  - name: Send a message on node 1
+    type: call
+    node: calimero-node-1
+    context_id: "{{context_id}}"
+    method: send_message
+    executor_public_key: "{{member_public_key}}"
+    args:
+      message: "hello from node 1"
+      mentions: []
+      mentions_usernames: []
+      parent_message: null
+      timestamp: 1721800001000
+      sender_username: "host"
+      files: null
+      images: null
+
+  - name: Wait for the channel state to converge across both nodes
+    type: wait_for_sync
+    context_id: "{{context_id}}"
+    nodes:
+      - calimero-node-1
+      - calimero-node-2
+    trigger_sync: true
+    timeout: 90
+
+  - name: Read messages back on node 2
+    type: call
+    node: calimero-node-2
+    context_id: "{{context_id}}"
+    method: get_messages
+    args:
+      parent_message: null
+      limit: 50
+      offset: 0
+      search_term: null
+    outputs:
+      msgs_node2: result
+
+  - name: Assert node 2 sees node 1's message
+    type: assert
+    statements:
+      - "contains({{msgs_node2}}, 'hello from node 1')"

@@ -26,3 +26,6 @@ merod.pid
 .mero-cap/
 .mero-cap.log
 .mero-cap.pid
+
+# curb app wasm is downloaded from the registry in CI, not committed
+ci/merobox/res/curb-app.wasm
