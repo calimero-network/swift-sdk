@@ -12,6 +12,9 @@ enum Cal {
     static let orange = Color(hex: 0xFF7A00)
     static let error = Color(hex: 0xEF4444)
     static let mono = Font.system(.footnote, design: .monospaced)
+
+    /// App-wide horizontal screen padding — tight so content runs almost full-width.
+    static let screenPad: CGFloat = 8
 }
 
 extension Color {

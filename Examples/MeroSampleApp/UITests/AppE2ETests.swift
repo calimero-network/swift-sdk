@@ -49,6 +49,8 @@ final class AppE2ETests: XCTestCase {
     /// Explorer: run a live admin method and assert a real response comes back.
     func testExplorerRunsLiveMethod() throws {
         login()
+        // The SDK surface lives behind the "Explore SDK" entry on the landing.
+        tap(app.buttons["exploreSDK"], "Explore SDK entry")
         // Categories are collapsed; search reveals (auto-expands) the method.
         let field = app.searchFields.firstMatch
         XCTAssertTrue(field.waitForExistence(timeout: 5), "search field")
