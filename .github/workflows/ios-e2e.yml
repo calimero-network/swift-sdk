@@ -53,6 +53,7 @@ jobs:
             .e2e-ios.log
             .mero-e2e-node.log
           if-no-files-found: warn
+          include-hidden-files: true
 
   multi-node-e2e:
     name: Multi-user chat e2e (2 nodes / 2 sims)
@@ -89,3 +90,4 @@ jobs:
             .mero-b.log
             .mero-role-*.log
           if-no-files-found: warn
+          include-hidden-files: true

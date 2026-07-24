@@ -56,6 +56,13 @@ xcodebuild test \
   -scheme MeroSampleApp \
   -destination "platform=iOS Simulator,id=$UDID" \
   -only-testing:MeroSampleAppUITests/AppE2ETests \
-  -retry-tests-on-failure -test-iterations 2 2>&1 | tee "$REPO_ROOT/.e2e-ios.log" | grep -iE "Test Case .* (passed|failed)|\*\* TEST"
+  -retry-tests-on-failure -test-iterations 2 2>&1 | tee "$REPO_ROOT/.e2e-ios.log" \
+  | grep -iE "Test Case .* (passed|failed)|\*\* TEST|error:|Assertion Failure|XCTAssert.* failed"
 code=${PIPESTATUS[0]}
+if [ "$code" -ne 0 ]; then
+  # Surface the failing assertions directly in the console (the log tee'd above
+  # is a hidden file; this makes CI failures diagnosable without the artifact).
+  echo "${RED}── failing assertions ──${RESET}"
+  grep -iE "\.swift:[0-9]+: error|Assertion Failure|XCTAssert.* failed" "$REPO_ROOT/.e2e-ios.log" | tail -30 || true
+fi
 [ "$code" -eq 0 ] && echo "${GREEN}✔ e2e passed${RESET}" || die "e2e failed — see .e2e-ios.log"
