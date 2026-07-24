@@ -39,9 +39,10 @@ joining node could never initialize the context. merobox's own Docker CI passes
 all 30+ sync scenarios against `edge` — it just always *builds* the wasm from
 core `master`. Fixed by doing the same (see the wasm note below).
 
-The CI job stays `continue-on-error` (informational) until a green run confirms
-convergence on CI; the assertions are real, so it can then be promoted to a
-required gate by dropping `continue-on-error`.
+With the matching wasm, both scenarios now converge on CI in **under 2 seconds**
+(forward and backward), so the job is a **gating check** — a red run means a
+genuine regression (upstream node sync broke, or the vendored wasm drifted from
+the node image).
 
 ## Run locally
 
