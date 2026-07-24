@@ -123,7 +123,8 @@ struct ChatHomeView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, Cal.screenPad)
+            .padding(.vertical, 14)
         }
         .refreshable { await service.loadSpaces() }
         .task { await service.loadSpaces() }
@@ -188,7 +189,8 @@ struct ChannelsView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, Cal.screenPad)
+            .padding(.vertical, 14)
         }
         .background(Cal.bg)
         .navigationTitle(space.name)
@@ -250,7 +252,7 @@ struct ChannelView: View {
                             MessageRow(message: message).id(message.id)
                         }
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, Cal.screenPad)
                     .padding(.vertical, 12)
                 }
                 .onChange(of: service.messages.count) { _ in

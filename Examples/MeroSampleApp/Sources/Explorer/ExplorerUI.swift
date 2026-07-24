@@ -120,36 +120,23 @@ struct CalimeroLoginView: View {
     }
 }
 
-// MARK: - Explorer list (categorized, searchable)
+// MARK: - Explorer landing (clean: Open Chat + Explore SDK)
 
 struct ExplorerView: View {
     @EnvironmentObject private var session: MeroSession
-    @State private var search = ""
     @State private var showLogs = false
     @State private var showChat = false
-    @State private var expanded: Set<String> = []
-
-    private var filtered: [(category: String, ops: [SDKOperation])] {
-        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-        return sdkCategories.compactMap { cat in
-            let ops = sdkOperations.filter { op in
-                op.category == cat
-                    && (q.isEmpty || op.name.lowercased().contains(q) || op.summary.lowercased().contains(q)
-                        || op.category.lowercased().contains(q))
-            }
-            return ops.isEmpty ? nil : (cat, ops)
-        }
-    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 14) {
                     header
-                    if search.isEmpty { chatSection }
-                    sdkSection
+                    chatCard
+                    exploreCard
                 }
-                .padding(16)
+                .padding(.horizontal, Cal.screenPad)
+                .padding(.vertical, 14)
             }
             .background(Cal.bg)
             .navigationTitle("MeroKit")
@@ -170,7 +157,6 @@ struct ExplorerView: View {
                 }
             }
         }
-        .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
         .sheet(isPresented: $showLogs) { LogsView() }
         .sheet(isPresented: $showChat) {
             if let chat = session.chat {
@@ -179,44 +165,110 @@ struct ExplorerView: View {
         }
     }
 
+    /// Big lime-accented entry: open the chat example.
+    private var chatCard: some View {
+        Button {
+            showChat = true
+        } label: {
+            bigEntry(
+                icon: "bubble.left.and.bubble.right.fill",
+                title: "Open Chat Example",
+                subtitle: "Spaces, channels & messaging on curb",
+                accent: true)
+        }
+        .accessibilityIdentifier("openChat")
+    }
+
+    /// Big entry: dive into the full categorized SDK surface.
+    private var exploreCard: some View {
+        NavigationLink {
+            SDKListView()
+        } label: {
+            bigEntry(
+                icon: "square.grid.2x2.fill",
+                title: "Explore SDK",
+                subtitle: "\(sdkOperations.count) methods across \(sdkCategories.count) categories",
+                accent: false)
+        }
+        .accessibilityIdentifier("exploreSDK")
+    }
+
+    private func bigEntry(icon: String, title: String, subtitle: String, accent: Bool) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.title2)
+                .foregroundColor(accent ? Cal.bg : Cal.lime)
+                .frame(width: 46, height: 46)
+                .background(accent ? Cal.lime : Cal.surface2)
+                .cornerRadius(12)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline).foregroundColor(Cal.text)
+                Text(subtitle).font(.caption).foregroundColor(Cal.textDim)
+            }
+            Spacer()
+            Image(systemName: "chevron.right").font(.footnote).foregroundColor(Cal.textDim)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity)
+        .background(Cal.surface)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Cal.border, lineWidth: 1))
+        .cornerRadius(14)
+    }
+
+    private var header: some View {
+        CalCard {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.username.isEmpty ? "connected" : session.username)
+                    .font(.headline).foregroundColor(Cal.text)
+                Text(session.nodeURL).font(.caption).foregroundColor(Cal.textDim)
+                if !session.nodeSummary.isEmpty {
+                    Text(session.nodeSummary).font(.caption2).foregroundColor(Cal.lime)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - SDK list (categorized, searchable) — behind "Explore SDK"
+
+struct SDKListView: View {
+    @State private var search = ""
+    @State private var expanded: Set<String> = []
+
+    private var filtered: [(category: String, ops: [SDKOperation])] {
+        let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+        return sdkCategories.compactMap { cat in
+            let ops = sdkOperations.filter { op in
+                op.category == cat
+                    && (q.isEmpty || op.name.lowercased().contains(q) || op.summary.lowercased().contains(q)
+                        || op.category.lowercased().contains(q))
+            }
+            return ops.isEmpty ? nil : (cat, ops)
+        }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
+                ForEach(filtered, id: \.category) { section in
+                    categoryCard(section)
+                }
+            }
+            .padding(.horizontal, Cal.screenPad)
+            .padding(.vertical, 14)
+        }
+        .background(Cal.bg)
+        .navigationTitle("Explore SDK")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
+    }
+
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
             .font(.caption.weight(.bold))
             .tracking(0.8)
             .foregroundColor(Cal.textDim)
-    }
-
-    private var chatSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("Chat")
-            Button {
-                showChat = true
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "bubble.left.and.bubble.right.fill")
-                        .font(.title3).foregroundColor(Cal.bg)
-                        .frame(width: 38, height: 38).background(Cal.lime).cornerRadius(10)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Open Chat").font(.headline).foregroundColor(Cal.text)
-                        Text("Spaces, channels & messaging on curb").font(.caption).foregroundColor(Cal.textDim)
-                    }
-                    Spacer()
-                    Image(systemName: "chevron.right").font(.caption).foregroundColor(Cal.textDim)
-                }
-                .padding(12).background(Cal.surface)
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1)).cornerRadius(12)
-            }
-            .accessibilityIdentifier("openChat")
-        }
-    }
-
-    private var sdkSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
-            ForEach(filtered, id: \.category) { section in
-                categoryCard(section)
-            }
-        }
     }
 
     private var matchCount: Int { filtered.reduce(0) { $0 + $1.ops.count } }
@@ -254,21 +306,6 @@ struct ExplorerView: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1))
         .cornerRadius(12)
         .tint(Cal.lime)
-    }
-
-    private var header: some View {
-        CalCard {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.username.isEmpty ? "connected" : session.username)
-                    .font(.headline).foregroundColor(Cal.text)
-                Text(session.nodeURL).font(.caption).foregroundColor(Cal.textDim)
-                if !session.nodeSummary.isEmpty {
-                    Text(session.nodeSummary).font(.caption2).foregroundColor(Cal.lime)
-                }
-                Text("\(sdkOperations.count) SDK methods across \(sdkCategories.count) categories")
-                    .font(.caption2).foregroundColor(Cal.textDim).padding(.top, 2)
-            }
-        }
     }
 
     private func row(_ op: SDKOperation) -> some View {
@@ -335,7 +372,8 @@ struct OperationRunnerView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, Cal.screenPad)
+            .padding(.vertical, 16)
         }
         .background(Cal.bg.ignoresSafeArea())
         .navigationTitle(op.name)
