@@ -30,7 +30,24 @@ final class ChatMultiUserTests: XCTestCase {
         type(app, "usernameField", "dev")
         type(app, "passwordField", "dev-password")
         app.buttons["loginButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        dismissSavePasswordPrompt(app)
         XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "no explorer")
+    }
+
+    /// Dismiss the SpringBoard "Save Password?" sheet iOS pops after the password
+    /// field is submitted — it overlaps the lower screen and eats taps otherwise.
+    private func dismissSavePasswordPrompt(_ app: XCUIApplication) {
+        // The AutoFill "Save Password?" sheet renders inside the app's own window
+        // tree (a cross-process remote view), and its button exposes only a label
+        // ("Not Now") with no identifier — so query `app` and match on the label.
+        let predicate = NSPredicate(format: "label ==[c] %@", "Not Now")
+        for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
+            let notNow = source.buttons.matching(predicate).firstMatch
+            if notNow.waitForExistence(timeout: 4) {
+                notNow.tap()
+                return
+            }
+        }
     }
 
     private func openChannel(_ app: XCUIApplication, space: String, channel: String, timeout: TimeInterval) {
@@ -47,33 +64,42 @@ final class ChatMultiUserTests: XCTestCase {
         app.buttons["sendMessage"].tap()
     }
 
+    /// Tap a button by its center coordinate once it exists — robust against
+    /// SwiftUI cards reporting "not hittable" mid-transition (e.g. the landing's
+    /// Open Chat entry right after the login → explorer switch).
+    private func tapButton(_ app: XCUIApplication, _ id: String, timeout: TimeInterval = 10) {
+        let button = app.buttons[id]
+        XCTAssertTrue(button.waitForExistence(timeout: timeout), "\(id) not found")
+        button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+    }
+
     // 1. Host: create space + channel, copy invite, post a message.
     func testHostCreateInviteAndPost() throws {
         let app = XCUIApplication()
         app.launch()
         login(app)
-        app.buttons["openChat"].tap()
-        app.buttons["installChat"].tap()
-        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 90), "install failed")
+        tapButton(app, "openChat")
+        if app.buttons["installChat"].waitForExistence(timeout: 8) { tapButton(app, "installChat") }
+        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "chat home did not load")
 
-        app.buttons["chatAdd"].tap()
+        tapButton(app, "chatAdd")
         app.buttons["New space"].tap()
         let sf = app.alerts.textFields.firstMatch
         XCTAssertTrue(sf.waitForExistence(timeout: 5)); sf.tap(); sf.typeText("shared")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["shared"].waitForExistence(timeout: 20)); app.staticTexts["shared"].tap()
+        XCTAssertTrue(app.staticTexts["shared"].waitForExistence(timeout: 45)); app.staticTexts["shared"].tap()
 
-        app.buttons["channelAdd"].tap()
+        tapButton(app, "channelAdd")
         app.buttons["New channel"].tap()
         let cf = app.alerts.textFields.firstMatch
         XCTAssertTrue(cf.waitForExistence(timeout: 5)); cf.tap(); cf.typeText("general")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 60))
 
         // create + copy invite (still on the channels list; Invite is in its menu)
-        app.buttons["channelAdd"].tap()
+        tapButton(app, "channelAdd")
         app.buttons["Invite people"].tap()
-        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 15), "invite not generated")
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 45), "invite not generated")
         app.buttons["Copy"].tap()
         app.buttons["Done"].tap()
 
@@ -92,7 +118,7 @@ final class ChatMultiUserTests: XCTestCase {
         app.launchEnvironment["E2E_NODE"] = "http://localhost:4011"  // guest talks to node B
         app.launch()
         login(app)
-        app.buttons["openChat"].tap()
+        tapButton(app, "openChat")
         // E2E_JOIN hook auto-installs + joins; wait for the shared space, then open.
         openChannel(app, space: "shared", channel: "general", timeout: 90)
         // cross-node sync: the host's message should arrive
@@ -106,7 +132,7 @@ final class ChatMultiUserTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         login(app)
-        app.buttons["openChat"].tap()
+        tapButton(app, "openChat")
         openChannel(app, space: "shared", channel: "general", timeout: 30)
         XCTAssertTrue(app.staticTexts["hi from guest"].waitForExistence(timeout: 60), "guest reply did not sync")
     }

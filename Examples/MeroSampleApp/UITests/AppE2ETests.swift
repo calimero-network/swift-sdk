@@ -41,7 +41,27 @@ final class AppE2ETests: XCTestCase {
         type("usernameField", "dev")
         type("passwordField", "dev-password")
         tap(app.buttons["loginButton"], "login button")
+        dismissSavePasswordPrompt()
         XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "did not reach explorer")
+    }
+
+    /// After submitting the password field, iOS pops a SpringBoard "Save
+    /// Password?" sheet that overlaps the lower half of the screen and eats taps
+    /// (it's why the Explore SDK entry never navigated). Dismiss it with "Not Now".
+    private func dismissSavePasswordPrompt() {
+        // The AutoFill "Save Password?" sheet renders inside the app's own window
+        // tree (as a cross-process remote view), so query `app` — not springboard.
+        // Its button exposes only a *label* ("Not Now"), no identifier, so match
+        // on the label rather than the subscript (which keys off identifier).
+        let predicate = NSPredicate(format: "label ==[c] %@", "Not Now")
+        let sources: [XCUIApplication] = [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")]
+        for source in sources {
+            let notNow = source.buttons.matching(predicate).firstMatch
+            if notNow.waitForExistence(timeout: 4) {
+                notNow.tap()
+                return
+            }
+        }
     }
 
     // MARK: tests
@@ -52,7 +72,7 @@ final class AppE2ETests: XCTestCase {
         // The SDK surface lives behind the "Explore SDK" entry on the landing.
         tap(app.buttons["exploreSDK"], "Explore SDK entry")
         // Categories are collapsed; search reveals (auto-expands) the method.
-        let field = app.searchFields.firstMatch
+        let field = app.textFields["sdkSearch"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "search field")
         field.tap(); field.typeText("getContexts")
         XCTAssertTrue(app.staticTexts["getContexts"].waitForExistence(timeout: 5), "getContexts row")
@@ -65,47 +85,50 @@ final class AppE2ETests: XCTestCase {
     /// Chat: install curb, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         login()
-        app.buttons["openChat"].tap()
-        XCTAssertTrue(app.buttons["installChat"].waitForExistence(timeout: 5), "install button")
-        app.buttons["installChat"].tap()
-        // registry fetch + install can be slow — wait, do NOT tap yet
-        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 90), "install did not complete")
+        tap(app.buttons["openChat"], "Open Chat entry")
+        // Fresh node shows the install gate; a reused one (e.g. on a test retry)
+        // may already have curb — tolerate both.
+        if app.buttons["installChat"].waitForExistence(timeout: 8) {
+            tap(app.buttons["installChat"], "install button")
+        }
+        // registry fetch + install can be slow on CI runners — wait generously.
+        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "chat home did not load")
 
-        // create space
-        app.buttons["chatAdd"].tap()
+        // create space (chatAdd is a nav-bar button — tap by coordinate so XCUITest
+        // doesn't try (and fail) to scroll-to-visible an already-visible bar item)
+        tap(app.buttons["chatAdd"], "chat add menu")
         XCTAssertTrue(app.buttons["New space"].waitForExistence(timeout: 5), "New space item")
         app.buttons["New space"].tap()
         let spaceField = app.alerts.textFields.firstMatch
         XCTAssertTrue(spaceField.waitForExistence(timeout: 5))
         spaceField.tap(); spaceField.typeText("e2e-space")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["e2e-space"].waitForExistence(timeout: 20), "space not created")
+        XCTAssertTrue(app.staticTexts["e2e-space"].waitForExistence(timeout: 45), "space not created")
         app.staticTexts["e2e-space"].firstMatch.tap()
 
-        // create channel
-        XCTAssertTrue(app.buttons["channelAdd"].waitForExistence(timeout: 10), "channel add menu")
-        app.buttons["channelAdd"].tap()
+        // create channel (channelAdd is a nav-bar button — coordinate tap)
+        tap(app.buttons["channelAdd"], "channel add menu")
         XCTAssertTrue(app.buttons["New channel"].waitForExistence(timeout: 5), "New channel item")
         app.buttons["New channel"].tap()
         let channelField = app.alerts.textFields.firstMatch
         XCTAssertTrue(channelField.waitForExistence(timeout: 5))
         channelField.tap(); channelField.typeText("general")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 30), "channel not created")
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 60), "channel not created")
 
         // invite: generate a code (still on the channels list)
-        app.buttons["channelAdd"].tap()
+        tap(app.buttons["channelAdd"], "channel add menu (invite)")
         XCTAssertTrue(app.buttons["Invite people"].waitForExistence(timeout: 5), "Invite item")
         app.buttons["Invite people"].tap()
-        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 20), "invite code not generated")
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 45), "invite code not generated")
         app.buttons["Done"].tap()
 
         // send + read a message
         app.staticTexts["general"].firstMatch.tap()
         let composer = app.textFields["messageField"]
-        XCTAssertTrue(composer.waitForExistence(timeout: 10))
+        XCTAssertTrue(composer.waitForExistence(timeout: 15))
         composer.tap(); composer.typeText("e2e hello")
         app.buttons["sendMessage"].tap()
-        XCTAssertTrue(app.staticTexts["e2e hello"].waitForExistence(timeout: 20), "message not shown")
+        XCTAssertTrue(app.staticTexts["e2e hello"].waitForExistence(timeout: 45), "message not shown")
     }
 }

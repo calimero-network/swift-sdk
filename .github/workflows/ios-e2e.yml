@@ -34,12 +34,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
-          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
-          test -n "$URL" || { echo "no merod darwin asset on $TAG"; exit 1; }
-          curl -sL "$URL" | tar xz && chmod +x ./merod && sudo mv ./merod /usr/local/bin/merod
-          merod --version
+          # Download the newest release that ACTUALLY HAS the darwin merod asset.
+          # A brand-new RC can exist with assets still uploading (empty asset
+          # list), so `--limit 1` alone would fail — walk recent releases instead.
+          # Uses `gh release download` (correct asset URL + auth).
+          set -x
+          for TAG in $(gh release list --repo calimero-network/core --limit 10 --json tagName -q '.[].tagName'); do
+            echo "trying core release $TAG"
+            if gh release download "$TAG" --repo calimero-network/core \
+                 --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber \
+              && tar xzf merod.tar.gz \
+              && chmod +x ./merod \
+              && sudo mv ./merod /usr/local/bin/merod \
+              && merod --version; then
+              echo "using merod from $TAG"; exit 0
+            fi
+            echo "$TAG has no darwin merod asset (yet); trying older"
+          done
+          echo "::error::no core release with a darwin merod asset in the last 10"; exit 1
 
       - name: Run AppE2ETests (boots node + sim)
         run: ./e2e-ios.sh
@@ -53,6 +65,7 @@ jobs:
             .e2e-ios.log
             .mero-e2e-node.log
           if-no-files-found: warn
+          include-hidden-files: true
 
   multi-node-e2e:
     name: Multi-user chat e2e (2 nodes / 2 sims)
@@ -70,11 +83,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
-          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
-          test -n "$URL" || { echo "no merod darwin asset on $TAG"; exit 1; }
-          curl -sL "$URL" | tar xz && chmod +x ./merod && sudo mv ./merod /usr/local/bin/merod
+          # Newest release that actually has the darwin merod asset (a fresh RC
+          # can exist with assets still uploading).
+          set -x
+          for TAG in $(gh release list --repo calimero-network/core --limit 10 --json tagName -q '.[].tagName'); do
+            if gh release download "$TAG" --repo calimero-network/core \
+                 --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber \
+              && tar xzf merod.tar.gz \
+              && chmod +x ./merod \
+              && sudo mv ./merod /usr/local/bin/merod; then
+              echo "using merod from $TAG"; exit 0
+            fi
+          done
+          echo "::error::no core release with a darwin merod asset in the last 10"; exit 1
 
       - name: Run chat-multi-e2e.sh (2 nodes, 2 sims)
         run: ./chat-multi-e2e.sh
@@ -89,3 +110,4 @@ jobs:
             .mero-b.log
             .mero-role-*.log
           if-no-files-found: warn
+          include-hidden-files: true
