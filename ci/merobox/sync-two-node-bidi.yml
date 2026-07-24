@@ -1,0 +1,106 @@
+# Two-node BIDIRECTIONAL cross-node sync check.
+#
+# Companion to sync-two-node.yml. That one proves node 1 -> node 2. This one
+# additionally proves node 2 -> node 1: after the joiner (node 2) is meshed in,
+# it writes a key and node 1 must see it. Catches a sync path that only works
+# from the context creator outward.
+#
+# Same node-image caveat as sync-two-node.yml (tracks `edge`; merod has no
+# 0.11.x Docker tag).
+#
+# Run:  merobox bootstrap run ci/merobox/sync-two-node-bidi.yml   (from repo root)
+name: Two-node bidirectional sync (kv_store)
+description: Writes on BOTH nodes must replicate to the other; context hash converges.
+
+nodes:
+  count: 2
+  image: ghcr.io/calimero-network/merod:edge
+  prefix: calimero-node
+
+nuke_on_start: true
+nuke_on_end: true
+stop_all_nodes: true
+wait_timeout: 120
+
+steps:
+  - name: Install kv_store on node 1
+    type: install_application
+    node: calimero-node-1
+    path: ./ci/merobox/res/kv_store.wasm
+    dev: true
+    outputs:
+      app_id: applicationId
+
+  - name: Mesh the context across node 1 + node 2
+    type: create_mesh
+    context_node: calimero-node-1
+    application_id: "{{app_id}}"
+    nodes:
+      - calimero-node-2
+    outputs:
+      context_id: contextId
+      member_public_key: memberPublicKey
+
+  # --- Direction 1: node 1 -> node 2 ---
+  - name: Write forward_key on node 1
+    type: call
+    node: calimero-node-1
+    context_id: "{{context_id}}"
+    method: set
+    args:
+      key: forward_key
+      value: from_node_1
+
+  - name: Wait for forward write to converge
+    type: wait_for_sync
+    context_id: "{{context_id}}"
+    nodes:
+      - calimero-node-1
+      - calimero-node-2
+    trigger_sync: true
+    timeout: 90
+
+  - name: Read forward_key on node 2
+    type: call
+    node: calimero-node-2
+    context_id: "{{context_id}}"
+    method: get
+    args:
+      key: forward_key
+    outputs:
+      forward_read: result
+
+  # --- Direction 2: node 2 -> node 1 ---
+  - name: Write backward_key on node 2
+    type: call
+    node: calimero-node-2
+    context_id: "{{context_id}}"
+    method: set
+    args:
+      key: backward_key
+      value: from_node_2
+
+  - name: Wait for backward write to converge
+    type: wait_for_sync
+    context_id: "{{context_id}}"
+    nodes:
+      - calimero-node-1
+      - calimero-node-2
+    trigger_sync: true
+    timeout: 90
+
+  - name: Read backward_key on node 1
+    type: call
+    node: calimero-node-1
+    context_id: "{{context_id}}"
+    method: get
+    args:
+      key: backward_key
+    outputs:
+      backward_read: result
+
+  - name: Assert both directions replicated
+    type: assert
+    statements:
+      - "contains({{forward_read}}, 'from_node_1')"
+      - "contains({{backward_read}}, 'from_node_2')"
