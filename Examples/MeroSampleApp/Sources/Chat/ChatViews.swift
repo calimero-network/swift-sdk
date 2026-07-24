@@ -29,7 +29,9 @@ struct ChatHomeView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button("New space") { showNewSpace = true }
-                            Button("Join with invite") { showJoin = true }
+                            Button("Join existing space") { showJoin = true }
+                            Divider()
+                            Button("Refresh") { Task { await service.loadSpaces() } }
                         } label: {
                             Image(systemName: "plus")
                         }
@@ -353,14 +355,32 @@ struct JoinSheet: View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Paste an invite code").font(.headline).foregroundColor(Cal.text)
-                TextEditor(text: $text)
-                    .font(Cal.mono).foregroundColor(Cal.text).scrollContentBackground(.hidden)
-                    .padding(8).frame(minHeight: 140).background(Cal.surface2)
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1)).cornerRadius(10)
+                // Single-line: an invite code is one line, so a one-liner avoids
+                // stray line breaks that could mangle the code, and a Paste button
+                // makes the (long, unreadable) code easy to drop in.
+                HStack(spacing: 8) {
+                    TextField("invite code", text: $text)
+                        .font(Cal.mono).foregroundColor(Cal.text)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .lineLimit(1).truncationMode(.middle)
+                        .padding(.horizontal, 12).padding(.vertical, 11)
+                        .background(Cal.surface2)
+                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1))
+                        .cornerRadius(10)
+                        .disabled(service.busy)
+                        .accessibilityIdentifier("joinField")
+                    Button {
+                        if let clip = UIPasteboard.general.string { text = clip }
+                    } label: {
+                        Image(systemName: "doc.on.clipboard").font(.body)
+                    }
+                    .foregroundColor(Cal.lime)
                     .disabled(service.busy)
+                }
                 Button {
                     Task {
-                        await service.joinSpace(text)
+                        // Strip any whitespace/newlines a paste may have introduced.
+                        await service.joinSpace(text.trimmingCharacters(in: .whitespacesAndNewlines))
                         if service.status.hasPrefix("✓") { dismiss() }
                     }
                 } label: {

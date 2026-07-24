@@ -152,8 +152,11 @@ final class ChatService: ObservableObject {
     func loadSpaces() async {
         do {
             let all = try await mero.admin.listNamespaces()
-            let mine = appId == nil ? all : all.filter { $0.targetApplicationId == appId }
-            spaces = mine.map { ChatSpace(id: $0.namespaceId, name: $0.name ?? "space") }
+            // Show every namespace this node belongs to (created OR joined). We
+            // used to filter to our own curb app id — but an *invited* space
+            // targets the inviter's app id, which can differ, so that hid joined
+            // spaces entirely (they showed on the admin dashboard but not here).
+            spaces = all.map { ChatSpace(id: $0.namespaceId, name: $0.name ?? "space") }
         } catch { status = "load spaces failed: \(short(error))" }
     }
 
@@ -180,8 +183,10 @@ final class ChatService: ObservableObject {
                 var executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
                 if executor.isEmpty {
                     // Joined space whose context we haven't joined yet — join it so
-                    // we get a member identity (otherwise it looks uninitialized).
+                    // we get a member identity (otherwise it looks uninitialized),
+                    // and trigger a state pull so the store root actually syncs.
                     _ = try? await mero.admin.joinContext(ctx.contextId)
+                    _ = try? await mero.admin.syncContext(ctx.contextId)
                     executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
                 }
                 var name = sg.name ?? ctx.name ?? "channel"
@@ -199,7 +204,26 @@ final class ChatService: ObservableObject {
                         executorId: executor, name: name, kind: kind))
             }
             channels = out
+            if out.isEmpty { await diagnoseEmptySpace(space) }
         } catch { status = "load channels failed: \(short(error))" }
+    }
+
+    /// When a joined space shows no channels, say WHY. The usual cause is an app
+    /// mismatch: the space targets the inviter's curb app id, which isn't the one
+    /// installed here, so this node can't initialize the context (its hash stays
+    /// the all-ones "uninitialized" value) — pull-to-refresh won't help until the
+    /// matching app is installed.
+    private func diagnoseEmptySpace(_ space: ChatSpace) async {
+        guard let ns = try? await mero.admin.getNamespace(space.id) else { return }
+        let target = ns.targetApplicationId
+        let installed = (try? await mero.admin.listApplications())?.apps.map { $0.id } ?? []
+        if !installed.contains(target) {
+            status =
+                "This space targets app \(target.prefix(8))… which isn't installed on this node — "
+                + "that's why its context can't sync (hash stays 1111…). Install the matching app."
+        } else {
+            status = "No channels yet — still syncing from the inviter. Pull to refresh."
+        }
     }
 
     func createChannel(in space: ChatSpace, name: String, open: Bool) async {
@@ -307,6 +331,9 @@ final class ChatService: ObservableObject {
                 for ctx in contexts {
                     // Join the context (idempotent) so we get a member identity...
                     _ = try? await mero.admin.joinContext(ctx.contextId)
+                    // ...trigger a state pull for THIS context (not just the group)
+                    // so the store root actually syncs instead of staying 1111…
+                    _ = try? await mero.admin.syncContext(ctx.contextId)
                     // ...then register our display name in it.
                     let owned = try? await mero.admin.getContextIdentitiesOwned(ctx.contextId)
                     if let executor = owned?.identities.first {
@@ -337,7 +364,10 @@ final class ChatService: ObservableObject {
         await run("Syncing “\(space.name)”…") {
             _ = try? await self.mero.admin.syncGroup(space.id)
             let contexts = (try? await self.mero.admin.listGroupContexts(space.id)) ?? []
-            for ctx in contexts { _ = try? await self.mero.admin.joinContext(ctx.contextId) }
+            for ctx in contexts {
+                _ = try? await self.mero.admin.joinContext(ctx.contextId)
+                _ = try? await self.mero.admin.syncContext(ctx.contextId)
+            }
             await self.loadChannels(space)
             self.status =
                 self.channels.isEmpty ? "No channels yet — still syncing" : "✓ \(self.channels.count) channel(s)"
