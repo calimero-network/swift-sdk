@@ -250,6 +250,7 @@ struct SDKListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
+                searchField
                 sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
                 ForEach(filtered, id: \.category) { section in
                     categoryCard(section)
@@ -261,7 +262,31 @@ struct SDKListView: View {
         .background(Cal.bg)
         .navigationTitle("Explore SDK")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $search, prompt: "Search \(sdkOperations.count) methods")
+    }
+
+    // A plain, always-visible search field (instead of `.searchable`, whose bar
+    // collapses on a pushed screen and isn't reliably reachable in UI tests).
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(.footnote).foregroundColor(Cal.textDim)
+            TextField("Search \(sdkOperations.count) methods", text: $search)
+                .font(.subheadline)
+                .foregroundColor(Cal.text)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .accessibilityIdentifier("sdkSearch")
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(Cal.textDim)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Cal.surface2)
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1))
+        .cornerRadius(10)
     }
 
     private func sectionLabel(_ text: String) -> some View {

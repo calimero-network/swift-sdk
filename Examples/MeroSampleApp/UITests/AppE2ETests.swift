@@ -41,7 +41,27 @@ final class AppE2ETests: XCTestCase {
         type("usernameField", "dev")
         type("passwordField", "dev-password")
         tap(app.buttons["loginButton"], "login button")
+        dismissSavePasswordPrompt()
         XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "did not reach explorer")
+    }
+
+    /// After submitting the password field, iOS pops a SpringBoard "Save
+    /// Password?" sheet that overlaps the lower half of the screen and eats taps
+    /// (it's why the Explore SDK entry never navigated). Dismiss it with "Not Now".
+    private func dismissSavePasswordPrompt() {
+        // The AutoFill "Save Password?" sheet renders inside the app's own window
+        // tree (as a cross-process remote view), so query `app` — not springboard.
+        // Its button exposes only a *label* ("Not Now"), no identifier, so match
+        // on the label rather than the subscript (which keys off identifier).
+        let predicate = NSPredicate(format: "label ==[c] %@", "Not Now")
+        let sources: [XCUIApplication] = [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")]
+        for source in sources {
+            let notNow = source.buttons.matching(predicate).firstMatch
+            if notNow.waitForExistence(timeout: 4) {
+                notNow.tap()
+                return
+            }
+        }
     }
 
     // MARK: tests
@@ -52,7 +72,7 @@ final class AppE2ETests: XCTestCase {
         // The SDK surface lives behind the "Explore SDK" entry on the landing.
         tap(app.buttons["exploreSDK"], "Explore SDK entry")
         // Categories are collapsed; search reveals (auto-expands) the method.
-        let field = app.searchFields.firstMatch
+        let field = app.textFields["sdkSearch"]
         XCTAssertTrue(field.waitForExistence(timeout: 5), "search field")
         field.tap(); field.typeText("getContexts")
         XCTAssertTrue(app.staticTexts["getContexts"].waitForExistence(timeout: 5), "getContexts row")
@@ -65,7 +85,7 @@ final class AppE2ETests: XCTestCase {
     /// Chat: install curb, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         login()
-        app.buttons["openChat"].tap()
+        tap(app.buttons["openChat"], "Open Chat entry")
         XCTAssertTrue(app.buttons["installChat"].waitForExistence(timeout: 5), "install button")
         app.buttons["installChat"].tap()
         // registry fetch + install can be slow — wait, do NOT tap yet
