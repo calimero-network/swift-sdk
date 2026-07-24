@@ -22,23 +22,27 @@ The CI job also always dumps each node's logs and a best-effort **peer-connectiv
 count**, so a failure can be diagnosed as *"nodes never peered"* (discovery /
 networking) vs *"peered but state didn't sync"* (the sync path itself).
 
-## Status: informational
+## History: the `1111…` failure was a wasm/node version mismatch
 
-On the current `edge` node image this check **fails on purpose-revealing grounds**:
-node 2 joins the group and pre-installs the app, but its context state stays on
-the all-ones **uninitialized** hash (`11111111...`) and never converges with
-node 1 — the same cross-node sync issue seen in the iOS chat e2e, under
-investigation core-side. The CI job is therefore `continue-on-error` (see
-`.github/workflows/merobox-sync.yml`). The assertions are real: once sync
-converges, the job goes green on its own and can be promoted to a required gate.
-
-Observed failure (node 1 has a real hash, node 2 does not):
+The first runs failed with node 2 stuck on the all-ones **uninitialized** hash
+while node 1 had a real hash:
 
 ```
 context=…:
   calimero-node-1: BkifspwXGw7MfKumpuYkB8RNFmS3fqZ1s4nwR4zytdNV
   calimero-node-2: 11111111111111111111111111111111
 ```
+
+That looked like the iOS chat sync bug, but it was **our harness**: the vendored
+`kv_store.wasm` was a stale build incompatible with the `edge` node, so the
+joining node could never initialize the context. merobox's own Docker CI passes
+all 30+ sync scenarios against `edge` — it just always *builds* the wasm from
+core `master`. Fixed by doing the same (see the wasm note below).
+
+With the matching wasm, both scenarios now converge on CI in **under 2 seconds**
+(forward and backward), so the job is a **gating check** — a red run means a
+genuine regression (upstream node sync broke, or the vendored wasm drifted from
+the node image).
 
 ## Run locally
 
@@ -57,5 +61,23 @@ merobox bootstrap run      ci/merobox/sync-two-node.yml   # boots 2 nodes in Doc
 So these workflows track `ghcr.io/calimero-network/merod:edge`. Override in CI
 via the `merod_image` `workflow_dispatch` input (see `.github/workflows/merobox-sync.yml`).
 
-`res/kv_store.wasm` is vendored from merobox's `example-project/res/kv_store.wasm`
-so the check has no run-time download dependency.
+### `res/kv_store.wasm` must match the node
+
+**This was the root cause of the first failures.** The wasm was originally
+vendored from merobox's stale `example-project/res/kv_store.wasm` (321 KB), whose
+bytecode/host-ABI predates the `edge` node. The joining node could not
+initialize the context against it, so node 2 stayed on the `1111…` hash forever
+— exactly the symptom above. merobox's own CI never hits this because it *builds*
+`kv_store.wasm` from core `master` on every run.
+
+So `res/kv_store.wasm` here is now **built from `calimero-network/core` master**
+(`apps/kv-store`, `app-release` profile) to match the `edge` image. To rebuild
+after a core bump:
+
+```sh
+git clone --depth 1 https://github.com/calimero-network/core.git
+(cd core/apps/kv-store && ./build.sh)
+cp core/apps/kv-store/res/kv_store.wasm ci/merobox/res/kv_store.wasm
+```
+
+(Equivalently, merobox's `workflow-examples/scripts/build_res_wasm.sh`.)

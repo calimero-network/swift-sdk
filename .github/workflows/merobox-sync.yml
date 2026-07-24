@@ -14,14 +14,12 @@ name: Merobox Sync (2 nodes)
 # (merod has no 0.11.x Docker tag), so it runs on master pushes / weekly / on
 # demand, plus PRs that touch the merobox harness itself.
 #
-# INFORMATIONAL (continue-on-error), mirroring the multi-node iOS e2e job: on
-# the current `edge` image node 2 joins the group but its context state stays on
-# the all-ones "uninitialized" hash (11111111...) — the same cross-node sync
-# issue seen in the iOS chat e2e, being investigated core-side. The assertions
-# are real, so when sync converges these jobs go green on their own and can be
-# promoted to required gates (drop `continue-on-error`). The always-on log +
-# peer-connectivity dump is there to tell "nodes never peered" apart from
-# "peered but state didn't sync".
+# GATING: cross-node sync converges reliably (sub-second) once the kv_store wasm
+# matches the node — see ci/merobox/README.md. A red run here means a genuine
+# regression (upstream node sync broke, or the vendored wasm drifted from the
+# node image), which we want surfaced. The always-on node-log + peer-connectivity
+# dump is kept to make such a failure quick to triage ("nodes never peered" vs
+# "peered but state didn't sync").
 on:
   push:
     branches:
@@ -53,9 +51,6 @@ jobs:
     name: ${{ matrix.scenario }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Informational until cross-node context-state sync converges on the node
-    # image (see header). Keeps the harness running + visible without gating.
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
