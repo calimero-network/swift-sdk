@@ -29,3 +29,7 @@ merod.pid
 
 # curb app wasm is downloaded from the registry in CI, not committed
 ci/merobox/res/curb-app.wasm
+
+# Local simulator UDIDs written by chat-multi-e2e.sh / run-app-2.sh
+.udid_a
+.udid_b
