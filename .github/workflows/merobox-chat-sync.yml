@@ -7,10 +7,13 @@ name: Merobox Chat Sync (curb)
 # replicates to node 2. This proves mero-chat cross-node message sync works
 # without the flaky iOS simulator path.
 #
-# INFORMATIONAL (continue-on-error): it pins the live published artifact against
-# the moving `edge` node image and can't be verified locally without Docker, so
-# it surfaces the signal without gating. Promote to a gate once it's proven
-# green on CI (drop continue-on-error), like merobox-sync.yml was.
+# PROVEN: on first CI run, curb 7.0.10 synced a message node 1 -> node 2 in
+# ~1.2s and node 2 read it back — mero-chat cross-node sync works on a live node.
+# Kept INFORMATIONAL (continue-on-error) anyway because it depends on two
+# external moving parts — the apps.calimero.network download and the `edge`
+# node image — so a registry outage or an upstream node break shouldn't redden
+# master. The self-contained kv_store sync check (merobox-sync.yml) is the
+# gating signal; this one is the real-app proof.
 on:
   push:
     branches:
