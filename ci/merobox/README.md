@@ -14,6 +14,13 @@ fast signal.
   asserts it matches. The `wait_for_sync` step is the important part: if node 2
   never initializes its context (the all-ones "uninitialized" hash) or never
   catches up, it times out and the check fails instead of passing silently.
+- **`sync-two-node-bidi.yml`** — same setup, but asserts **both directions**:
+  node 1 → node 2 *and* node 2 → node 1 (the joiner writes, the creator must
+  see it). Catches a sync path that only works outward from the context creator.
+
+The CI job also always dumps each node's logs and a best-effort **peer-connectivity
+count**, so a failure can be diagnosed as *"nodes never peered"* (discovery /
+networking) vs *"peered but state didn't sync"* (the sync path itself).
 
 ## Status: informational
 

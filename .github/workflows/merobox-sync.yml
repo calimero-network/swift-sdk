@@ -1,11 +1,13 @@
 name: Merobox Sync (2 nodes)
 
-# Backend/protocol-level sync check: boots two real merod nodes in Docker via
-# merobox, meshes a shared kv_store context across them, writes on node 1, and
-# asserts the write replicates to node 2 AND the context state hash converges
-# (i.e. actually initializes — not the all-ones "uninitialized" hash). This is
-# the node + WASM + sync signal underneath the iOS chat e2e, isolated from the
-# curb app and the simulator.
+# Backend/protocol-level sync checks: boot two real merod nodes in Docker via
+# merobox, mesh a shared kv_store context across them, and assert writes
+# replicate across nodes AND the context state hash converges (i.e. actually
+# initializes — not the all-ones "uninitialized" hash). Two scenarios:
+#   * sync-two-node.yml       — node 1 -> node 2
+#   * sync-two-node-bidi.yml  — node 1 -> node 2 AND node 2 -> node 1
+# This is the node + WASM + sync signal underneath the iOS chat e2e, isolated
+# from the curb app and the simulator.
 #
 # Docker-based, so it runs on ubuntu (the macOS runners the iOS suites use have
 # no Docker). Not a blanket PR gate: it exercises the upstream `edge` node image
@@ -15,9 +17,11 @@ name: Merobox Sync (2 nodes)
 # INFORMATIONAL (continue-on-error), mirroring the multi-node iOS e2e job: on
 # the current `edge` image node 2 joins the group but its context state stays on
 # the all-ones "uninitialized" hash (11111111...) — the same cross-node sync
-# issue seen in the iOS chat e2e, which is being investigated core-side. The
-# assertions are real, so when sync converges this job goes green on its own and
-# can be promoted to a required gate (drop `continue-on-error`).
+# issue seen in the iOS chat e2e, being investigated core-side. The assertions
+# are real, so when sync converges these jobs go green on their own and can be
+# promoted to required gates (drop `continue-on-error`). The always-on log +
+# peer-connectivity dump is there to tell "nodes never peered" apart from
+# "peered but state didn't sync".
 on:
   push:
     branches:
@@ -45,15 +49,22 @@ permissions:
   contents: read
 
 jobs:
-  two-node-sync:
-    name: Two-node cross-node sync (kv_store)
+  sync:
+    name: ${{ matrix.scenario }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     # Informational until cross-node context-state sync converges on the node
     # image (see header). Keeps the harness running + visible without gating.
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario:
+          - sync-two-node.yml
+          - sync-two-node-bidi.yml
     env:
       MEROD_IMAGE: ${{ github.event.inputs.merod_image || 'ghcr.io/calimero-network/merod:edge' }}
+      WF: ci/merobox/${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@v7
 
@@ -75,41 +86,52 @@ jobs:
       # the edge default) without editing the checked-in YAML.
       - name: Pin node image in workflow
         run: |
-          sed -i "s#image: ghcr.io/calimero-network/merod:edge#image: ${MEROD_IMAGE}#" \
-            ci/merobox/sync-two-node.yml
-          grep 'image:' ci/merobox/sync-two-node.yml
+          sed -i "s#image: ghcr.io/calimero-network/merod:edge#image: ${MEROD_IMAGE}#" "$WF"
+          grep 'image:' "$WF"
 
       - name: Validate workflow
-        run: merobox bootstrap validate ci/merobox/sync-two-node.yml
+        run: merobox bootstrap validate "$WF"
 
-      - name: Run two-node sync check
+      - name: Run sync check
         run: |
           set -o pipefail
-          merobox bootstrap run ci/merobox/sync-two-node.yml 2>&1 | tee merobox-run.log
+          merobox bootstrap run "$WF" 2>&1 | tee merobox-run.log
 
-      - name: Summarize sync result
+      - name: Summarize result
         if: always()
         run: |
           {
-            echo "## Two-node cross-node sync"
+            echo "## ${{ matrix.scenario }}"
             if grep -q "Sync verification failed" merobox-run.log 2>/dev/null; then
               echo ":warning: **Context state did NOT converge** — the known cross-node"
-              echo "sync issue (node 2 stuck on the all-ones uninitialized hash). This job"
-              echo "is informational; see the final state below."
+              echo "sync issue (a node stuck on the all-ones uninitialized hash). This job"
+              echo "is informational; final per-node state below."
               echo ""
               echo '```'
-              sed -n '/Final state:/,/failed/p' merobox-run.log | head -20
+              sed -n '/Final state:/,/failed/p' merobox-run.log | head -30
               echo '```'
-            elif grep -q "Workflow completed successfully\|✓ Assert" merobox-run.log 2>/dev/null; then
-              echo ":white_check_mark: Sync converged and node 2 read back node 1's write."
+            elif grep -qE "All assertions passed|Workflow completed successfully" merobox-run.log 2>/dev/null; then
+              echo ":white_check_mark: Sync converged and the write(s) replicated across nodes."
             else
               echo "See job log — no clear pass/fail marker found."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Dump node logs on failure
-        if: failure()
+      # Always capture node logs + connectivity so a failure can be diagnosed as
+      # "nodes never peered" (discovery/networking) vs "peered but state didn't
+      # sync" (the sync path itself). Best-effort greps — never fail the step.
+      - name: Node logs + connectivity
+        if: always()
         run: |
+          {
+            echo "### Peer connectivity (best-effort grep of node logs)"
+            echo '```'
+            for c in $(docker ps -a --format '{{.Names}}' | grep -i calimero || true); do
+              hits=$(docker logs "$c" 2>&1 | grep -icE "connection established|peer connected|dial success|mdns|kad|identified peer" || true)
+              echo "$c: $hits peer/discovery log line(s)"
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           for c in $(docker ps -a --format '{{.Names}}' | grep -i calimero || true); do
             echo "::group::docker logs $c"
             docker logs "$c" 2>&1 | tail -200 || true
