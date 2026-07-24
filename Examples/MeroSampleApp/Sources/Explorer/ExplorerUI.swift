@@ -24,7 +24,9 @@ struct ExplorerRootView: View {
 
 struct CalimeroLoginView: View {
     @EnvironmentObject private var session: MeroSession
-    @State private var nodeURL = "http://localhost:4001"
+    // Shows a public-looking IP for demos; the session maps it back to localhost
+    // on connect (see NodeAlias).
+    @State private var nodeURL = NodeAlias.display("http://localhost:4001")
     @State private var username = ""
     @State private var password = ""
     @State private var showLogs = false
@@ -66,7 +68,7 @@ struct CalimeroLoginView: View {
         .onAppear {
             // e2e hook: point at a specific node (used by the multi-node harness
             // so the guest simulator connects to node B, not the default :4001).
-            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty { nodeURL = n }
+            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty { nodeURL = NodeAlias.display(n) }
         }
     }
 

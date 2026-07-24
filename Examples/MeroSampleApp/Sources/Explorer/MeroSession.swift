@@ -55,7 +55,9 @@ final class MeroSession: ObservableObject {
     func connect(nodeURL nodeURLString: String) async {
         errorMessage = nil
         log(.req, "SSO connect \(nodeURLString)")
-        guard let base = URL(string: nodeURLString), base.scheme != nil else {
+        // Connect to the REAL url (localhost); show the public-looking label.
+        let realURLString = NodeAlias.real(nodeURLString)
+        guard let base = URL(string: realURLString), base.scheme != nil else {
             errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
             log(.err, "invalid node URL")
             return
@@ -64,7 +66,7 @@ final class MeroSession: ObservableObject {
         defer { isLoading = false }
 
         let loginURLString = Mero.buildAuthLoginUrl(
-            nodeUrl: nodeURLString,
+            nodeUrl: realURLString,
             options: AuthLoginOptions(
                 callbackUrl: "\(callbackScheme)://auth-callback", mode: "admin", permissions: ["admin"]))
         log(.info, "opening \(loginURLString)")
@@ -84,7 +86,7 @@ final class MeroSession: ObservableObject {
             let client = Mero(config: MeroConfig(baseURL: base, tokenStore: MemoryTokenStore()))
             await client.setTokenData(from: result)
             self.mero = client
-            self.nodeURL = nodeURLString
+            self.nodeURL = NodeAlias.display(nodeURLString)
             self.username = "admin"
             self.isAuthenticated = true
             self.chat = ChatService(mero: client, username: self.username)
@@ -100,7 +102,8 @@ final class MeroSession: ObservableObject {
     func login(nodeURL nodeURLString: String, username: String, password: String) async {
         errorMessage = nil
         log(.req, "connect \(nodeURLString) as “\(username.isEmpty ? "<empty>" : username)”")
-        guard let url = URL(string: nodeURLString), url.scheme != nil else {
+        // Connect to the REAL url (localhost) but keep the shown label for the UI.
+        guard let url = URL(string: NodeAlias.real(nodeURLString)), url.scheme != nil else {
             errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
             log(.err, "invalid node URL")
             return
@@ -118,7 +121,7 @@ final class MeroSession: ObservableObject {
             log(.info, "POST \(url.absoluteString)/auth/token …")
             _ = try await client.authenticate(Credentials(username: username, password: password))
             self.mero = client
-            self.nodeURL = nodeURLString
+            self.nodeURL = NodeAlias.display(nodeURLString)
             self.username = username
             self.isAuthenticated = true
             self.chat = ChatService(mero: client, username: self.username)
