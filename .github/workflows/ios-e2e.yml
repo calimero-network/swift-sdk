@@ -34,21 +34,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Retry the whole resolve+download — the release API / asset fetch
-          # occasionally blips and used to fail the job before any test ran.
-          for attempt in 1 2 3; do
-            TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName') \
-              && URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-                   -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url') \
-              && [ -n "$URL" ] \
-              && curl -fSL "$URL" | tar xz \
+          # Resolve + download the released darwin merod, retried with backoff.
+          # Uses `gh release download` (handles the asset URL + auth correctly)
+          # rather than a hand-built curl, and prints diagnostics per attempt so
+          # a genuine failure is visible instead of a bare "attempt failed".
+          set -x
+          for attempt in 1 2 3 4 5; do
+            TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName') || TAG=""
+            echo "attempt $attempt: latest core tag='${TAG}'"
+            if [ -n "$TAG" ] \
+              && gh release download "$TAG" --repo calimero-network/core \
+                   --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber \
+              && tar xzf merod.tar.gz \
               && chmod +x ./merod \
               && sudo mv ./merod /usr/local/bin/merod \
-              && merod --version \
-              && exit 0
-            echo "merod download attempt $attempt failed; retrying…"; sleep 5
+              && merod --version; then
+              exit 0
+            fi
+            echo "merod download attempt $attempt failed; retrying after backoff…"; sleep 15
           done
-          echo "::error::merod download failed after 3 attempts"; exit 1
+          echo "::error::merod download failed after 5 attempts"; exit 1
 
       - name: Run AppE2ETests (boots node + sim)
         run: ./e2e-ios.sh

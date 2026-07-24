@@ -80,7 +80,7 @@ final class ChatMultiUserTests: XCTestCase {
         login(app)
         tapButton(app, "openChat")
         app.buttons["installChat"].tap()
-        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 90), "install failed")
+        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "install failed")
 
         app.buttons["chatAdd"].tap()
         app.buttons["New space"].tap()
