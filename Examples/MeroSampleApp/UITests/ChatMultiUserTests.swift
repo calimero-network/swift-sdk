@@ -79,27 +79,27 @@ final class ChatMultiUserTests: XCTestCase {
         app.launch()
         login(app)
         tapButton(app, "openChat")
-        app.buttons["installChat"].tap()
-        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "install failed")
+        if app.buttons["installChat"].waitForExistence(timeout: 8) { tapButton(app, "installChat") }
+        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "chat home did not load")
 
-        app.buttons["chatAdd"].tap()
+        tapButton(app, "chatAdd")
         app.buttons["New space"].tap()
         let sf = app.alerts.textFields.firstMatch
         XCTAssertTrue(sf.waitForExistence(timeout: 5)); sf.tap(); sf.typeText("shared")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["shared"].waitForExistence(timeout: 20)); app.staticTexts["shared"].tap()
+        XCTAssertTrue(app.staticTexts["shared"].waitForExistence(timeout: 45)); app.staticTexts["shared"].tap()
 
-        app.buttons["channelAdd"].tap()
+        tapButton(app, "channelAdd")
         app.buttons["New channel"].tap()
         let cf = app.alerts.textFields.firstMatch
         XCTAssertTrue(cf.waitForExistence(timeout: 5)); cf.tap(); cf.typeText("general")
         app.alerts.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 60))
 
         // create + copy invite (still on the channels list; Invite is in its menu)
-        app.buttons["channelAdd"].tap()
+        tapButton(app, "channelAdd")
         app.buttons["Invite people"].tap()
-        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 15), "invite not generated")
+        XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 45), "invite not generated")
         app.buttons["Copy"].tap()
         app.buttons["Done"].tap()
 

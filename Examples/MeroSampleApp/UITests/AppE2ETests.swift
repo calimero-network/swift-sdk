@@ -86,13 +86,17 @@ final class AppE2ETests: XCTestCase {
     func testChatEndToEnd() throws {
         login()
         tap(app.buttons["openChat"], "Open Chat entry")
-        XCTAssertTrue(app.buttons["installChat"].waitForExistence(timeout: 5), "install button")
-        app.buttons["installChat"].tap()
+        // Fresh node shows the install gate; a reused one (e.g. on a test retry)
+        // may already have curb — tolerate both.
+        if app.buttons["installChat"].waitForExistence(timeout: 8) {
+            tap(app.buttons["installChat"], "install button")
+        }
         // registry fetch + install can be slow on CI runners — wait generously.
-        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "install did not complete")
+        XCTAssertTrue(app.buttons["chatAdd"].waitForExistence(timeout: 240), "chat home did not load")
 
-        // create space
-        app.buttons["chatAdd"].tap()
+        // create space (chatAdd is a nav-bar button — tap by coordinate so XCUITest
+        // doesn't try (and fail) to scroll-to-visible an already-visible bar item)
+        tap(app.buttons["chatAdd"], "chat add menu")
         XCTAssertTrue(app.buttons["New space"].waitForExistence(timeout: 5), "New space item")
         app.buttons["New space"].tap()
         let spaceField = app.alerts.textFields.firstMatch
@@ -102,9 +106,8 @@ final class AppE2ETests: XCTestCase {
         XCTAssertTrue(app.staticTexts["e2e-space"].waitForExistence(timeout: 45), "space not created")
         app.staticTexts["e2e-space"].firstMatch.tap()
 
-        // create channel
-        XCTAssertTrue(app.buttons["channelAdd"].waitForExistence(timeout: 10), "channel add menu")
-        app.buttons["channelAdd"].tap()
+        // create channel (channelAdd is a nav-bar button — coordinate tap)
+        tap(app.buttons["channelAdd"], "channel add menu")
         XCTAssertTrue(app.buttons["New channel"].waitForExistence(timeout: 5), "New channel item")
         app.buttons["New channel"].tap()
         let channelField = app.alerts.textFields.firstMatch
@@ -114,7 +117,7 @@ final class AppE2ETests: XCTestCase {
         XCTAssertTrue(app.staticTexts["general"].waitForExistence(timeout: 60), "channel not created")
 
         // invite: generate a code (still on the channels list)
-        app.buttons["channelAdd"].tap()
+        tap(app.buttons["channelAdd"], "channel add menu (invite)")
         XCTAssertTrue(app.buttons["Invite people"].waitForExistence(timeout: 5), "Invite item")
         app.buttons["Invite people"].tap()
         XCTAssertTrue(app.buttons["Copy"].waitForExistence(timeout: 45), "invite code not generated")
