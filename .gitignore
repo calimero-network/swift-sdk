@@ -7,6 +7,11 @@ DerivedData/
 *.xcodeproj
 .netrc
 
+# generate-ios.sh build output — contains your signing Team ID in entitlements; never commit
+.ios-build*
+# xcodegen-generated Info.plist (regenerated from project.yml; not a source file)
+Examples/MeroSampleApp/Sources/Generated-Info.plist
+
 # Local merod node data + logs (run-app.sh / test-all.sh)
 .mero-node/
 .mero-node.log

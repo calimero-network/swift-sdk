@@ -66,7 +66,13 @@ struct CalimeroLoginView: View {
         .onAppear {
             // e2e hook: point at a specific node (used by the multi-node harness
             // so the guest simulator connects to node B, not the default :4001).
-            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty { nodeURL = n }
+            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty {
+                nodeURL = n
+            } else if let n = Bundle.main.object(forInfoDictionaryKey: "DefaultNodeURL") as? String, !n.isEmpty {
+                // On-device builds bake in the Mac's LAN node URL (set by generate-ios.sh),
+                // since "localhost" on a physical phone is the phone itself, not the Mac.
+                nodeURL = n
+            }
         }
     }
 

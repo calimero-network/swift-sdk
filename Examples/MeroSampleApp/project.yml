@@ -18,16 +18,22 @@ packages:
 targets:
   MeroSampleApp:
     type: application
+    info:
+      path: Sources/Generated-Info.plist
+      properties:
+        UILaunchScreen: {}
+        DefaultNodeURL: "http://192.168.1.5:4011"
+        NSLocalNetworkUsageDescription: "Connect to a Calimero node running on your Mac over the local network for development."
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
     platform: iOS
     sources:
       - Sources
       - Resources
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample
         TARGETED_DEVICE_FAMILY: "1,2"
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_VERSION: "5.9"
     dependencies:
       - package: MeroKit
@@ -42,7 +48,6 @@ targets:
       - UITests
     settings:
       base:
-        GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample.uitests
         SWIFT_VERSION: "5.9"
     dependencies:
