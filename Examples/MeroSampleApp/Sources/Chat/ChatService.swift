@@ -208,21 +208,24 @@ final class ChatService: ObservableObject {
         } catch { status = "load channels failed: \(short(error))" }
     }
 
-    /// When a joined space shows no channels, say WHY. The usual cause is an app
-    /// mismatch: the space targets the inviter's curb app id, which isn't the one
-    /// installed here, so this node can't initialize the context (its hash stays
-    /// the all-ones "uninitialized" value) — pull-to-refresh won't help until the
-    /// matching app is installed.
+    /// When a joined space shows no channels, say WHY. A context executes against
+    /// the group's bytecode-derived app_key, so what matters is (a) that curb is
+    /// installed here at all and (b) that this node has a peer to sync the context
+    /// state from — a joined-but-uninitialized context (hash 1111…) is almost
+    /// always "0 peers", not an app-id mismatch.
     private func diagnoseEmptySpace(_ space: ChatSpace) async {
-        guard let ns = try? await mero.admin.getNamespace(space.id) else { return }
-        let target = ns.targetApplicationId
-        let installed = (try? await mero.admin.listApplications())?.apps.map { $0.id } ?? []
-        if !installed.contains(target) {
+        let hasCurb = ((try? await mero.admin.listApplications())?.apps ?? [])
+            .contains { $0.package == Self.packageName }
+        let peers = (try? await mero.admin.getPeersCount())?.count
+        if !hasCurb {
+            status = "curb isn't installed on this node — install it, then rejoin."
+        } else if peers == 0 {
             status =
-                "This space targets app \(target.prefix(8))… which isn't installed on this node — "
-                + "that's why its context can't sync (hash stays 1111…). Install the matching app."
+                "Joined, but this node has 0 peers — it can't sync the channel from the inviter. "
+                + "Make sure this node is networked to the inviter's node (swarm/bootstrap peers)."
         } else {
-            status = "No channels yet — still syncing from the inviter. Pull to refresh."
+            let n = peers.map { "\($0)" } ?? "?"
+            status = "No channels yet — still syncing from the inviter (\(n) peer(s)). Pull to refresh."
         }
     }
 
