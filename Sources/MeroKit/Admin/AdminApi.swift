@@ -770,6 +770,34 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "syncGroup")
     }
 
+    /// Initialize the contexts of a group you just joined so their state actually
+    /// syncs, instead of sitting on the all-ones **"uninitialized" root hash**
+    /// (`1111…`) you see right after joining a namespace/group but before the
+    /// context data has been pulled. For each context in the group this triggers
+    /// a group sync, joins the context (idempotent — gives this node a member
+    /// identity), and triggers a per-context state pull.
+    ///
+    /// This is the step a client must run after ``joinNamespace(_:request:)`` /
+    /// ``joinGroup(_:)`` for a joined space to become usable — otherwise the
+    /// contexts can stay empty until something else forces a sync. It requires
+    /// the joining node to (a) have the application installed and (b) be peered
+    /// with a node that holds the state; if the context stays uninitialized after
+    /// this, check the peer count (``getPeersCount()``).
+    ///
+    /// - Parameter groupId: the group/namespace whose contexts to initialize
+    ///   (e.g. `joinNamespace(...).groupId`).
+    /// - Returns: the group's contexts (after the sync attempt).
+    @discardableResult
+    public func syncGroupContexts(_ groupId: String) async throws -> ListGroupContextsResponseData {
+        _ = try? await syncGroup(groupId)
+        let contexts = try await listGroupContexts(groupId)
+        for ctx in contexts {
+            _ = try? await joinContext(ctx.contextId)
+            try? await syncContext(ctx.contextId)
+        }
+        return contexts
+    }
+
     public func registerGroupSigningKey(
         _ groupId: String, request: RegisterGroupSigningKeyRequest
     ) async throws -> RegisterGroupSigningKeyResponseData {

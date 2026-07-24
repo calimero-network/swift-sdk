@@ -111,7 +111,15 @@ final class ChatService: ObservableObject {
 
     init(mero: Mero, username: String) {
         self.mero = mero
-        self.username = username.isEmpty ? "dev" : username
+        // E2E_USERNAME overrides the chat display name (the login user is always
+        // the admin "dev"); run-app-2.sh sets it to dev1/dev2 so the two sims are
+        // distinguishable in the room. Falls back to the login username.
+        let envName = ProcessInfo.processInfo.environment["E2E_USERNAME"]
+        if let envName, !envName.isEmpty {
+            self.username = envName
+        } else {
+            self.username = username.isEmpty ? "dev" : username
+        }
     }
 
     // MARK: setup / install
@@ -329,15 +337,11 @@ final class ChatService: ObservableObject {
             var synced = false
             for attempt in 1...6 {
                 status = "Syncing “\(invite.spaceName)” from the inviter… (\(attempt)/6)"
-                _ = try? await mero.admin.syncGroup(joined.groupId)
-                let contexts = (try? await mero.admin.listGroupContexts(joined.groupId)) ?? []
+                // SDK convenience: join + state-pull every context in the group so
+                // it initializes instead of staying uninitialized (1111…).
+                let contexts = (try? await mero.admin.syncGroupContexts(joined.groupId)) ?? []
                 for ctx in contexts {
-                    // Join the context (idempotent) so we get a member identity...
-                    _ = try? await mero.admin.joinContext(ctx.contextId)
-                    // ...trigger a state pull for THIS context (not just the group)
-                    // so the store root actually syncs instead of staying 1111…
-                    _ = try? await mero.admin.syncContext(ctx.contextId)
-                    // ...then register our display name in it.
+                    // Register our display name in each initialized context.
                     let owned = try? await mero.admin.getContextIdentitiesOwned(ctx.contextId)
                     if let executor = owned?.identities.first {
                         let _: String? = try? await rpc(
@@ -365,12 +369,8 @@ final class ChatService: ObservableObject {
     /// Manually re-sync a space's channels (for when cross-node sync lags).
     func resync(_ space: ChatSpace) async {
         await run("Syncing “\(space.name)”…") {
-            _ = try? await self.mero.admin.syncGroup(space.id)
-            let contexts = (try? await self.mero.admin.listGroupContexts(space.id)) ?? []
-            for ctx in contexts {
-                _ = try? await self.mero.admin.joinContext(ctx.contextId)
-                _ = try? await self.mero.admin.syncContext(ctx.contextId)
-            }
+            // SDK convenience: join + state-pull every context in the group.
+            _ = try? await self.mero.admin.syncGroupContexts(space.id)
             await self.loadChannels(space)
             self.status =
                 self.channels.isEmpty ? "No channels yet — still syncing" : "✓ \(self.channels.count) channel(s)"
