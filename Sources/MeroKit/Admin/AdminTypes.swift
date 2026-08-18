@@ -518,17 +518,22 @@ public struct Namespace: Codable, Sendable {
     public let namespaceId: String
     public let appKey: String
     public let targetApplicationId: String
+    /// Absent from nodes that have dropped the concept, always `"LazyOnAccess"`
+    /// on every released one. Optional because this SDK talks to both; it
+    /// carries no information either way.
+    public let upgradePolicy: String?
     public let createdAt: Int
     public let name: String?
     public let memberCount: Int
     public let contextCount: Int
     public let subgroupCount: Int
     public init(
-        namespaceId: String, appKey: String, targetApplicationId: String, createdAt: Int,
+        namespaceId: String, appKey: String, targetApplicationId: String,
+        upgradePolicy: String? = nil, createdAt: Int,
         name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int
     ) {
         self.namespaceId = namespaceId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
-        self.createdAt = createdAt; self.name = name
+        self.upgradePolicy = upgradePolicy; self.createdAt = createdAt; self.name = name
         self.memberCount = memberCount; self.contextCount = contextCount; self.subgroupCount = subgroupCount
     }
 }
@@ -805,6 +810,9 @@ public struct GroupInfo: Codable, Sendable {
     public let groupId: String
     public let appKey: String
     public let targetApplicationId: String
+    /// Absent from nodes that have dropped the concept, always `"LazyOnAccess"`
+    /// on every released one. Optional because this SDK talks to both.
+    public let upgradePolicy: String?
     public let memberCount: Int
     public let contextCount: Int
     public let activeUpgrade: GroupUpgradeStatus?
@@ -815,10 +823,12 @@ public struct GroupInfo: Codable, Sendable {
     public let metadata: MetadataRecord?
     public init(
         groupId: String, appKey: String, targetApplicationId: String,
-        memberCount: Int, contextCount: Int, activeUpgrade: GroupUpgradeStatus? = nil,
+        upgradePolicy: String? = nil, memberCount: Int, contextCount: Int,
+        activeUpgrade: GroupUpgradeStatus? = nil,
         defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil
     ) {
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
+        self.upgradePolicy = upgradePolicy
         self.memberCount = memberCount; self.contextCount = contextCount
         self.activeUpgrade = activeUpgrade; self.defaultCapabilities = defaultCapabilities
         self.subgroupVisibility = subgroupVisibility; self.metadata = metadata
