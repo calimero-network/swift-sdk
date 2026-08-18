@@ -770,14 +770,6 @@ private let settingsOps: [SDKOperation] = [
         return "✓ set"
     },
     SDKOperation(
-        id: "set.update", category: "Group Settings", name: "updateGroupSettings",
-        summary: "Patch group settings", fields: [.line("groupId", "Group ID"), .json("body", "Request")]
-    ) { m, i in
-        try await m.admin.updateGroupSettings(
-            i.v("groupId"), request: try Fmt.decode(i.v("body"), UpdateGroupSettingsRequest.self))
-        return "✓ updated"
-    },
-    SDKOperation(
         id: "set.grpMetaSet", category: "Group Settings", name: "setGroupMetadata",
         summary: "Set group metadata", fields: [.line("groupId", "Group ID"), .json("body", "Request")]
     ) { m, i in

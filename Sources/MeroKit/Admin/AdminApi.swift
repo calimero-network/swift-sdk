@@ -715,10 +715,6 @@ public struct AdminApi: Sendable {
         return try Self.decoder.decode(GetTeeAdmissionPolicyResponseData.self, from: data)
     }
 
-    public func updateGroupSettings(_ groupId: String, request: UpdateGroupSettingsRequest) async throws {
-        try await http.sendVoid(jsonRequest("/admin-api/groups/\(groupId)", method: .patch, body: request))
-    }
-
     // MARK: - Group / member / context metadata
 
     public func setGroupMetadata(_ groupId: String, request: SetGroupMetadataRequest) async throws {

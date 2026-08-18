@@ -16,7 +16,7 @@ in the [admin API reference](/reference/admin-api/#group-management).
 
 ```swift
 let ns = try await mero.admin.createNamespace(
-  CreateNamespaceRequest(applicationId: applicationId, upgradePolicy: .automatic, name: "production")
+  CreateNamespaceRequest(applicationId: applicationId, name: "production")
 )
 let namespaceId = ns.namespaceId
 

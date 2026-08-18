@@ -209,8 +209,7 @@ public struct CreateContextResponseData: Codable, Sendable {
 }
 
 public struct DeleteContextRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 public struct DeleteContextResponseData: Codable, Sendable {
@@ -518,14 +517,18 @@ public struct Namespace: Codable, Sendable {
     public let namespaceId: String
     public let appKey: String
     public let targetApplicationId: String
-    public let upgradePolicy: String
+    /// Absent from nodes that have dropped the concept, always `"LazyOnAccess"`
+    /// on every released one. Optional because this SDK talks to both; it
+    /// carries no information either way.
+    public let upgradePolicy: String?
     public let createdAt: Int
     public let name: String?
     public let memberCount: Int
     public let contextCount: Int
     public let subgroupCount: Int
     public init(
-        namespaceId: String, appKey: String, targetApplicationId: String, upgradePolicy: String, createdAt: Int,
+        namespaceId: String, appKey: String, targetApplicationId: String,
+        upgradePolicy: String? = nil, createdAt: Int,
         name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int
     ) {
         self.namespaceId = namespaceId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
@@ -542,7 +545,9 @@ public struct NamespaceIdentity: Codable, Sendable {
     public init(namespaceId: String, publicKey: String) { self.namespaceId = namespaceId; self.publicKey = publicKey }
 }
 
-/// Core's `UpgradePolicy` enum — how a namespace/group adopts new app versions.
+/// Formerly how a namespace/group adopted new app versions. The concept is gone
+/// server-side; the value is still sent on the two create requests because a
+/// released node declares the field required and rejects a body without it.
 public enum UpgradePolicy: String, Codable, Sendable {
     case automatic = "Automatic"
     case lazyOnAccess = "LazyOnAccess"
@@ -550,11 +555,16 @@ public enum UpgradePolicy: String, Codable, Sendable {
 
 public struct CreateNamespaceRequest: Codable, Sendable {
     public var applicationId: String
+    /// Ignored by any node that has dropped the concept, required by every
+    /// released one. Defaulted so a caller need not choose.
     public var upgradePolicy: UpgradePolicy
     public var name: String?
     /// Hex 32-byte blob id; pins the namespace to a specific installed version.
     public var appKey: String?
-    public init(applicationId: String, upgradePolicy: UpgradePolicy, name: String? = nil, appKey: String? = nil) {
+    public init(
+        applicationId: String, upgradePolicy: UpgradePolicy = .lazyOnAccess,
+        name: String? = nil, appKey: String? = nil
+    ) {
         self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.name = name; self.appKey = appKey
     }
 }
@@ -565,8 +575,7 @@ public struct CreateNamespaceResponseData: Codable, Sendable {
 }
 
 public struct DeleteNamespaceRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 public struct DeleteNamespaceResponseData: Codable, Sendable {
@@ -575,11 +584,10 @@ public struct DeleteNamespaceResponseData: Codable, Sendable {
 }
 
 public struct CreateNamespaceInvitationRequest: Codable, Sendable {
-    public var requester: String?
     public var expirationTimestamp: Int?
     public var recursive: Bool?
-    public init(requester: String? = nil, expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
-        self.requester = requester; self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
+    public init(expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
+        self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
     }
 }
 
@@ -661,13 +669,16 @@ public struct SubgroupEntry: Codable, Sendable {
 
 public struct CreateGroupRequest: Codable, Sendable {
     public var applicationId: String
+    /// Ignored by any node that has dropped the concept, required by every
+    /// released one. Defaulted so a caller need not choose.
     public var upgradePolicy: String
     public var groupId: String?
     public var appKey: String?
     public var name: String?
     public var parentGroupId: String?
     public init(
-        applicationId: String, upgradePolicy: String, groupId: String? = nil, appKey: String? = nil,
+        applicationId: String, upgradePolicy: String = "LazyOnAccess",
+        groupId: String? = nil, appKey: String? = nil,
         name: String? = nil, parentGroupId: String? = nil
     ) {
         self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.groupId = groupId
@@ -796,7 +807,9 @@ public struct GroupInfo: Codable, Sendable {
     public let groupId: String
     public let appKey: String
     public let targetApplicationId: String
-    public let upgradePolicy: String
+    /// Absent from nodes that have dropped the concept, always `"LazyOnAccess"`
+    /// on every released one. Optional because this SDK talks to both.
+    public let upgradePolicy: String?
     public let memberCount: Int
     public let contextCount: Int
     public let activeUpgrade: GroupUpgradeStatus?
@@ -806,12 +819,14 @@ public struct GroupInfo: Codable, Sendable {
     /// `null` if no metadata has ever been set for this group.
     public let metadata: MetadataRecord?
     public init(
-        groupId: String, appKey: String, targetApplicationId: String, upgradePolicy: String,
-        memberCount: Int, contextCount: Int, activeUpgrade: GroupUpgradeStatus? = nil,
+        groupId: String, appKey: String, targetApplicationId: String,
+        upgradePolicy: String? = nil, memberCount: Int, contextCount: Int,
+        activeUpgrade: GroupUpgradeStatus? = nil,
         defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil
     ) {
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
-        self.upgradePolicy = upgradePolicy; self.memberCount = memberCount; self.contextCount = contextCount
+        self.upgradePolicy = upgradePolicy
+        self.memberCount = memberCount; self.contextCount = contextCount
         self.activeUpgrade = activeUpgrade; self.defaultCapabilities = defaultCapabilities
         self.subgroupVisibility = subgroupVisibility; self.metadata = metadata
     }
@@ -849,8 +864,7 @@ public struct GroupContextEntry: Codable, Sendable {
 public typealias ListGroupContextsResponseData = [GroupContextEntry]
 
 public struct DeleteGroupRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 public struct DeleteGroupResponseData: Codable, Sendable {
@@ -868,22 +882,19 @@ public struct GroupMemberInput: Codable, Sendable {
 
 public struct AddGroupMembersRequest: Codable, Sendable {
     public var members: [GroupMemberInput]
-    public var requester: String?
-    public init(members: [GroupMemberInput], requester: String? = nil) {
-        self.members = members; self.requester = requester
+    public init(members: [GroupMemberInput]) {
+        self.members = members
     }
 }
 
 public struct RemoveGroupMembersRequest: Codable, Sendable {
     public var members: [String]
-    public var requester: String?
-    public init(members: [String], requester: String? = nil) { self.members = members; self.requester = requester }
+    public init(members: [String]) { self.members = members }
 }
 
 public struct UpdateMemberRoleRequest: Codable, Sendable {
     public var role: String
-    public var requester: String?
-    public init(role: String, requester: String? = nil) { self.role = role; self.requester = requester }
+    public init(role: String) { self.role = role }
 }
 
 // MARK: - Group Capabilities & Settings
@@ -895,25 +906,22 @@ public struct MemberCapabilities: Codable, Sendable {
 
 public struct SetMemberCapabilitiesRequest: Codable, Sendable {
     public var capabilities: Int
-    public var requester: String?
-    public init(capabilities: Int, requester: String? = nil) {
-        self.capabilities = capabilities; self.requester = requester
+    public init(capabilities: Int) {
+        self.capabilities = capabilities
     }
 }
 
 public struct SetDefaultCapabilitiesRequest: Codable, Sendable {
     public var defaultCapabilities: Int
-    public var requester: String?
-    public init(defaultCapabilities: Int, requester: String? = nil) {
-        self.defaultCapabilities = defaultCapabilities; self.requester = requester
+    public init(defaultCapabilities: Int) {
+        self.defaultCapabilities = defaultCapabilities
     }
 }
 
 public struct SetSubgroupVisibilityRequest: Codable, Sendable {
     public var subgroupVisibility: String
-    public var requester: String?
-    public init(subgroupVisibility: String, requester: String? = nil) {
-        self.subgroupVisibility = subgroupVisibility; self.requester = requester
+    public init(subgroupVisibility: String) {
+        self.subgroupVisibility = subgroupVisibility
     }
 }
 
@@ -925,14 +933,13 @@ public struct SetTeeAdmissionPolicyRequest: Codable, Sendable {
     public var allowedRtmr3: [String]
     public var allowedTcbStatuses: [String]
     public var acceptMock: Bool
-    public var requester: String?
     public init(
         allowedMrtd: [String], allowedRtmr0: [String], allowedRtmr1: [String], allowedRtmr2: [String],
-        allowedRtmr3: [String], allowedTcbStatuses: [String], acceptMock: Bool, requester: String? = nil
+        allowedRtmr3: [String], allowedTcbStatuses: [String], acceptMock: Bool
     ) {
         self.allowedMrtd = allowedMrtd; self.allowedRtmr0 = allowedRtmr0; self.allowedRtmr1 = allowedRtmr1
         self.allowedRtmr2 = allowedRtmr2; self.allowedRtmr3 = allowedRtmr3
-        self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock; self.requester = requester
+        self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock
     }
 }
 
@@ -951,14 +958,6 @@ public struct GetTeeAdmissionPolicyResponseData: Codable, Sendable {
         self.allowedMrtd = allowedMrtd; self.allowedRtmr0 = allowedRtmr0; self.allowedRtmr1 = allowedRtmr1
         self.allowedRtmr2 = allowedRtmr2; self.allowedRtmr3 = allowedRtmr3
         self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock
-    }
-}
-
-public struct UpdateGroupSettingsRequest: Codable, Sendable {
-    public var upgradePolicy: String
-    public var requester: String?
-    public init(upgradePolicy: String, requester: String? = nil) {
-        self.upgradePolicy = upgradePolicy; self.requester = requester
     }
 }
 
@@ -989,9 +988,8 @@ public struct MetadataRecord: Codable, Sendable {
 public struct SetMetadataRequest: Codable, Sendable {
     public var name: String?
     public var data: [String: String]?
-    public var requester: String?
-    public init(name: String? = nil, data: [String: String]? = nil, requester: String? = nil) {
-        self.name = name; self.data = data; self.requester = requester
+    public init(name: String? = nil, data: [String: String]? = nil) {
+        self.name = name; self.data = data
     }
 }
 
@@ -1009,8 +1007,7 @@ public struct GetMetadataResponseData: Codable, Sendable {
 // MARK: - Group Sync, Signing & Upgrades
 
 public struct SyncGroupRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 public struct SyncGroupResponseData: Codable, Sendable {
@@ -1037,14 +1034,13 @@ public struct RegisterGroupSigningKeyResponseData: Codable, Sendable {
 
 public struct UpgradeGroupRequest: Codable, Sendable {
     public var targetApplicationId: String
-    public var requester: String?
     /// Fan the upgrade out to every descendant subgroup running the same app
     /// (one atomic cascade op). Without it the upgrade applies to the target
     /// group only — members' subgroups never learn the migration. Server
     /// default: false.
     public var cascade: Bool?
-    public init(targetApplicationId: String, requester: String? = nil, cascade: Bool? = nil) {
-        self.targetApplicationId = targetApplicationId; self.requester = requester; self.cascade = cascade
+    public init(targetApplicationId: String, cascade: Bool? = nil) {
+        self.targetApplicationId = targetApplicationId; self.cascade = cascade
     }
 }
 
@@ -1064,8 +1060,7 @@ public struct UpgradeGroupResponseData: Codable, Sendable {
 public typealias GroupUpgradeStatusResponseData = GroupUpgradeStatus?
 
 public struct RetryGroupUpgradeRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 /// Retry returns the same shape as upgrade.
@@ -1076,9 +1071,8 @@ public typealias RetryGroupUpgradeResponseData = UpgradeGroupResponseData
 public struct ReparentGroupRequest: Codable, Sendable {
     /// 64-char id of the destination parent group.
     public var newParentId: String
-    public var requester: String?
-    public init(newParentId: String, requester: String? = nil) {
-        self.newParentId = newParentId; self.requester = requester
+    public init(newParentId: String) {
+        self.newParentId = newParentId
     }
 }
 
@@ -1088,18 +1082,16 @@ public struct ReparentGroupResponseData: Codable, Sendable {
 }
 
 public struct DetachContextFromGroupRequest: Codable, Sendable {
-    public var requester: String?
-    public init(requester: String? = nil) { self.requester = requester }
+    public init() {}
 }
 
 // MARK: - Group Invitation & Join
 
 public struct CreateGroupInvitationRequest: Codable, Sendable {
-    public var requester: String?
     public var expirationTimestamp: Int?
     public var recursive: Bool?
-    public init(requester: String? = nil, expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
-        self.requester = requester; self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
+    public init(expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
+        self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
     }
 }
 

@@ -129,7 +129,6 @@ strings ascending.
 | `createGroup(_ request: [String: JSONValue]) -> CreateGroupResponseData` | `POST /groups` |
 | `getGroupInfo(_ groupId: String) -> GroupInfo` | `GET /groups/{groupId}` |
 | `deleteGroup(_ groupId: String, request: DeleteGroupRequest? = nil) -> DeleteGroupResponseData` | `DELETE /groups/{groupId}` |
-| `updateGroupSettings(_ groupId: String, request: UpdateGroupSettingsRequest)` | `PATCH /groups/{groupId}` |
 | `listGroupMembers(_ groupId: String) -> ListGroupMembersResponseData` | `GET /groups/{groupId}/members` |
 | `listGroupContexts(_ groupId: String) -> [GroupContextEntry]` | `GET /groups/{groupId}/contexts` |
 | `addGroupMembers(_ groupId: String, request: AddGroupMembersRequest)` | `POST /groups/{groupId}/members` |
@@ -218,14 +217,14 @@ struct Context: Codable, Sendable {
 }
 
 struct Namespace: Codable, Sendable {
-  let namespaceId, appKey, targetApplicationId, upgradePolicy: String
+  let namespaceId, appKey, targetApplicationId: String
   let createdAt: Int
   let name: String?
   let memberCount, contextCount, subgroupCount: Int
 }
 
 struct GroupInfo: Codable, Sendable {          // = GroupInfoResponseData
-  let groupId, appKey, targetApplicationId, upgradePolicy: String
+  let groupId, appKey, targetApplicationId: String
   let memberCount, contextCount, defaultCapabilities: Int
   let subgroupVisibility: String
   let activeUpgrade: GroupUpgradeStatus?
