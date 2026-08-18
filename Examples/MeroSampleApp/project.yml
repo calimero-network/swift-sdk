@@ -50,6 +50,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample.uitests
         SWIFT_VERSION: "5.9"
+        # A test bundle is code-signed like any other, and signing needs an
+        # Info.plist. The app target gets one from its `info:` block; this one
+        # has nothing to declare, so let Xcode synthesize it rather than
+        # committing a file whose only purpose is to exist.
+        GENERATE_INFOPLIST_FILE: "YES"
     dependencies:
       - target: MeroSampleApp
 
