@@ -34,7 +34,8 @@ let invite = try await mero.admin.createNamespaceInvitation(namespaceId)
 // on the joining node, with a SignedGroupOpenInvitation:
 let joined = try await mero.admin.joinNamespace(
   namespaceId, request: JoinNamespaceRequest(invitation: signed, groupName: nil))
-// joined.groupId, joined.memberIdentity
+// joined.groupId, joined.memberIdentity (the key it signs with),
+// joined.memberAccount (what the member-addressing calls below take)
 ```
 
 ## Groups, members & roles
