@@ -629,10 +629,14 @@ public struct JoinNamespaceRequest: Codable, Sendable {
 
 public struct JoinNamespaceResponseData: Codable, Sendable {
     public let groupId: String
+    /// The key the joiner signs with, base58.
     public let memberIdentity: String
-    public let governanceOp: String
-    public init(groupId: String, memberIdentity: String, governanceOp: String) {
-        self.groupId = groupId; self.memberIdentity = memberIdentity; self.governanceOp = governanceOp
+    /// The account that key joined as, 64 hex characters. This — not
+    /// `memberIdentity` — is what every member-addressing endpoint takes, so it
+    /// is how the caller addresses the member it just became.
+    public let memberAccount: String
+    public init(groupId: String, memberIdentity: String, memberAccount: String) {
+        self.groupId = groupId; self.memberIdentity = memberIdentity; self.memberAccount = memberAccount
     }
 }
 
@@ -1143,10 +1147,14 @@ public struct JoinGroupRequest: Codable, Sendable {
 
 public struct JoinGroupResponseData: Codable, Sendable {
     public let groupId: String
+    /// The key the joiner signs with, base58.
     public let memberIdentity: String
-    public let governanceOp: String
-    public init(groupId: String, memberIdentity: String, governanceOp: String) {
-        self.groupId = groupId; self.memberIdentity = memberIdentity; self.governanceOp = governanceOp
+    /// The account that key joined as, 64 hex characters. This — not
+    /// `memberIdentity` — is what every member-addressing endpoint takes, so it
+    /// is how the caller addresses the member it just became.
+    public let memberAccount: String
+    public init(groupId: String, memberIdentity: String, memberAccount: String) {
+        self.groupId = groupId; self.memberIdentity = memberIdentity; self.memberAccount = memberAccount
     }
 }
 
