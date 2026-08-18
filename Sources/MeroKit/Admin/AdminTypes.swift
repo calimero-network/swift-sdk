@@ -518,18 +518,17 @@ public struct Namespace: Codable, Sendable {
     public let namespaceId: String
     public let appKey: String
     public let targetApplicationId: String
-    public let upgradePolicy: String
     public let createdAt: Int
     public let name: String?
     public let memberCount: Int
     public let contextCount: Int
     public let subgroupCount: Int
     public init(
-        namespaceId: String, appKey: String, targetApplicationId: String, upgradePolicy: String, createdAt: Int,
+        namespaceId: String, appKey: String, targetApplicationId: String, createdAt: Int,
         name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int
     ) {
         self.namespaceId = namespaceId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
-        self.upgradePolicy = upgradePolicy; self.createdAt = createdAt; self.name = name
+        self.createdAt = createdAt; self.name = name
         self.memberCount = memberCount; self.contextCount = contextCount; self.subgroupCount = subgroupCount
     }
 }
@@ -542,7 +541,9 @@ public struct NamespaceIdentity: Codable, Sendable {
     public init(namespaceId: String, publicKey: String) { self.namespaceId = namespaceId; self.publicKey = publicKey }
 }
 
-/// Core's `UpgradePolicy` enum — how a namespace/group adopts new app versions.
+/// Formerly how a namespace/group adopted new app versions. The concept is gone
+/// server-side; the value is still sent on the two create requests because a
+/// released node declares the field required and rejects a body without it.
 public enum UpgradePolicy: String, Codable, Sendable {
     case automatic = "Automatic"
     case lazyOnAccess = "LazyOnAccess"
@@ -550,11 +551,16 @@ public enum UpgradePolicy: String, Codable, Sendable {
 
 public struct CreateNamespaceRequest: Codable, Sendable {
     public var applicationId: String
+    /// Ignored by any node that has dropped the concept, required by every
+    /// released one. Defaulted so a caller need not choose.
     public var upgradePolicy: UpgradePolicy
     public var name: String?
     /// Hex 32-byte blob id; pins the namespace to a specific installed version.
     public var appKey: String?
-    public init(applicationId: String, upgradePolicy: UpgradePolicy, name: String? = nil, appKey: String? = nil) {
+    public init(
+        applicationId: String, upgradePolicy: UpgradePolicy = .lazyOnAccess,
+        name: String? = nil, appKey: String? = nil
+    ) {
         self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.name = name; self.appKey = appKey
     }
 }
@@ -661,13 +667,16 @@ public struct SubgroupEntry: Codable, Sendable {
 
 public struct CreateGroupRequest: Codable, Sendable {
     public var applicationId: String
+    /// Ignored by any node that has dropped the concept, required by every
+    /// released one. Defaulted so a caller need not choose.
     public var upgradePolicy: String
     public var groupId: String?
     public var appKey: String?
     public var name: String?
     public var parentGroupId: String?
     public init(
-        applicationId: String, upgradePolicy: String, groupId: String? = nil, appKey: String? = nil,
+        applicationId: String, upgradePolicy: String = "LazyOnAccess",
+        groupId: String? = nil, appKey: String? = nil,
         name: String? = nil, parentGroupId: String? = nil
     ) {
         self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.groupId = groupId
@@ -796,7 +805,6 @@ public struct GroupInfo: Codable, Sendable {
     public let groupId: String
     public let appKey: String
     public let targetApplicationId: String
-    public let upgradePolicy: String
     public let memberCount: Int
     public let contextCount: Int
     public let activeUpgrade: GroupUpgradeStatus?
@@ -806,12 +814,12 @@ public struct GroupInfo: Codable, Sendable {
     /// `null` if no metadata has ever been set for this group.
     public let metadata: MetadataRecord?
     public init(
-        groupId: String, appKey: String, targetApplicationId: String, upgradePolicy: String,
+        groupId: String, appKey: String, targetApplicationId: String,
         memberCount: Int, contextCount: Int, activeUpgrade: GroupUpgradeStatus? = nil,
         defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil
     ) {
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
-        self.upgradePolicy = upgradePolicy; self.memberCount = memberCount; self.contextCount = contextCount
+        self.memberCount = memberCount; self.contextCount = contextCount
         self.activeUpgrade = activeUpgrade; self.defaultCapabilities = defaultCapabilities
         self.subgroupVisibility = subgroupVisibility; self.metadata = metadata
     }
@@ -951,14 +959,6 @@ public struct GetTeeAdmissionPolicyResponseData: Codable, Sendable {
         self.allowedMrtd = allowedMrtd; self.allowedRtmr0 = allowedRtmr0; self.allowedRtmr1 = allowedRtmr1
         self.allowedRtmr2 = allowedRtmr2; self.allowedRtmr3 = allowedRtmr3
         self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock
-    }
-}
-
-public struct UpdateGroupSettingsRequest: Codable, Sendable {
-    public var upgradePolicy: String
-    public var requester: String?
-    public init(upgradePolicy: String, requester: String? = nil) {
-        self.upgradePolicy = upgradePolicy; self.requester = requester
     }
 }
 
