@@ -11,8 +11,14 @@ import XCTest
 final class InviteCodecTests: XCTestCase {
 
     /// base58(deflate(JSON)) produced by bs58 + fflate.
-    private let jsToken = "T3MBR42kMWfzJn5wMvCqe1r7c1hYDuexnUKzqjSNCtW4k71PM1Jkbton9UzSky4P3Vu2kz8bft3hcchY2HESbzeq4WbgLAjTJs6Ep9vxyp5hCD3s9geS6EjLnBnDAQ5Lr2CjSQxB5h7vQmGu11ARv7ty7YAtw"
-    private let jsJSON = #"{"__teamName":"Design Team","invitation":{"invitation":{"expires_at":1787740000000,"group_id":[13,20,27,34,41,48]},"inviter_signature":"5555"}}"#
+    private let jsToken = """
+        T3MBR42kMWfzJn5wMvCqe1r7c1hYDuexnUKzqjSNCtW4k71PM1Jkbton9UzSky4P3Vu2kz8bft3hcchY2HESbzeq4WbgLAjTJs6E\
+        p9vxyp5hCD3s9geS6EjLnBnDAQ5Lr2CjSQxB5h7vQmGu11ARv7ty7YAtw
+        """
+    private let jsJSON = #"""
+        {"__teamName":"Design Team","invitation":{"invitation":{"expires_at":1787740000000,"group_id":[13,20\#
+        ,27,34,41,48]},"inviter_signature":"5555"}}
+        """#
 
     // MARK: Cross-language compatibility
 

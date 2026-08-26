@@ -69,8 +69,9 @@ public enum InviteLink {
         guard !trimmed.isEmpty else { return nil }
 
         let lower = trimmed.lowercased()
-        guard lower.hasPrefix("http://") || lower.hasPrefix("https://")
-            || lower.hasPrefix("calimero://")
+        guard
+            lower.hasPrefix("http://") || lower.hasPrefix("https://")
+                || lower.hasPrefix("calimero://")
         else {
             return trimmed
         }
