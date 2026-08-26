@@ -61,10 +61,21 @@ public enum InviteLink {
     /// `URLComponents`, because host parsing on a non-special scheme mangles a
     /// dotted slug like `com.calimero.mero-ar`.
     ///
-    /// Returns nil only for empty input — an unrecognized string is handed back
-    /// unchanged, so a bare token still works and the codec gets the final say
-    /// on whether it is valid.
-    public static func token(fromPasted input: String) -> String? {
+    /// - Parameter expectedSlug: when given, a link carrying a *different* app's
+    ///   slug returns nil instead of its token. Pass your own package id: another
+    ///   app's invitation decodes perfectly well, since the payload shape is
+    ///   shared, and redeeming it would join a namespace belonging to that app's
+    ///   context. This mirrors the JS `invitationFromRaw`, which rejects a
+    ///   foreign slug for the same reason. Defaults to nil, which accepts any
+    ///   slug — the previous behaviour.
+    ///
+    /// A *bare token* carries no slug and is always accepted, which is the same
+    /// latitude the web apps give a pasted code.
+    ///
+    /// Returns nil for empty input, or for a link whose slug was rejected. An
+    /// otherwise unrecognized string is handed back unchanged, so the codec gets
+    /// the final say on whether it is valid.
+    public static func token(fromPasted input: String, expectedSlug: String? = nil) -> String? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -75,6 +86,8 @@ public enum InviteLink {
         else {
             return trimmed
         }
+
+        if let expectedSlug, !slugMatches(trimmed, expectedSlug) { return nil }
 
         // Take the query off by hand so the custom scheme is handled the same
         // way as HTTPS.
@@ -87,6 +100,18 @@ public enum InviteLink {
             return value.removingPercentEncoding ?? value
         }
         return trimmed
+    }
+
+    /// Does this link's `/<slug>/` path segment match?
+    ///
+    /// Compared as a path segment rather than a substring so
+    /// `com.calimero.mero` cannot match `com.calimero.mero-ar`. Case-insensitive,
+    /// because a link that has been through a mail client may not come back the
+    /// way it left.
+    private static func slugMatches(_ link: String, _ expected: String) -> Bool {
+        let withoutQuery = link.split(separator: "?", maxSplits: 1)[0]
+        let segments = withoutQuery.split(separator: "/").map { $0.lowercased() }
+        return segments.contains(expected.lowercased())
     }
 
     private static func escape(_ s: String) -> String {
