@@ -66,18 +66,40 @@ struct ChatInvite: Codable {
     let spaceName: String
     let invitation: SignedGroupOpenInvitation
 
-    /// A compact, single-line invite code — zlib-compressed JSON, base64'd —
-    /// so it's easy to copy-paste between simulators (like mero-chat's codes).
+    /// A compact, single-line invite code, in the format the rest of the fleet
+    /// uses: `base58(deflate(JSON))` via `InviteCodec`.
+    ///
+    /// This used to be deflate + **base64**, with a comment claiming it matched
+    /// mero-chat's codes. It did not — mero-chat, mero-blocks, merraria,
+    /// mero-stream and the web apps all use base58 — so a code from here could
+    /// not be redeemed there or vice versa, which is the one thing an example
+    /// showing "invite and join" should get right.
     func encoded() throws -> String {
-        let json = try JSONEncoder().encode(self)
-        let compressed = try (json as NSData).compressed(using: .zlib) as Data
-        return compressed.base64EncodedString()
+        try InviteCodec.encode(self)
     }
 
-    /// Decode an invite code. Tries the compact form first, then falls back to
-    /// raw JSON (tolerant of older/hand-pasted invites).
+    /// The shareable link for this invite. What you actually send someone: it
+    /// opens the desktop app where installed and the web build otherwise.
+    func shareableLink() throws -> String {
+        InviteLink.invitation(token: try encoded(), slug: ChatService.packageName)
+    }
+
+    /// Decode an invite code, or a link containing one.
+    ///
+    /// Accepts the shared format, the legacy base64 form this example emitted
+    /// before, and raw JSON — so codes already copied out of a running build
+    /// keep working.
     static func decode(_ code: String) -> ChatInvite? {
-        let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let token = InviteLink.token(fromPasted: code) else { return nil }
+
+        if let json = InviteCodec.decode(token: token),
+            let invite = try? JSONDecoder().decode(ChatInvite.self, from: Data(json.utf8))
+        {
+            return invite
+        }
+
+        // Legacy: deflate + base64, as this example used to produce.
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         if let data = Data(base64Encoded: trimmed),
             let json = try? (data as NSData).decompressed(using: .zlib) as Data,
             let invite = try? JSONDecoder().decode(ChatInvite.self, from: json)
@@ -339,7 +361,7 @@ final class ChatService: ObservableObject {
                 status = "Syncing “\(invite.spaceName)” from the inviter… (\(attempt)/6)"
                 // SDK convenience: join + state-pull every context in the group so
                 // it initializes instead of staying uninitialized (1111…).
-                let contexts = (try? await mero.admin.syncGroupContexts(joined.groupId)) ?? []
+                let contexts = (try? await mero.admin.syncGroupContexts(joined.namespaceId)) ?? []
                 for ctx in contexts {
                     // Register our display name in each initialized context.
                     let owned = try? await mero.admin.getContextIdentitiesOwned(ctx.contextId)

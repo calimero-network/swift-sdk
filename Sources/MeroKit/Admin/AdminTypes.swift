@@ -636,15 +636,60 @@ public struct JoinNamespaceRequest: Codable, Sendable {
 }
 
 public struct JoinNamespaceResponseData: Codable, Sendable {
-    public let groupId: String
+    /// The namespace joined.
+    ///
+    /// core 0.11.0-rc.25 (core#3598) renamed this field on the wire from
+    /// `groupId` to `namespaceId`. Both spellings are accepted, newest first,
+    /// because a decoder that demands one of them breaks against half the fleet:
+    /// declared non-optional, this threw `keyNotFound` on every rc.25 join, so
+    /// `joinNamespace` failed outright rather than degrading.
+    public let namespaceId: String
+    /// Deprecated spelling of ``namespaceId``, kept so existing call sites build.
+    @available(*, deprecated, renamed: "namespaceId")
+    public var groupId: String { namespaceId }
     /// The key the joiner signs with, base58.
     public let memberIdentity: String
     /// The account that key joined as, 64 hex characters. This — not
     /// `memberIdentity` — is what every member-addressing endpoint takes, so it
     /// is how the caller addresses the member it just became.
-    public let memberAccount: String
-    public init(groupId: String, memberIdentity: String, memberAccount: String) {
-        self.groupId = groupId; self.memberIdentity = memberIdentity; self.memberAccount = memberAccount
+    ///
+    /// Optional because older nodes do not send it: rc.21 (the AccountId rekey)
+    /// is what introduced it.
+    public let memberAccount: String?
+
+    public init(namespaceId: String, memberIdentity: String, memberAccount: String? = nil) {
+        self.namespaceId = namespaceId
+        self.memberIdentity = memberIdentity
+        self.memberAccount = memberAccount
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case namespaceId, groupId, memberIdentity, memberAccount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let ns = try c.decodeIfPresent(String.self, forKey: .namespaceId) {
+            namespaceId = ns
+        } else if let legacy = try c.decodeIfPresent(String.self, forKey: .groupId) {
+            namespaceId = legacy
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.namespaceId,
+                .init(
+                    codingPath: c.codingPath,
+                    debugDescription:
+                        "join response carried neither `namespaceId` (rc.25+) nor `groupId` (pre-rc.25)"))
+        }
+        memberIdentity = try c.decode(String.self, forKey: .memberIdentity)
+        memberAccount = try c.decodeIfPresent(String.self, forKey: .memberAccount)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(namespaceId, forKey: .namespaceId)
+        try c.encode(memberIdentity, forKey: .memberIdentity)
+        try c.encodeIfPresent(memberAccount, forKey: .memberAccount)
     }
 }
 
