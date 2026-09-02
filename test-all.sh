@@ -135,17 +135,20 @@ NODE_UP=0
 MEROD_BIN=""
 
 boot_node() {
-  # pick a merod: PATH first, then ./merod, else download the latest release
+  # pick a merod: PATH first, then ./merod, else download the PINNED release.
+  # Pinned, not "the newest": the version this SDK is tested against is one
+  # commit away in ci/core-version, so a core release cannot change what this
+  # script tests behind your back.
   if command -v merod >/dev/null 2>&1; then MEROD_BIN="$(command -v merod)"
   elif [ -x ./merod ]; then MEROD_BIN="./merod"
   else
-    echo "downloading released merod (aarch64-apple-darwin)…"
-    local TAG URL
-    TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName') || return 1
-    URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-      -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url') || return 1
-    [ -n "$URL" ] || { echo "no merod darwin asset on $TAG"; return 1; }
-    curl -sL "$URL" | tar xz && chmod +x ./merod && MEROD_BIN="./merod"
+    local TAG
+    TAG=$(sed -n 's/^CORE_TAG=//p' ci/core-version) || return 1
+    [ -n "$TAG" ] || { echo "no CORE_TAG in ci/core-version"; return 1; }
+    echo "downloading merod $TAG (aarch64-apple-darwin)…"
+    gh release download "$TAG" --repo calimero-network/core \
+      --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber || return 1
+    tar xzf merod.tar.gz && chmod +x ./merod && MEROD_BIN="./merod"
   fi
   echo "using merod: ${MEROD_BIN} ($("$MEROD_BIN" --version 2>&1 | head -1))"
 

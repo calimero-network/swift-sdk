@@ -1,0 +1,11 @@
+# Both wasms in this directory are downloaded at run time, version-matched to
+# what the run is actually testing, and must never be committed:
+#   kv_store.wasm  — from the pinned core release's kv-store-test-fixture.mpk
+#                    (.github/workflows/merobox-sync.yml)
+#   curb-app.wasm  — from the app registry
+#                    (.github/workflows/merobox-chat-sync.yml)
+# A committed copy is a copy that goes stale silently: the vendored kv_store.wasm
+# drifted 10 release candidates behind the node, and a wasm that predates the
+# node's host ABI leaves the joining node on the all-ones "uninitialized" hash
+# forever — which reads as a cross-node sync bug.
+*.wasm

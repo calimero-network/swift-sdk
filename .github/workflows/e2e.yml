@@ -6,6 +6,11 @@ name: E2E (vs released merod)
 # target skips itself unless MERO_E2E_NODE_URL is set.
 on:
   workflow_dispatch:
+    inputs:
+      core_tag:
+        description: 'core release to test against (default: ci/core-version)'
+        required: false
+        default: ''
   schedule:
     - cron: '0 6 * * 1'  # weekly smoke, Mondays 06:00 UTC
 
@@ -17,29 +22,46 @@ jobs:
     name: E2E (single node)
     runs-on: macos-15
     timeout-minutes: 20
-    env:
-      # First-login setup code (core#3221). merod below inherits it and the SDK
-      # test passes it explicitly, so the first login mints the root key.
-      MERO_AUTH_BOOTSTRAP_SECRET: swift-sdk-e2e-bootstrap
     steps:
       - uses: actions/checkout@v7
 
-      - name: Download released merod (aarch64-apple-darwin)
+      # Pinned, not "the newest release": this job resolved `gh release list
+      # --limit 1` and so tested whatever core shipped last. core rc.17 made
+      # `init --auth-mode embedded` require admin credentials, and this job went
+      # red on a commit of its own that changed nothing.
+      - name: Resolve the core release to test against
+        env:
+          CORE_TAG_INPUT: ${{ inputs.core_tag }}
+        run: |
+          set -euo pipefail
+          set -a; . ci/core-version; set +a
+          TAG="${CORE_TAG_INPUT:-$CORE_TAG}"
+          echo "CORE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "core release: $TAG"
+
+      - name: Download merod (aarch64-apple-darwin)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
-          echo "Using core release $TAG"
-          URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-            -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
-          test -n "$URL" || { echo "no merod darwin asset on release $TAG"; exit 1; }
-          curl -sL "$URL" | tar xz
+          set -euo pipefail
+          echo "Using core release $CORE_TAG"
+          gh release download "$CORE_TAG" --repo calimero-network/core \
+            --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber
+          tar xzf merod.tar.gz
           chmod +x ./merod
+          ./merod --version
 
+      # core rc.17 (core#3276/#3277) moved admin provisioning to `init`: there is
+      # no first-login bootstrap secret any more, and `--auth-mode embedded`
+      # REFUSES to init without credentials. `--auth-storage persistent` is
+      # required for the init-time admin to survive into `run`.
       - name: Boot merod (embedded auth, single node)
         run: |
-          ./merod --home ./e2e-node --node e2e init \
-            --server-port 4001 --swarm-port 4002 --auth-mode embedded
+          set -euo pipefail
+          printf 'dev-password' | ./merod --home ./e2e-node --node e2e init \
+            --server-port 4001 --swarm-port 4002 \
+            --auth-mode embedded --auth-storage persistent \
+            --admin-user dev --admin-password-stdin
           ./merod --home ./e2e-node --node e2e run > merod.log 2>&1 &
           echo $! > merod.pid
           for i in $(seq 1 30); do

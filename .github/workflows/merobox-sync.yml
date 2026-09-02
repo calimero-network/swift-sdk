@@ -10,9 +10,14 @@ name: Merobox Sync (2 nodes)
 # from the curb app and the simulator.
 #
 # Docker-based, so it runs on ubuntu (the macOS runners the iOS suites use have
-# no Docker). Not a blanket PR gate: it exercises the upstream `edge` node image
-# (merod has no 0.11.x Docker tag), so it runs on master pushes / weekly / on
+# no Docker). Not a blanket PR gate, so it runs on master pushes / weekly / on
 # demand, plus PRs that touch the merobox harness itself.
+#
+# The node image is PINNED to ci/core-version. It used to track `edge`, which is
+# how core rc.26 ("leave mDNS off unless asked for") reddened this job on a
+# commit of its own that changed nothing: the two containers stopped finding
+# each other and the failure surfaced three layers away as `join_namespace`
+# HTTP 500. The scenarios now ask for multicast explicitly (`nodes.mdns: true`).
 #
 # GATING: cross-node sync converges reliably (sub-second) once the kv_store wasm
 # matches the node — see ci/merobox/README.md. A red run here means a genuine
@@ -33,9 +38,9 @@ on:
   workflow_dispatch:
     inputs:
       merod_image:
-        description: 'merod Docker image (default ghcr.io/calimero-network/merod:edge)'
+        description: 'merod Docker image (default: ci/core-version)'
         required: false
-        default: 'ghcr.io/calimero-network/merod:edge'
+        default: ''
   schedule:
     - cron: '0 8 * * 1'  # Mondays 08:00 UTC
 
@@ -58,7 +63,7 @@ jobs:
           - sync-two-node.yml
           - sync-two-node-bidi.yml
     env:
-      MEROD_IMAGE: ${{ github.event.inputs.merod_image || 'ghcr.io/calimero-network/merod:edge' }}
+      MEROD_IMAGE_INPUT: ${{ github.event.inputs.merod_image }}
       WF: ci/merobox/${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@v7
@@ -68,20 +73,55 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Resolve the merod image
+        run: |
+          set -euo pipefail
+          set -a; . ci/core-version; set +a
+          echo "MEROD_IMAGE=${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}" >> "$GITHUB_ENV"
+          echo "CORE_TAG=$CORE_TAG" >> "$GITHUB_ENV"
+          echo "merod image: ${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}  (core $CORE_TAG)"
+
+      # 0.6.69 is a floor, not housekeeping: it is the release that parses the
+      # hex ids core rc.27 made universal. An older merobox dies decoding an id
+      # it still reads as base58, and its Rich renderer hides the real error, so
+      # the run reads as a contract break.
       - name: Install merobox
         run: |
           python -m pip install --upgrade pip
-          pip install merobox
+          pip install 'merobox>=0.6.69'
           merobox --version
 
       - name: Pull merod image
         run: docker pull "$MEROD_IMAGE"
 
-      # Point the workflow at the resolved image (workflow_dispatch override or
-      # the edge default) without editing the checked-in YAML.
+      # The wasm must match the node's host ABI or the joining node can never
+      # initialize the context and sits on the all-ones "uninitialized" hash
+      # forever — which reads as a sync bug, not a fixture bug. This used to be
+      # a binary vendored into the repo and rebuilt by hand after a core bump;
+      # it went 10 release candidates stale. core publishes a version-matched
+      # `kv-store-test-fixture.mpk` (a gzip tar of manifest.json + app.wasm +
+      # abi.json) on every release, so take it from the pinned tag instead.
+      - name: Download the version-matched kv_store wasm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CORE_TAG" --repo calimero-network/core \
+            --pattern 'kv-store-test-fixture.mpk' --output kv-store.mpk --clobber
+          mkdir -p kv-store-fixture ci/merobox/res
+          tar xzf kv-store.mpk -C kv-store-fixture
+          cp kv-store-fixture/app.wasm ci/merobox/res/kv_store.wasm
+          python3 -c "import json;m=json.load(open('kv-store-fixture/manifest.json'));print('kv_store fixture appVersion:', m['appVersion'])"
+          ls -l ci/merobox/res/kv_store.wasm
+
+      # Point the scenario at the resolved image without editing the checked-in
+      # YAML. Matches the `image:` line by shape rather than by its current
+      # value, so pinning the checked-in default does not silently stop this
+      # substitution from applying.
       - name: Pin node image in workflow
         run: |
-          sed -i "s#image: ghcr.io/calimero-network/merod:edge#image: ${MEROD_IMAGE}#" "$WF"
+          set -euo pipefail
+          sed -i -E "s#^([[:space:]]*image:).*#\1 ${MEROD_IMAGE}#" "$WF"
           grep 'image:' "$WF"
 
       - name: Validate workflow

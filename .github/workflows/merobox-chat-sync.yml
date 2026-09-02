@@ -9,10 +9,10 @@ name: Merobox Chat Sync (curb)
 #
 # PROVEN: on first CI run, curb 7.0.10 synced a message node 1 -> node 2 in
 # ~1.2s and node 2 read it back — mero-chat cross-node sync works on a live node.
-# Kept INFORMATIONAL (continue-on-error) anyway because it depends on two
-# external moving parts — the apps.calimero.network download and the `edge`
-# node image — so a registry outage or an upstream node break shouldn't redden
-# master. The self-contained kv_store sync check (merobox-sync.yml) is the
+# Kept INFORMATIONAL (continue-on-error) anyway because it still depends on an
+# external moving part — the apps.calimero.network download — so a registry
+# outage shouldn't redden master. The node image itself is now pinned to
+# ci/core-version rather than tracking `edge`. The self-contained kv_store sync check (merobox-sync.yml) is the
 # gating signal; this one is the real-app proof.
 on:
   push:
@@ -27,9 +27,9 @@ on:
   workflow_dispatch:
     inputs:
       merod_image:
-        description: 'merod Docker image (default ghcr.io/calimero-network/merod:edge)'
+        description: 'merod Docker image (default: ci/core-version)'
         required: false
-        default: 'ghcr.io/calimero-network/merod:edge'
+        default: ''
       curb_version:
         description: 'curb version to test (default: latest on the registry)'
         required: false
@@ -50,7 +50,7 @@ jobs:
     # Informational until proven green on CI (real published app vs moving edge).
     continue-on-error: true
     env:
-      MEROD_IMAGE: ${{ github.event.inputs.merod_image || 'ghcr.io/calimero-network/merod:edge' }}
+      MEROD_IMAGE_INPUT: ${{ github.event.inputs.merod_image }}
       REGISTRY: https://apps.calimero.network
       PACKAGE: com.calimero.curb
       CURB_VERSION: ${{ github.event.inputs.curb_version }}
@@ -63,10 +63,21 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Resolve the merod image
+        run: |
+          set -euo pipefail
+          set -a; . ci/core-version; set +a
+          echo "MEROD_IMAGE=${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}" >> "$GITHUB_ENV"
+          echo "merod image: ${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}"
+
+      # 0.6.69 is a floor, not housekeeping: it is the release that parses the
+      # hex ids core rc.27 made universal. An older merobox dies decoding an id
+      # it still reads as base58, and its Rich renderer hides the real error, so
+      # the run reads as a contract break.
       - name: Install merobox
         run: |
           python -m pip install --upgrade pip
-          pip install merobox
+          pip install 'merobox>=0.6.69'
           merobox --version
 
       # Download the published curb bundle (.mpk = gzip tar of app.wasm + manifest)
@@ -92,9 +103,12 @@ jobs:
       - name: Pull merod image
         run: docker pull "$MEROD_IMAGE"
 
+      # Matches the `image:` line by shape rather than by its current value, so
+      # pinning the checked-in default does not silently stop this applying.
       - name: Pin node image in workflow
         run: |
-          sed -i "s#image: ghcr.io/calimero-network/merod:edge#image: ${MEROD_IMAGE}#" "$WF"
+          set -euo pipefail
+          sed -i -E "s#^([[:space:]]*image:).*#\1 ${MEROD_IMAGE}#" "$WF"
           grep 'image:' "$WF"
 
       - name: Validate workflow
