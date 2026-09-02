@@ -14,6 +14,20 @@ HTTP(S) call to a remote node's endpoints.
 - Swift 5.9+ (built and tested on Swift 6)
 - iOS 15+ / macOS 12+
 - Zero third-party dependencies (uses `URLSession`, `Foundation`, `Security`).
+- A Calimero node on **core `0.11.0-rc.29`**.
+
+### Which core release?
+
+[`ci/core-version`](ci/core-version) names it, and it is the single source of
+truth: every CI job and local script that boots a node reads that file instead
+of resolving "the newest core release". That matters because the admin API is
+still moving — core rc.17 changed how a node is initialised, rc.23 deleted a
+route this SDK called, rc.26 changed a networking default and rc.27 changed how
+every id is encoded — and a job that follows the newest release goes red on a
+commit of its own that changed nothing.
+
+Bumping to a newer core is a one-line change there, plus whatever wire changes
+it brings to `Sources/MeroKit/Admin`.
 
 ## Installation (Swift Package Manager)
 

@@ -1,0 +1,15 @@
+# The calimero-network/core release this SDK is developed and tested against.
+#
+# Single source of truth. Every CI job and local script that boots a node reads
+# this file instead of resolving "the newest core release", so a core release
+# can no longer change what this repo tests without a commit here — the reason
+# `E2E (vs released merod)` and `Merobox Sync` went red on core rc.17 and rc.26
+# respectively, on commits of their own that changed nothing.
+#
+# Bumping to a new core is a one-line change here plus whatever wire changes it
+# brings to Sources/MeroKit/Admin.
+#
+# Shell:  set -a; . ci/core-version; set +a   ->  $CORE_TAG, $MEROD_IMAGE
+# Actions: cat it into $GITHUB_ENV (see .github/workflows/e2e.yml)
+CORE_TAG=0.11.0-rc.29
+MEROD_IMAGE=ghcr.io/calimero-network/merod:0.11.0-rc.29

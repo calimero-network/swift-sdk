@@ -7,17 +7,29 @@
 # exercises node + WASM + sync, independent of the curb chat app or iOS.
 #
 # Run:  merobox bootstrap run ci/merobox/sync-two-node.yml   (from repo root)
+#       — needs ci/merobox/res/kv_store.wasm, which the CI job downloads from
+#         the pinned core release (see ci/merobox/README.md "Node image").
 #
-# Node images: merod has no published 0.11.x Docker tag (the iOS e2e uses the
-# 0.11.0-rc.x darwin *binary* from GitHub releases, which has no Docker build),
-# so we track `edge`. Override with MEROD_IMAGE in the CI job if needed.
+# Node image: pinned to the release named in ci/core-version, which the CI job
+# substitutes into the `image:` line below. Override for one run with the
+# `merod_image` workflow_dispatch input.
 name: Two-node cross-node sync (kv_store)
 description: Write on node 1 must replicate to node 2 and the context hash must converge.
 
 nodes:
   count: 2
-  image: ghcr.io/calimero-network/merod:edge
+  # Pinned; the CI job overwrites this line from ci/core-version.
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
   prefix: calimero-node
+  # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
+  # OFF by default, and these two containers have nothing else to find each
+  # other with: `bootstrap.nodes` names the public devnet boot-node, no sibling
+  # addresses are wired, and merod ships no rendezvous server. Without this the
+  # nodes never peer and the run fails three layers away, as `join_namespace`
+  # HTTP 500 (the joiner waiting 5s for a group key only a peer could send).
+  # A test fleet on one Docker bridge is exactly the case where multicast is
+  # the right answer — what matters is that the choice is explicit.
+  mdns: true
 
 # Fresh state each run so the check is deterministic.
 nuke_on_start: true

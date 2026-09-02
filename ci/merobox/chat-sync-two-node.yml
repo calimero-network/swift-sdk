@@ -18,8 +18,18 @@ description: A message sent on node 1 in a curb channel must replicate to node 2
 
 nodes:
   count: 2
-  image: ghcr.io/calimero-network/merod:edge
+  # Pinned; the CI job overwrites this line from ci/core-version.
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
   prefix: calimero-node
+  # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
+  # OFF by default, and these two containers have nothing else to find each
+  # other with: `bootstrap.nodes` names the public devnet boot-node, no sibling
+  # addresses are wired, and merod ships no rendezvous server. Without this the
+  # nodes never peer and the run fails three layers away, as `join_namespace`
+  # HTTP 500 (the joiner waiting 5s for a group key only a peer could send).
+  # A test fleet on one Docker bridge is exactly the case where multicast is
+  # the right answer — what matters is that the choice is explicit.
+  mdns: true
 
 nuke_on_start: true
 nuke_on_end: true

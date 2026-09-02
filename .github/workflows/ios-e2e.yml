@@ -10,6 +10,11 @@ name: iOS E2E (vs live merod)
 #     informational until that (core-side) settles.
 on:
   workflow_dispatch:
+    inputs:
+      core_tag:
+        description: 'core release to test against (default: ci/core-version)'
+        required: false
+        default: ''
   push:
     branches:
       - master
@@ -30,28 +35,30 @@ jobs:
       - name: Install tools
         run: brew install xcodegen
 
-      - name: Download released merod
+      # Pinned to ci/core-version, not "the newest release": resolving the
+      # latest tag meant a core release could change what this job tests with no
+      # commit here, and that is how it silently moved from rc.24 to rc.25.
+      - name: Resolve the core release to test against
+        env:
+          CORE_TAG_INPUT: ${{ inputs.core_tag }}
+        run: |
+          set -euo pipefail
+          set -a; . ci/core-version; set +a
+          TAG="${CORE_TAG_INPUT:-$CORE_TAG}"
+          echo "CORE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "core release: $TAG"
+
+      - name: Download merod (aarch64-apple-darwin)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Download the newest release that ACTUALLY HAS the darwin merod asset.
-          # A brand-new RC can exist with assets still uploading (empty asset
-          # list), so `--limit 1` alone would fail — walk recent releases instead.
-          # Uses `gh release download` (correct asset URL + auth).
-          set -x
-          for TAG in $(gh release list --repo calimero-network/core --limit 10 --json tagName -q '.[].tagName'); do
-            echo "trying core release $TAG"
-            if gh release download "$TAG" --repo calimero-network/core \
-                 --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber \
-              && tar xzf merod.tar.gz \
-              && chmod +x ./merod \
-              && sudo mv ./merod /usr/local/bin/merod \
-              && merod --version; then
-              echo "using merod from $TAG"; exit 0
-            fi
-            echo "$TAG has no darwin merod asset (yet); trying older"
-          done
-          echo "::error::no core release with a darwin merod asset in the last 10"; exit 1
+          set -euxo pipefail
+          gh release download "$CORE_TAG" --repo calimero-network/core \
+            --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber
+          tar xzf merod.tar.gz
+          chmod +x ./merod
+          sudo mv ./merod /usr/local/bin/merod
+          merod --version
 
       - name: Run AppE2ETests (boots node + sim)
         run: ./e2e-ios.sh
@@ -83,23 +90,30 @@ jobs:
       - name: Install tools
         run: brew install xcodegen
 
-      - name: Download released merod
+      # Pinned to ci/core-version, not "the newest release": resolving the
+      # latest tag meant a core release could change what this job tests with no
+      # commit here, and that is how it silently moved from rc.24 to rc.25.
+      - name: Resolve the core release to test against
+        env:
+          CORE_TAG_INPUT: ${{ inputs.core_tag }}
+        run: |
+          set -euo pipefail
+          set -a; . ci/core-version; set +a
+          TAG="${CORE_TAG_INPUT:-$CORE_TAG}"
+          echo "CORE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "core release: $TAG"
+
+      - name: Download merod (aarch64-apple-darwin)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Newest release that actually has the darwin merod asset (a fresh RC
-          # can exist with assets still uploading).
-          set -x
-          for TAG in $(gh release list --repo calimero-network/core --limit 10 --json tagName -q '.[].tagName'); do
-            if gh release download "$TAG" --repo calimero-network/core \
-                 --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber \
-              && tar xzf merod.tar.gz \
-              && chmod +x ./merod \
-              && sudo mv ./merod /usr/local/bin/merod; then
-              echo "using merod from $TAG"; exit 0
-            fi
-          done
-          echo "::error::no core release with a darwin merod asset in the last 10"; exit 1
+          set -euxo pipefail
+          gh release download "$CORE_TAG" --repo calimero-network/core \
+            --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber
+          tar xzf merod.tar.gz
+          chmod +x ./merod
+          sudo mv ./merod /usr/local/bin/merod
+          merod --version
 
       - name: Run chat-multi-e2e.sh (2 nodes, 2 sims)
         run: ./chat-multi-e2e.sh

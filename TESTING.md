@@ -100,11 +100,15 @@ is set, so you need a node first.
 ### 4a. Boot a node
 
 ```bash
-# Download a released merod (arm64 mac) — or use one you already have:
-TAG=$(gh release list --repo calimero-network/core --limit 1 --json tagName -q '.[0].tagName')
-URL=$(gh release view "$TAG" --repo calimero-network/core --json assets \
-  -q '.assets[] | select(.name | test("merod_aarch64-apple-darwin\\.tar\\.gz$")) | .url')
-curl -sL "$URL" | tar xz && chmod +x ./merod
+# Download the merod this SDK is tested against (arm64 mac) — or use one you
+# already have. The version lives in ci/core-version, which every CI job and
+# script reads; resolve it from there rather than taking "the newest release",
+# so what you run locally is what CI runs.
+TAG=$(sed -n 's/^CORE_TAG=//p' ci/core-version)
+gh release download "$TAG" --repo calimero-network/core \
+  --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber
+tar xzf merod.tar.gz && chmod +x ./merod
+./merod --version
 
 # Init a single node with embedded auth + an admin account.
 # rc.17+ creates the admin AT INIT — there's no longer a first-login bootstrap
