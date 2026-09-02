@@ -98,6 +98,7 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 1. Host: create space + channel, copy invite, post a message.
     func testHostCreateInviteAndPost() throws {
+        try AppE2ETests.skipUnlessChatAppIsPublished()
         let app = launch(node: Self.hostNodeURL)
         login(app)
         tapButton(app, "openChat")
@@ -133,6 +134,7 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 3. Guest: auto-join via E2E_JOIN (invite from pasteboard), see host msg, reply.
     func testGuestJoinAndReply() throws {
+        try AppE2ETests.skipUnlessChatAppIsPublished()
         let invite = UIPasteboard.general.string ?? ""
         XCTAssertFalse(invite.isEmpty, "no invite on the pasteboard")
         let app = launch(node: Self.guestNodeURL, env: ["E2E_JOIN": invite])
@@ -148,6 +150,7 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 4. Host: the guest's reply should sync back.
     func testHostSeesReply() throws {
+        try AppE2ETests.skipUnlessChatAppIsPublished()
         let app = launch(node: Self.hostNodeURL)
         login(app)
         tapButton(app, "openChat")

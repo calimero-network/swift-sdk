@@ -100,6 +100,7 @@ final class AppE2ETests: XCTestCase {
 
     /// Chat: install curb, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
+        try Self.skipUnlessChatAppIsPublished()
         login()
         tap(app.buttons["openChat"], "Open Chat entry")
         // Fresh node shows the install gate; a reused one (e.g. on a test retry)
@@ -147,4 +148,47 @@ final class AppE2ETests: XCTestCase {
         app.buttons["sendMessage"].tap()
         XCTAssertTrue(app.staticTexts["e2e hello"].waitForExistence(timeout: 45), "message not shown")
     }
+    /// Skip when the chat app this suite installs is not on the registry.
+    ///
+    /// The sample app's chat feature installs `com.calimero.curb`, and that
+    /// package is no longer published on apps.calimero.network — mero-chat was
+    /// abandoned on 2026-08-19, and the registry now serves `com.calimero.chat`
+    /// 3.1.1 instead, a different contract with a different model. `setup()`
+    /// treats "no versions" as a status line rather than an error, so without
+    /// this the test sits on the install gate and fails after 240 seconds with
+    /// "chat home did not load" — which reads as an app or node problem.
+    ///
+    /// A skip that names the cause is the honest report while the port is
+    /// outstanding, and it lets the rest of this suite give a real signal.
+    static func skipUnlessChatAppIsPublished() throws {
+        let package = "com.calimero.curb"
+        let url = URL(string: "https://apps.calimero.network/api/v2/bundles?package=\(package)")!
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+
+        var payload: Data?
+        var failure: Error?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, error in
+            payload = data
+            failure = error
+            done.signal()
+        }.resume()
+        guard done.wait(timeout: .now() + 25) == .success else {
+            throw XCTSkip("the registry did not answer in time; cannot tell whether \(package) is published")
+        }
+        if let failure {
+            throw XCTSkip("could not reach the registry (\(failure.localizedDescription))")
+        }
+        let versions =
+            (try? JSONSerialization.jsonObject(with: payload ?? Data())) as? [[String: Any]] ?? []
+        if versions.isEmpty {
+            throw XCTSkip(
+                "\(package) is no longer published on apps.calimero.network, so the sample app "
+                    + "cannot install it. The registry serves com.calimero.chat 3.1.1 instead — a "
+                    + "different contract, so porting the chat feature to it is real work. "
+                    + "Skipping rather than timing out on the install gate.")
+        }
+    }
+
 }

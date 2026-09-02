@@ -16,7 +16,7 @@ REPO_ROOT="$(pwd)"
 DEVICE="iPhone 17"
 [ "${1:-}" = "--device" ] && DEVICE="${2:?}"
 
-RED=$'\033[31m'; GREEN=$'\033[32m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 die() { echo "${RED}✘ $*${RESET}"; exit 1; }
 
 xcrun --find xctest >/dev/null 2>&1 || die "full Xcode not selected (see TESTING.md §0)"
@@ -57,8 +57,16 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=$UDID" \
   -only-testing:MeroSampleAppUITests/AppE2ETests \
   -retry-tests-on-failure -test-iterations 2 2>&1 | tee "$REPO_ROOT/.e2e-ios.log" \
-  | grep -iE "Test Case .* (passed|failed)|\*\* TEST|error:|Assertion Failure|XCTAssert.* failed"
+  | grep -iE "Test Case .* (passed|failed|skipped)|\*\* TEST|error:|Assertion Failure|XCTAssert.* failed"
 code=${PIPESTATUS[0]}
+
+# A skip is a pass to xcodebuild, so print what was skipped and why. Otherwise a
+# green run hides that half the suite never ran — the chat cases skip themselves
+# while `com.calimero.curb` is unpublished, and that must not read as coverage.
+if grep -q "Test skipped" "$REPO_ROOT/.e2e-ios.log" 2>/dev/null; then
+  echo "${YELLOW}── skipped ──${RESET}"
+  grep -o "Test skipped - .*" "$REPO_ROOT/.e2e-ios.log" | sort -u
+fi
 if [ "$code" -ne 0 ]; then
   # Surface the failing assertions directly in the console (the log tee'd above
   # is a hidden file; this makes CI failures diagnosable without the artifact).

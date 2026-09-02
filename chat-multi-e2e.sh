@@ -100,6 +100,28 @@ run_role() {  # <udid> <TestMethod> <label>
   return ${PIPESTATUS[0]}
 }
 
+# ---- is the chat app still installable? -------------------------------------
+# The sample app's chat feature installs `com.calimero.curb`, and that package
+# is no longer published on apps.calimero.network (mero-chat was abandoned
+# 2026-08-19; the registry serves `com.calimero.chat` 3.1.1 instead, a different
+# contract). Without this check the host role sits on the install gate and fails
+# after 240s with "chat home did not load", which reads as an app or sync
+# problem. The XCUITests skip themselves for the same reason; this makes the
+# harness say it once, up front, instead of spending three role runs on it.
+CURB_VERSIONS=$(curl -sfL "https://apps.calimero.network/api/v2/bundles?package=com.calimero.curb" 2>/dev/null \
+  | python3 -c "import sys,json; b=json.load(sys.stdin); print(len(b if isinstance(b,list) else b.get('data',[])))" 2>/dev/null || echo "?")
+if [ "$CURB_VERSIONS" = "0" ]; then
+  echo
+  echo "${YELLOW}⚠ com.calimero.curb is no longer published on apps.calimero.network.${RESET}"
+  echo "  The sample app cannot install it, so this multi-user chat run has nothing"
+  echo "  to exercise. The registry serves com.calimero.chat 3.1.1 instead — a"
+  echo "  different contract, so porting Examples/MeroSampleApp/Sources/Chat to it"
+  echo "  is real work, not a rename."
+  echo
+  echo "  Nodes A and B are left running if you want to poke at them."
+  exit 0
+fi
+
 pass=0; fail=0
 step "1/3 HOST creates space + invite + posts (sim A / node A)"
 run_role "$UDID_A" testHostCreateInviteAndPost "host" && pass=$((pass+1)) || { fail=$((fail+1)); die "host role failed"; }
