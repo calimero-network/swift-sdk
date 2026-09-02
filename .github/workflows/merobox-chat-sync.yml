@@ -76,14 +76,32 @@ jobs:
           echo "MEROD_IMAGE=${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}" >> "$GITHUB_ENV"
           echo "merod image: ${MEROD_IMAGE_INPUT:-$MEROD_IMAGE}"
 
-      # 0.6.69 is a floor, not housekeeping: it is the release that parses the
-      # hex ids core rc.27 made universal. An older merobox dies decoding an id
-      # it still reads as base58, and its Rich renderer hides the real error, so
-      # the run reads as a contract break.
+      # calimero-client-py 0.6.37 ships an sdist ONLY (0.7.0 is the first with a
+      # wheel), so every uncached job compiles a Rust wheel — ~70-90s measured.
+      # Pinning to 0.6.37 makes that cost permanent until merobox catches up, so
+      # cache it: verified elsewhere at 69.6s cold to 0.23s warm.
+      - name: Cache the pip wheel build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-merobox-0.6.74-clientpy-0.6.37-${{ runner.os }}
+
+      # BOTH pinned, exactly. `merobox>=0.6.69` pins NOTHING: merobox declares
+      # `calimero-client-py>=0.6.37`, so pip is free to take a newer one — and
+      # client-py 0.7.0 (published 2026-09-02 11:46 UTC) dropped the `metadata`
+      # kwarg that merobox 0.6.74 still passes to `install_dev_application`.
+      # This job passed twice on 0.6.74 + 0.6.37 at 09:30 and 09:41, then failed
+      # on the merge commit at 12:46 with `TypeError: got an unexpected keyword
+      # argument 'metadata'` — same merobox, same node image, same wasm. Only the
+      # transitive dep moved.
+      #
+      # 0.6.37 is not "the newest that works": it is the newest that existed when
+      # merobox 0.6.74 was built (0.6.74 shipped 09:04, 0.6.38 at 11:26), which is
+      # the pairing rule that keeps holding. Bump them together, never one alone.
       - name: Install merobox
         run: |
           python -m pip install --upgrade pip
-          pip install 'merobox>=0.6.69'
+          pip install 'merobox==0.6.74' 'calimero-client-py==0.6.37'
           merobox --version
 
       # Download the published curb bundle (.mpk = gzip tar of app.wasm + manifest)
