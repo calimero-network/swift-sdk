@@ -22,18 +22,14 @@ name: Merobox Chat Sync (curb)
 # different model, so the call shapes in chat-sync-two-node.yml do not apply to
 # it. Pointing this at that package is a port, not a rename.
 #
-# So it no longer runs on every master push, where it burned ~2.5 minutes to
-# report an opaque `IndexError: list index out of range` from the version
-# lookup. It is dispatch-only until someone ports it, and it now says why it
-# stopped instead of crashing. The gating cross-node signal is
-# merobox-sync.yml, which does not depend on any published app.
+# So it is now DISPATCH-ONLY. It used to run on every master push and on PRs
+# touching the harness, where it burned ~2.5 minutes to report an opaque
+# `IndexError: list index out of range` from the version lookup, and showed as a
+# red check on PRs that had nothing to do with it. A check that cannot pass
+# should not be on the board: it now says why it stopped when someone asks for
+# it, and stays out of the way until the port lands. The gating cross-node
+# signal is merobox-sync.yml, which depends on no published app.
 on:
-  pull_request:
-    branches:
-      - master
-    paths:
-      - 'ci/merobox/chat-sync-two-node.yml'
-      - '.github/workflows/merobox-chat-sync.yml'
   workflow_dispatch:
     inputs:
       merod_image:
