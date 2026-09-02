@@ -9,6 +9,11 @@
 #       - NSAppTransportSecurity  → allow HTTP (iOS blocks cleartext by default)
 #       - NSLocalNetworkUsageDescription → the iOS 14+ local-network permission
 #       - DefaultNodeURL          → pre-fills the login field with your Mac's LAN URL
+#     project.yml is RESTORED when this script exits (xcodegen has already read
+#     it, so the generated project keeps the LAN URL). A LAN IP left in the
+#     committed spec points every simulator run at a dead address — it is what
+#     broke both iOS E2E jobs. Re-running plain `xcodegen generate` afterwards
+#     gives you a localhost build again; re-run this script for a device one.
 #   • runs xcodegen, auto-detects your connected iPhone + your Mac's LAN IP
 #   • builds with automatic signing (-allowProvisioningUpdates) and installs to
 #     the device via devicectl, then launches it
@@ -188,6 +193,27 @@ LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/nu
 ok "Mac LAN IP: ${LAN_IP}  →  node URL for the phone: ${BOLD}${NODE_URL}${RESET}"
 
 # ---- patch project.yml (ATS + local-network + DefaultNodeURL) --------------
+# The patch below bakes THIS Mac's LAN IP into the committed spec, and the
+# generated .xcodeproj is gitignored while project.yml is not — so a run left
+# `DefaultNodeURL: "http://192.168.1.5:4011"` in a commit, and every simulator
+# run of AppE2ETests / ChatMultiUserTests afterwards pointed the app at an
+# address that does not exist on a CI runner. Both iOS E2E jobs failed on it for
+# five weeks, reported as "did not reach explorer".
+#
+# So: restore project.yml on the way out, however we leave. xcodegen has already
+# read it by then, so the generated project keeps the LAN URL and the working
+# tree keeps none of it.
+PROJECT_YML="$APP_DIR/project.yml"
+PROJECT_YML_BACKUP="$(mktemp -t project.yml)"
+cp "$PROJECT_YML" "$PROJECT_YML_BACKUP"
+restore_project_yml() {
+  if [ -f "$PROJECT_YML_BACKUP" ]; then
+    cp "$PROJECT_YML_BACKUP" "$PROJECT_YML"
+    rm -f "$PROJECT_YML_BACKUP"
+  fi
+}
+trap restore_project_yml EXIT
+
 step "Patching ${APP_DIR}/project.yml for LAN/HTTP access"
 NODE_URL="$NODE_URL" BUNDLE_ID="$BUNDLE_ID" python3 - "$APP_DIR/project.yml" <<'PY'
 import os, re, sys

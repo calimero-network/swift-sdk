@@ -14,6 +14,25 @@ import XCTest
 ///
 /// Requires two live nodes + registry; excluded from the mock CI (ui.yml).
 final class ChatMultiUserTests: XCTestCase {
+    /// The two nodes chat-multi-e2e.sh boots. Every role names its own node:
+    /// `ExplorerUI` adopts the Info.plist `DefaultNodeURL` over the field's
+    /// default on every launch, so a role that does not pass `E2E_NODE` talks to
+    /// whatever that key happens to hold. Only the guest used to pass it, and
+    /// the host and verify roles silently followed a stale LAN IP baked into the
+    /// committed spec — the host role failed first, so the run never got far
+    /// enough to show that the guest was fine.
+    private static let hostNodeURL = "http://localhost:4001"  // node A
+    private static let guestNodeURL = "http://localhost:4011"  // node B
+
+    /// A fresh app handle pointed at `node`, plus any extra launch env.
+    private func launch(node: String, env: [String: String] = [:]) -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchEnvironment["E2E_NODE"] = node
+        for (k, v) in env { app.launchEnvironment[k] = v }
+        app.launch()
+        return app
+    }
+
     private func type(_ app: XCUIApplication, _ id: String, _ text: String) {
         let f = app.textFields[id].exists ? app.textFields[id] : app.secureTextFields[id]
         XCTAssertTrue(f.waitForExistence(timeout: 5), "\(id) missing")
@@ -31,7 +50,11 @@ final class ChatMultiUserTests: XCTestCase {
         type(app, "passwordField", "dev-password")
         app.buttons["loginButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         dismissSavePasswordPrompt(app)
-        XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "no explorer")
+        XCTAssertTrue(
+            app.buttons["openChat"].waitForExistence(timeout: 20),
+            "no explorer — app error: "
+                + (app.staticTexts["loginError"].exists
+                    ? app.staticTexts["loginError"].label : "<none shown>"))
     }
 
     /// Dismiss the SpringBoard "Save Password?" sheet iOS pops after the password
@@ -75,8 +98,8 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 1. Host: create space + channel, copy invite, post a message.
     func testHostCreateInviteAndPost() throws {
-        let app = XCUIApplication()
-        app.launch()
+        try AppE2ETests.skipUnlessChatAppIsPublished()
+        let app = launch(node: Self.hostNodeURL)
         login(app)
         tapButton(app, "openChat")
         if app.buttons["installChat"].waitForExistence(timeout: 8) { tapButton(app, "installChat") }
@@ -111,12 +134,10 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 3. Guest: auto-join via E2E_JOIN (invite from pasteboard), see host msg, reply.
     func testGuestJoinAndReply() throws {
-        let app = XCUIApplication()
+        try AppE2ETests.skipUnlessChatAppIsPublished()
         let invite = UIPasteboard.general.string ?? ""
         XCTAssertFalse(invite.isEmpty, "no invite on the pasteboard")
-        app.launchEnvironment["E2E_JOIN"] = invite
-        app.launchEnvironment["E2E_NODE"] = "http://localhost:4011"  // guest talks to node B
-        app.launch()
+        let app = launch(node: Self.guestNodeURL, env: ["E2E_JOIN": invite])
         login(app)
         tapButton(app, "openChat")
         // E2E_JOIN hook auto-installs + joins; wait for the shared space, then open.
@@ -129,8 +150,8 @@ final class ChatMultiUserTests: XCTestCase {
 
     // 4. Host: the guest's reply should sync back.
     func testHostSeesReply() throws {
-        let app = XCUIApplication()
-        app.launch()
+        try AppE2ETests.skipUnlessChatAppIsPublished()
+        let app = launch(node: Self.hostNodeURL)
         login(app)
         tapButton(app, "openChat")
         openChannel(app, space: "shared", channel: "general", timeout: 30)

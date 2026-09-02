@@ -22,7 +22,15 @@ targets:
       path: Sources/Generated-Info.plist
       properties:
         UILaunchScreen: {}
-        DefaultNodeURL: "http://192.168.1.5:4011"
+        # The node a fresh launch points at. It MUST stay a loopback URL: the
+        # simulator shares the host's network, so this is the node the e2e
+        # harnesses boot, and `ExplorerUI` adopts this value over the field's
+        # own default on every launch. generate-ios.sh rewrites it to the Mac's
+        # LAN IP for a physical-device install (a phone's "localhost" is the
+        # phone) and restores this file afterwards — a committed LAN IP points
+        # every simulator run at an address that does not exist, which is how
+        # both iOS E2E jobs failed for five weeks with "did not reach explorer".
+        DefaultNodeURL: "http://localhost:4001"
         NSLocalNetworkUsageDescription: "Connect to a Calimero node running on your Mac over the local network for development."
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
