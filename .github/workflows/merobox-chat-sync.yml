@@ -14,10 +14,20 @@ name: Merobox Chat Sync (curb)
 # outage shouldn't redden master. The node image itself is now pinned to
 # ci/core-version rather than tracking `edge`. The self-contained kv_store sync check (merobox-sync.yml) is the
 # gating signal; this one is the real-app proof.
+#
+# ⚠️ CURRENTLY CANNOT PASS. `com.calimero.curb` is no longer published on
+# apps.calimero.network — the registry answers `[]` for it, and mero-chat was
+# abandoned on 2026-08-19. What is there now is `com.calimero.chat` 3.1.1
+# ("Mero Chat v2 — group-based context management"), a different contract with a
+# different model, so the call shapes in chat-sync-two-node.yml do not apply to
+# it. Pointing this at that package is a port, not a rename.
+#
+# So it no longer runs on every master push, where it burned ~2.5 minutes to
+# report an opaque `IndexError: list index out of range` from the version
+# lookup. It is dispatch-only until someone ports it, and it now says why it
+# stopped instead of crashing. The gating cross-node signal is
+# merobox-sync.yml, which does not depend on any published app.
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
@@ -88,8 +98,26 @@ jobs:
           set -euo pipefail
           VER="${CURB_VERSION}"
           if [ -z "$VER" ]; then
+            # Resolve the newest published version. An UNPUBLISHED package is the
+            # expected failure here, not an exceptional one, so say so rather
+            # than letting `[0]` raise IndexError three lines from the cause.
             VER=$(curl -sfL "${REGISTRY}/api/v2/bundles?package=${PACKAGE}" \
-              | python3 -c "import sys,json; b=json.load(sys.stdin); print(sorted([x['appVersion'] for x in (b if isinstance(b,list) else b.get('data',b))], reverse=True)[0])")
+              | python3 -c "import sys,json; b=json.load(sys.stdin); v=sorted([x['appVersion'] for x in (b if isinstance(b,list) else b.get('data',b))], reverse=True); print(v[0] if v else '')")
+          fi
+          if [ -z "$VER" ]; then
+            {
+              echo "## ${PACKAGE} is not published"
+              echo ""
+              echo "\`${REGISTRY}\` has no versions of \`${PACKAGE}\`, so there is"
+              echo "nothing for this check to install. mero-chat was abandoned on"
+              echo "2026-08-19; the registry now serves \`com.calimero.chat\` instead,"
+              echo "which is a different contract with a different model."
+              echo ""
+              echo "Porting this scenario (and the iOS sample app's chat feature) to"
+              echo "that package is real work, not a rename."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::${PACKAGE} is no longer published on ${REGISTRY} — this check cannot run until it is ported to com.calimero.chat"
+            exit 1
           fi
           echo "curb version: $VER"
           echo "CURB_RESOLVED=$VER" >> "$GITHUB_ENV"
