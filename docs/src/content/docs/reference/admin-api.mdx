@@ -24,6 +24,7 @@ shared [`HttpClient`](/reference/error-model/#transport); **every method is
 | Method | Endpoint |
 | --- | --- |
 | `healthCheck() -> HealthStatus` | `GET /health` |
+| `readinessCheck() -> HealthStatus` | `GET /ready` |
 | `isAuthed() -> AdminAuthStatus` | `GET /is-authed` |
 
 ## Applications
@@ -67,7 +68,7 @@ strings ascending.
 | `updateContextApplication(_ contextId: String, request: UpdateContextApplicationRequest)` | `POST /contexts/{contextId}/application` |
 | `syncContext(_ contextId: String? = nil)` | `POST /contexts/sync/{contextId?}` |
 | `resyncContext(_ contextId: String, request: ResyncContextRequest = .init()) -> ResyncContextResponseData` | `POST /contexts/{contextId}/resync` |
-| `inviteSpecializedNode(_ request: InviteSpecializedNodeRequest) -> InviteSpecializedNodeResponseData` | `POST /contexts/invite-specialized-node` |
+| `performIntent(_ contextId: String, request: PerformIntentRequest) -> PerformIntentResponseData` | `POST /contexts/{contextId}/intents` |
 
 ### Context identity
 
@@ -76,6 +77,30 @@ strings ascending.
 | `generateContextIdentity() -> GenerateContextIdentityResponseData` | `POST /identity/context` |
 | `getContextIdentities(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities` |
 | `getContextIdentitiesOwned(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities-owned` |
+
+## Node & account
+
+core 0.11.0-rc.21 gave a node one identity, one signing key and one root, and
+rc.23 deleted the route that asked a *namespace* who it was. rc.28 then moved
+device pairing off the namespace as well: a device pairs to an **account** once
+and is linked into namespaces afterwards. Revocation stayed per-namespace,
+because that is where the group key gets rotated.
+
+⚠️ Since rc.27 removed base58, an **account id** and a **device key** are both 64
+hex characters. `getNodeIdentity()` is the only thing that maps one to the
+other, and it matters: every authorization subject is an account, while group
+membership listings report devices. A device key handed to a role grant succeeds
+and authorizes nobody.
+
+| Method | Endpoint |
+| --- | --- |
+| `getNodeIdentity() -> NodeIdentity` | `GET /identity` |
+| `listAccountDevices() -> [AccountDeviceEntry]` | `GET /account/devices` |
+| `listAccountApplications() -> [AccountApplicationEntry]` | `GET /account/applications` |
+| `accountPairInit(_ request: AccountPairInitRequest) -> PairDeviceInitResponseData` | `POST /account/pair-init` |
+| `accountPairComplete(_ request: AccountPairCompleteRequest) -> PairDeviceCompleteResponseData` | `POST /account/pair-complete` |
+| `relinkDevice(_ deviceId: String, request: RelinkDeviceRequest = .init()) -> RelinkDeviceResponseData` | `POST /account/devices/{deviceId}/relink` |
+| `revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) -> RevokeDeviceResponseData` | `POST /namespaces/{namespaceId}/account/revoke` |
 
 ## Blobs
 
@@ -110,7 +135,6 @@ strings ascending.
 | --- | --- |
 | `listNamespaces() -> [Namespace]` | `GET /namespaces` |
 | `getNamespace(_ namespaceId: String) -> Namespace` | `GET /namespaces/{namespaceId}` |
-| `getNamespaceIdentity(_ namespaceId: String) -> NamespaceIdentity` | `GET /namespaces/{namespaceId}/identity` |
 | `listNamespacesForApplication(_ applicationId: String) -> [Namespace]` | `GET /namespaces/for-application/{applicationId}` |
 | `createNamespace(_ request: CreateNamespaceRequest) -> CreateNamespaceResponseData` | `POST /namespaces` |
 | `deleteNamespace(_ namespaceId: String, request: DeleteNamespaceRequest? = nil) -> DeleteNamespaceResponseData` | `DELETE /namespaces/{namespaceId}` |
@@ -119,6 +143,7 @@ strings ascending.
 | `leaveNamespace(_ namespaceId: String, request: [String: JSONValue]? = nil)` | `POST /namespaces/{namespaceId}/leave` |
 | `createGroupInNamespace(_ namespaceId: String, request: … = nil) -> CreateGroupInNamespaceResponseData` | `POST /namespaces/{namespaceId}/groups` |
 | `listNamespaceGroups(_ namespaceId: String) -> [SubgroupEntry]` | `GET /namespaces/{namespaceId}/groups` |
+| `admitJoin(_ namespaceId: String, request: AdmitJoinRequest) -> AdmitJoinResponseData` | `POST /namespaces/{namespaceId}/admit` |
 
 ## Group management
 
@@ -130,6 +155,7 @@ strings ascending.
 | `getGroupInfo(_ groupId: String) -> GroupInfo` | `GET /groups/{groupId}` |
 | `deleteGroup(_ groupId: String, request: DeleteGroupRequest? = nil) -> DeleteGroupResponseData` | `DELETE /groups/{groupId}` |
 | `listGroupMembers(_ groupId: String) -> ListGroupMembersResponseData` | `GET /groups/{groupId}/members` |
+| `listMemberDevices(_ groupId: String, offset: Int? = nil, limit: Int? = nil) -> [MemberDevicesEntry]` | `GET /groups/{groupId}/member-devices` |
 | `listGroupContexts(_ groupId: String) -> [GroupContextEntry]` | `GET /groups/{groupId}/contexts` |
 | `addGroupMembers(_ groupId: String, request: AddGroupMembersRequest)` | `POST /groups/{groupId}/members` |
 | `removeGroupMembers(_ groupId: String, request: RemoveGroupMembersRequest)` | `POST /groups/{groupId}/members/remove` |
@@ -174,12 +200,11 @@ strings ascending.
 | `issueOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-ownership-proof` |
 | `issueNamespaceOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-namespace-ownership-proof` |
 
-### Sync, signing, upgrades & migration
+### Sync, upgrades & migration
 
 | Method | Endpoint |
 | --- | --- |
 | `syncGroup(_ groupId: String, request: … = nil) -> SyncGroupResponseData` | `POST /groups/{groupId}/sync` |
-| `registerGroupSigningKey(_ groupId: String, request:) -> RegisterGroupSigningKeyResponseData` | `POST /groups/{groupId}/signing-key` |
 | `upgradeGroup(_ groupId: String, request: UpgradeGroupRequest) -> UpgradeGroupResponseData` | `POST /groups/{groupId}/upgrade` |
 | `getGroupUpgradeStatus(_ groupId: String) -> GroupUpgradeStatus?` | `GET /groups/{groupId}/upgrade/status` |
 | `retryGroupUpgrade(_ groupId: String, request: … = nil) -> RetryGroupUpgradeResponseData` | `POST /groups/{groupId}/upgrade/retry` |

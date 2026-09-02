@@ -138,6 +138,13 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "healthCheck")
     }
 
+    /// Whether the node is ready to serve, as distinct from merely alive.
+    /// `healthCheck` answers as soon as the process is listening.
+    public func readinessCheck() async throws -> HealthStatus {
+        let resp: ApiResponse<HealthStatus> = try await http.get("/admin-api/ready")
+        return try unwrap(resp, "readinessCheck")
+    }
+
     public func isAuthed() async throws -> AdminAuthStatus {
         return try await http.get("/admin-api/is-authed")
     }
@@ -239,6 +246,21 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "listApplicationVersions")
     }
 
+    /// The application's ABI as `cargo mero build` emitted it.
+    ///
+    /// `serviceName` selects one service out of a multi-service bundle; omit it
+    /// for a single-wasm app.
+    public func getApplicationAbi(
+        _ applicationId: String, serviceName: String? = nil
+    ) async throws -> ApplicationAbi {
+        var path = "/admin-api/applications/\(applicationId)/abi"
+        if let serviceName {
+            path += "?service_name=\(serviceName.percentEncoded())"
+        }
+        let resp: ApiResponse<ApplicationAbi> = try await http.get(path)
+        return try unwrap(resp, "getApplicationAbi")
+    }
+
     // MARK: - Package Management
 
     public func listPackages() async throws -> ListPackagesResponseData {
@@ -302,6 +324,18 @@ public struct AdminApi: Sendable {
 
     // MARK: - Context Identity
 
+    /// Who this node is: its account, its device, and its keys.
+    ///
+    /// The replacement for the per-namespace identity route core deleted in
+    /// 0.11.0-rc.23 (core#3522). Since rc.27 an account id and a device key are
+    /// both 64 hex characters, so this response is the only thing that maps one
+    /// to the other — and handing a device key where an account belongs (a role
+    /// grant, an `admitters` entry) succeeds and authorizes nobody.
+    public func getNodeIdentity() async throws -> NodeIdentity {
+        let resp: ApiResponse<NodeIdentity> = try await http.get("/admin-api/identity")
+        return try unwrap(resp, "getNodeIdentity")
+    }
+
     public func generateContextIdentity() async throws -> GenerateContextIdentityResponseData {
         let resp: ApiResponse<GenerateContextIdentityResponseData> = try await http.post(
             "/admin-api/identity/context", json: EmptyObject())
@@ -363,12 +397,14 @@ public struct AdminApi: Sendable {
         return ResyncContextResponseData(contextId: contextId, resyncStarted: true)
     }
 
-    public func inviteSpecializedNode(
-        _ request: InviteSpecializedNodeRequest
-    ) async throws -> InviteSpecializedNodeResponseData {
-        let resp: ApiResponse<InviteSpecializedNodeResponseData> = try await http.post(
-            "/admin-api/contexts/invite-specialized-node", json: request)
-        return try unwrap(resp, "inviteSpecializedNode")
+    /// Run a contract method under a warrant instead of the caller's own
+    /// membership — the write path for a keyholder with no node.
+    public func performIntent(
+        _ contextId: String, request: PerformIntentRequest
+    ) async throws -> PerformIntentResponseData {
+        let resp: ApiResponse<PerformIntentResponseData> = try await http.post(
+            "/admin-api/contexts/\(contextId)/intents", json: request)
+        return try unwrap(resp, "performIntent")
     }
 
     public func updateContextApplication(_ contextId: String, request: UpdateContextApplicationRequest) async throws {
@@ -537,16 +573,6 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "getNamespace")
     }
 
-    public func getNamespaceIdentity(_ namespaceId: String) async throws -> NamespaceIdentity {
-        // Core returns this endpoint flat ({ namespaceId, publicKey }); tolerate both.
-        struct Wire: Codable, Sendable {
-            let namespaceId: String?; let publicKey: String?; let data: NamespaceIdentity?
-        }
-        let wire: Wire = try await http.get("/admin-api/namespaces/\(namespaceId)/identity")
-        if let d = wire.data { return d }
-        return NamespaceIdentity(namespaceId: wire.namespaceId ?? "", publicKey: wire.publicKey ?? "")
-    }
-
     public func listNamespacesForApplication(_ applicationId: String) async throws -> ListNamespacesResponseData {
         let resp: ApiResponse<ListNamespacesResponseData> = try await http.get(
             "/admin-api/namespaces/for-application/\(applicationId)")
@@ -592,6 +618,88 @@ public struct AdminApi: Sendable {
             "/admin-api/namespaces/\(namespaceId)/join", method: .post, body: request, timeout: 65)
         let resp: ApiResponse<JoinNamespaceResponseData> = try await http.send(req)
         return try unwrap(resp, "joinNamespace")
+    }
+
+    /// Carry a joiner's signed membership op onto the DAG, as a node the
+    /// invitation named in its `admitters`.
+    ///
+    /// `published` says the op reached the namespace topic — not that the join
+    /// landed, which happens when peers apply it and this node neither performs
+    /// nor waits for.
+    ///
+    /// Requires core 0.11.0-rc.29 or newer.
+    public func admitJoin(
+        _ namespaceId: String, request: AdmitJoinRequest
+    ) async throws -> AdmitJoinResponseData {
+        let resp: ApiResponse<AdmitJoinResponseData> = try await http.post(
+            "/admin-api/namespaces/\(namespaceId)/admit", json: request)
+        return try unwrap(resp, "admitJoin")
+    }
+
+    /// Revoke one of this account's devices in a namespace, rotating the group
+    /// key where the device held one.
+    public func revokeDevice(
+        _ namespaceId: String, request: RevokeDeviceRequest
+    ) async throws -> RevokeDeviceResponseData {
+        let resp: ApiResponse<RevokeDeviceResponseData> = try await http.post(
+            "/admin-api/namespaces/\(namespaceId)/account/revoke", json: request)
+        return try unwrap(resp, "revokeDevice")
+    }
+
+    // MARK: - Account (devices, applications, pairing)
+    //
+    // These moved in core 0.11.0-rc.28: pairing used to be namespace-scoped
+    // (`/namespaces/{id}/account/pair-*`) and is now account-scoped, because a
+    // device is paired to an account once and then linked into namespaces.
+    // `revokeDevice` above is the one that stayed per-namespace — revocation is
+    // where the group key gets rotated.
+
+    /// Begin pairing a new device to this account. The response's
+    /// `confirmationCode` is shown on both devices so a person can compare them.
+    public func accountPairInit(
+        _ request: AccountPairInitRequest
+    ) async throws -> PairDeviceInitResponseData {
+        let resp: ApiResponse<PairDeviceInitResponseData> = try await http.post(
+            "/admin-api/account/pair-init", json: request)
+        return try unwrap(resp, "accountPairInit")
+    }
+
+    /// Finish pairing, returning the new device's credential.
+    public func accountPairComplete(
+        _ request: AccountPairCompleteRequest
+    ) async throws -> PairDeviceCompleteResponseData {
+        let resp: ApiResponse<PairDeviceCompleteResponseData> = try await http.post(
+            "/admin-api/account/pair-complete", json: request)
+        return try unwrap(resp, "accountPairComplete")
+    }
+
+    /// This account's devices, with what each is linked into.
+    public func listAccountDevices() async throws -> [AccountDeviceEntry] {
+        // Un-enveloped: `{ devices: [...] }`.
+        let response: AccountDevicesResponse = try await http.get("/admin-api/account/devices")
+        return response.devices
+    }
+
+    /// The applications this account holds, and the namespaces each appears in.
+    public func listAccountApplications() async throws -> [AccountApplicationEntry] {
+        // Un-enveloped: `{ applications: [...] }`.
+        let response: AccountApplicationsResponse = try await http.get(
+            "/admin-api/account/applications")
+        return response.applications
+    }
+
+    /// Re-link an already-paired device into an account's namespaces — the
+    /// repair path when a device holds a credential but not the group keys.
+    ///
+    /// `skipped` names the namespaces it deliberately left alone, each with a
+    /// reason; a relink that "did nothing" is usually a full `skipped` list, not
+    /// a failure.
+    public func relinkDevice(
+        _ deviceId: String, request: RelinkDeviceRequest = RelinkDeviceRequest()
+    ) async throws -> RelinkDeviceResponseData {
+        let resp: ApiResponse<RelinkDeviceResponseData> = try await http.post(
+            "/admin-api/account/devices/\(deviceId)/relink", json: request)
+        return try unwrap(resp, "relinkDevice")
     }
 
     public func createGroupInNamespace(
@@ -640,6 +748,25 @@ public struct AdminApi: Sendable {
             resp = try await http.delete("/admin-api/groups/\(groupId)", json: EmptyObject())
         }
         return try unwrap(resp, "deleteGroup")
+    }
+
+    /// Every member account in the group, and the devices each one holds.
+    ///
+    /// The listing that makes the account/device split usable. `listGroupMembers`
+    /// reports device keys; every authorization subject is an account; and since
+    /// rc.27 removed base58 the two are the same 64-hex shape, so nothing but
+    /// provenance separates them. This is the mapping.
+    public func listMemberDevices(
+        _ groupId: String, offset: Int? = nil, limit: Int? = nil
+    ) async throws -> [MemberDevicesEntry] {
+        var query: [String] = []
+        if let offset { query.append("offset=\(offset)") }
+        if let limit { query.append("limit=\(limit)") }
+        var path = "/admin-api/groups/\(groupId)/member-devices"
+        if !query.isEmpty { path += "?" + query.joined(separator: "&") }
+        // Un-enveloped: core returns `{ members: [...] }` directly.
+        let response: ListMemberDevicesResponseData = try await http.get(path)
+        return response.members
     }
 
     public func listGroupMembers(_ groupId: String) async throws -> ListGroupMembersResponseData {
@@ -792,14 +919,6 @@ public struct AdminApi: Sendable {
             try? await syncContext(ctx.contextId)
         }
         return contexts
-    }
-
-    public func registerGroupSigningKey(
-        _ groupId: String, request: RegisterGroupSigningKeyRequest
-    ) async throws -> RegisterGroupSigningKeyResponseData {
-        let resp: ApiResponse<RegisterGroupSigningKeyResponseData> = try await http.post(
-            "/admin-api/groups/\(groupId)/signing-key", json: request)
-        return try unwrap(resp, "registerGroupSigningKey")
     }
 
     public func upgradeGroup(_ groupId: String, request: UpgradeGroupRequest) async throws -> UpgradeGroupResponseData {

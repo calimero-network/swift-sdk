@@ -51,10 +51,13 @@ let mero = Mero(config: MeroConfig(
 
 ```swift
 let tokens = try await mero.authenticate(
-    Credentials(username: "alice", password: "s3cr3t",
-                bootstrapSecret: "…") // only needed on a fresh node's first login
+    Credentials(username: "alice", password: "s3cr3t")
 )
 ```
+
+These are the admin credentials the node was initialised with. There is no
+first-login setup code: core 0.11.0-rc.17 moved admin provisioning to
+`merod init`, so `Credentials` has exactly two fields.
 
 **Hosted SSO** (deep-link, matches the web redirect flow) — open the URL in
 `ASWebAuthenticationSession`, then feed the callback back in:
@@ -155,7 +158,6 @@ swift run MeroExample                       # offline demo (SSO URL, capabilitie
 
 MERO_NODE_URL=http://localhost:4001 \
 MERO_USERNAME=dev MERO_PASSWORD=dev-password \
-MERO_BOOTSTRAP_SECRET=… \
 swift run MeroExample                       # full online flow: auth → identity → contexts → rpc → logout
 ```
 

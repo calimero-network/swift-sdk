@@ -76,16 +76,10 @@ public actor Mero {
             throw MeroError.noCredentials
         }
 
-        // First-login setup code (core#3221): explicit credential wins; there is
-        // no env fallback on iOS. Omitted entirely when absent, making the request
-        // byte-identical to the pre-rc.14 shape.
-        var providerData: [String: JSONValue] = [
+        let providerData: [String: JSONValue] = [
             "username": .string(creds.username),
             "password": .string(creds.password),
         ]
-        if let secret = creds.bootstrapSecret, !secret.isEmpty {
-            providerData["bootstrap_secret"] = .string(secret)
-        }
 
         let request = TokenRequest(
             authMethod: "user_password",
@@ -107,6 +101,26 @@ public actor Mero {
             self.tokenData = bundle
             tokenStore.setTokens(bundle)
             return bundle
+        } catch let error as MeroError {
+            // Only the node REFUSING the credentials means the credentials are
+            // wrong. Flattening every failure into `authenticationFailed` told
+            // the caller to check its password when the node was unreachable or
+            // broken — and that mislabel is what let the sample app's e2e sit
+            // pointed at a nonexistent host for five weeks, reported as
+            // "check your username and password".
+            //
+            // So: a 4xx that is about authentication becomes
+            // `authenticationFailed`. Everything else stays what it is, and the
+            // caller can tell "wrong password" from "no node there".
+            switch error {
+            case .http(let http) where (400..<500).contains(http.status):
+                throw MeroError.authenticationFailed(error.localizedDescription)
+            case .http, .network, .decoding, .authRevoked, .emptyResponse, .rpc,
+                .authenticationFailed, .noCredentials, .noRefreshToken:
+                throw error
+            }
+        } catch let error as URLError {
+            throw MeroError.network(error.localizedDescription)
         } catch {
             throw MeroError.authenticationFailed(error.localizedDescription)
         }

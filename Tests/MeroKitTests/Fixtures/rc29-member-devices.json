@@ -1,0 +1,13 @@
+{
+  "members": [
+    {
+      "account": "75362ad461397b631e1876c469d45888840d8978cdeb19f7faf9dee52058bdc5",
+      "devices": [
+        {
+          "deviceId": "a6ab032973d5f5462402047ba665ae9b01a7918a04b6b672bc2f96103f3a1a23",
+          "signingKey": "a28cd63eed56c420d4ae7eeafe3079be788c30936ec84b211dc77b120daa05f0"
+        }
+      ]
+    }
+  ]
+}

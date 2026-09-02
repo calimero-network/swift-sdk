@@ -65,8 +65,9 @@ from adding the package to your first authenticated contract call.
    ))
    ```
 
-2. **Authenticate** with a username and password. `bootstrapSecret` is only
-   needed for the very first login on a fresh node.
+2. **Authenticate** with a username and password — the admin credentials the
+   node was initialised with. There is no first-login setup code: core
+   0.11.0-rc.17 creates the admin at `merod init`.
 
    ```swift
    let tokens = try await mero.authenticate(

@@ -34,7 +34,7 @@ public final class MeroClient: ObservableObject {
 
     /// Log in with username/password against `nodeURL`. Publishes auth state or an error.
     public func login(
-        nodeURL nodeURLString: String, username: String, password: String, bootstrapSecret: String? = nil
+        nodeURL nodeURLString: String, username: String, password: String
     ) async {
         errorMessage = nil
 
@@ -56,8 +56,7 @@ public final class MeroClient: ObservableObject {
 
         do {
             _ = try await client.authenticate(
-                Credentials(username: username, password: password, bootstrapSecret: bootstrapSecret)
-            )
+                Credentials(username: username, password: password))
             self.nodeURL = nodeURLString
             self.username = username
             self.isAuthenticated = true

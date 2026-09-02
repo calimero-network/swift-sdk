@@ -47,7 +47,7 @@ final class AuthenticateTests: XCTestCase {
         let store = MemoryTokenStore()
         let sdk = mero(store: store)
         let tokens = try await sdk.authenticate(
-            Credentials(username: "alice", password: "pw", bootstrapSecret: "SECRET"))
+            Credentials(username: "alice", password: "pw"))
 
         XCTAssertEqual(tokens.accessToken, "ACCESS")
         XCTAssertEqual(tokens.refreshToken, "REFRESH")
@@ -61,22 +61,78 @@ final class AuthenticateTests: XCTestCase {
         let provider = try XCTUnwrap(obj["provider_data"] as? [String: Any])
         XCTAssertEqual(provider["username"] as? String, "alice")
         XCTAssertEqual(provider["password"] as? String, "pw")
-        XCTAssertEqual(provider["bootstrap_secret"] as? String, "SECRET")
+        // Exactly two keys. core 0.11.0-rc.17 deleted the first-login setup
+        // code, and rc.29 keeps parsing `bootstrap_secret` only to discard it —
+        // so sending one is dead weight that also implies a flow that no longer
+        // exists.
+        XCTAssertEqual(Set(provider.keys), ["username", "password"])
     }
 
-    func testAuthenticateOmitsBootstrapWhenAbsent() async throws {
-        let captured = CapturedBody()
-        MockURLProtocol.setHandler { req in
-            captured.value = bodyString(req)
-            return .init(
-                status: 200, headers: [:],
-                body: json(["data": ["access_token": "A", "refresh_token": "R"]]))
+    /// A login failure must keep saying WHICH failure it was.
+    ///
+    /// `authenticate` used to catch everything and rethrow
+    /// `authenticationFailed`, so an unreachable node told the caller to check
+    /// its password. That mislabel is what let a sample app spend five weeks
+    /// pointed at a LAN address no CI runner has, reported as bad credentials.
+    func testATransportFailureIsNotReportedAsBadCredentials() async {
+        MockURLProtocol.setHandler { _ in
+            .init(status: 503, headers: [:], body: Data())
         }
         let sdk = mero()
-        _ = try await sdk.authenticate(Credentials(username: "bob", password: "pw"))
-        let obj = try JSONSerialization.jsonObject(with: Data((captured.value ?? "").utf8)) as? [String: Any]
-        let provider = obj?["provider_data"] as? [String: Any]
-        XCTAssertNil(provider?["bootstrap_secret"])
+        do {
+            _ = try await sdk.authenticate(Credentials(username: "bob", password: "pw"))
+            XCTFail("expected a throw")
+        } catch let error as MeroError {
+            // A 5xx is the node failing, not a credential being wrong. It stays
+            // an `.http` so the caller can see the status and decide to retry.
+            guard case .http(let http) = error, http.status == 503 else {
+                return XCTFail("a 503 must not become authenticationFailed; got \(error)")
+            }
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
+    }
+
+    /// The actual iOS symptom: nothing listening at the URL. It has to read as
+    /// "cannot reach the node", not as a credential problem, because that is
+    /// what a person acts on differently.
+    func testAnUnreachableNodeIsNotReportedAsBadCredentials() async {
+        // A real connection to a port nothing listens on, so this exercises the
+        // transport rather than a stub's idea of one. Port 1 refuses instantly.
+        let sdk = Mero(
+            config: MeroConfig(
+                baseURL: URL(string: "http://127.0.0.1:1")!, timeout: 2,
+                tokenStore: MemoryTokenStore()))
+        do {
+            _ = try await sdk.authenticate(Credentials(username: "bob", password: "pw"))
+            XCTFail("expected a throw")
+        } catch let error as MeroError {
+            guard case .network = error else {
+                return XCTFail(
+                    "an unreachable host must not become authenticationFailed; got \(error)")
+            }
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
+    }
+
+    func testARejectedPasswordStillReportsAuthenticationFailed() async {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 401, headers: ["Content-Type": "application/json"],
+                body: json(["error": "invalid credentials"]))
+        }
+        let sdk = mero()
+        do {
+            _ = try await sdk.authenticate(Credentials(username: "bob", password: "wrong"))
+            XCTFail("expected a throw")
+        } catch let error as MeroError {
+            guard case .authenticationFailed = error else {
+                return XCTFail("a 401 from the node IS an auth failure; got \(error)")
+            }
+        } catch {
+            XCTFail("wrong error type: \(error)")
+        }
     }
 
     func testNoCredentialsThrows() async {
