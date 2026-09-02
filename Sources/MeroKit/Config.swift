@@ -4,18 +4,16 @@ import Foundation
 public struct Credentials: Sendable, Equatable {
     public var username: String
     public var password: String
-    /// First-login setup code (bootstrap secret, core#3221). Since core
-    /// 0.11.0-rc.14 a fresh node only mints its first root key when the login
-    /// presents this out-of-band secret — merod prints it at startup and stores
-    /// it in the node's config.toml (core#3270). Only consulted on the very
-    /// first login of a fresh node; once an account exists the node ignores it,
-    /// so it is always safe to include.
-    public var bootstrapSecret: String?
 
-    public init(username: String, password: String, bootstrapSecret: String? = nil) {
+    // There is no third field. core 0.11.0-rc.17 (core#3276/#3277) deleted the
+    // first-login setup code this type used to carry: the admin account is
+    // created at `merod init` now, so there is no "very first login" state left
+    // for a secret to unlock. core keeps parsing the key only to discard it, and
+    // documenting it as "required on a fresh node" sent people looking for a
+    // value merod no longer prints.
+    public init(username: String, password: String) {
         self.username = username
         self.password = password
-        self.bootstrapSecret = bootstrapSecret
     }
 }
 

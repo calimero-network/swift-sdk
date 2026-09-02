@@ -14,12 +14,13 @@ one — direct credentials and hosted SSO — and the SDK keeps it fresh for you
 ## Direct credentials
 
 For first-party apps, exchange a username and password for a token bundle.
-`bootstrapSecret` is only needed for the very first login on a fresh node.
+These are the admin credentials the node was initialised with — core
+0.11.0-rc.17 creates the admin at `merod init`, so there is no first-login
+setup code.
 
 ```swift
 let tokens = try await mero.authenticate(
-  Credentials(username: "alice", password: "s3cr3t",
-              bootstrapSecret: "…") // only on a fresh node's first login
+  Credentials(username: "alice", password: "s3cr3t")
 )
 let authed = await mero.isAuthenticated   // true
 ```

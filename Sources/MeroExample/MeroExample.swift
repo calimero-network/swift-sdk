@@ -12,8 +12,11 @@ import MeroKit
 //
 //   MERO_NODE_URL=http://localhost:4001 \
 //   MERO_USERNAME=dev MERO_PASSWORD=dev-password \
-//   MERO_BOOTSTRAP_SECRET=some-secret \
 //   swift run MeroExample
+//
+// The username/password are the admin credentials given to `merod init`
+// (core 0.11.0-rc.17 and later create the admin there). There is no bootstrap
+// secret to supply — that flow is gone.
 
 func env(_ key: String) -> String? {
     guard let value = ProcessInfo.processInfo.environment[key], !value.isEmpty else { return nil }
@@ -93,8 +96,7 @@ struct MeroExample {
         section("Authenticate")
         let creds = Credentials(
             username: env("MERO_USERNAME") ?? "dev",
-            password: env("MERO_PASSWORD") ?? "dev-password",
-            bootstrapSecret: env("MERO_BOOTSTRAP_SECRET")
+            password: env("MERO_PASSWORD") ?? "dev-password"
         )
         let tokens = try await mero.authenticate(creds)
         print("authenticated — access token …\(tokens.accessToken.suffix(8)), expires \(tokens.expiresAt)")

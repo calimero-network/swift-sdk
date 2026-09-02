@@ -111,8 +111,9 @@ public struct MeroConfig: Sendable {
 public struct Credentials: Sendable, Equatable {
   public var username: String
   public var password: String
-  public var bootstrapSecret: String?   // only for a fresh node's first login
-  public init(username: String, password: String, bootstrapSecret: String? = nil)
+  // Two fields, deliberately. core 0.11.0-rc.17 moved admin provisioning to
+  // `merod init`, so there is no first-login setup code to carry any more.
+  public init(username: String, password: String)
 }
 ```
 

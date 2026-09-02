@@ -46,6 +46,11 @@ let package = Package(
         .testTarget(
             name: "MeroKitTests",
             dependencies: ["MeroKit", "MeroKitTestSupport"],
+            // Response bodies captured verbatim from a live node at the pinned
+            // core release. Kept as files rather than string literals so they
+            // stay diffable against a re-capture after a core bump — see
+            // Tests/MeroKitTests/Fixtures/README.md.
+            resources: [.copy("Fixtures")],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]

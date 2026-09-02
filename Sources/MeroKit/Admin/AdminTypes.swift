@@ -308,19 +308,6 @@ public struct ContextStorageResponseData: Codable, Sendable {
     public init(sizeInBytes: Int) { self.sizeInBytes = sizeInBytes }
 }
 
-// MARK: - Specialized Node Invite
-
-public struct InviteSpecializedNodeRequest: Codable, Sendable {
-    public var contextId: String
-    public var inviterId: String?
-    public init(contextId: String, inviterId: String? = nil) { self.contextId = contextId; self.inviterId = inviterId }
-}
-
-public struct InviteSpecializedNodeResponseData: Codable, Sendable {
-    public let nonce: String
-    public init(nonce: String) { self.nonce = nonce }
-}
-
 // MARK: - Update Context Application
 
 public struct UpdateContextApplicationRequest: Codable, Sendable {
@@ -467,38 +454,232 @@ public typealias DeleteContextIdentityAliasResponseData = Empty
 
 // MARK: - Shared invitation types
 
+/// The signed body of an invitation.
+///
+/// ## Every field here is covered by `inviterSignature`, so nothing may be lost
+///
+/// The node verifies an invitation by deserialising this JSON back into its own
+/// struct, re-encoding it as borsh, and checking the signature over those bytes.
+/// A field this type does not name is dropped on re-encode, `#[serde(default)]`
+/// fills a zero value on the node, the borsh bytes differ from what the inviter
+/// signed, and the join is refused. That is not a theoretical concern: core's
+/// own source calls out `calimero-client-py` hitting exactly this.
+///
+/// So the members below are the fields worth reading, and `passthrough` carries
+/// everything else **verbatim** — which is what makes a round-trip through this
+/// type safe against a core release that adds one.
 public struct GroupInvitationFromAdmin: Codable, Sendable {
     public var inviterIdentity: [Int]
     public var groupId: [Int]
+    /// Unix seconds. core clamps this to at most 24 hours
+    /// (`MAX_INVITATION_VALIDITY_SECS`) as of 0.11.0-rc.29 — it used to default
+    /// to a year — so a longer `expirationTimestamp` on the request is silently
+    /// lowered rather than honoured.
     public var expirationTimestamp: Int
     public var secretSalt: [Int]
     public var invitedRole: Int?
+    /// Accounts permitted to admit a claim of this invitation, 64 hex each.
+    ///
+    /// As of core 0.11.0-rc.29 this is **never empty in practice**: a caller
+    /// that names nobody gets the group's admins and TEE nodes, so that the
+    /// exposed alternative — claiming by broadcast, which staples the whole
+    /// invitation to a readiness beacon on the namespace topic — stops being
+    /// the path you reach by omission.
+    ///
+    /// Signed, which is the point: an unsigned list is one an attacker rewrites
+    /// to a node of its choosing.
+    public var admitters: [String]
+    /// Fields core sends that this type does not name, kept verbatim so a
+    /// round-trip cannot invalidate the signature. See the type's note.
+    public var passthrough: [String: JSONValue]
+
     public init(
-        inviterIdentity: [Int], groupId: [Int], expirationTimestamp: Int, secretSalt: [Int], invitedRole: Int? = nil
+        inviterIdentity: [Int], groupId: [Int], expirationTimestamp: Int, secretSalt: [Int],
+        invitedRole: Int? = nil, admitters: [String] = [], passthrough: [String: JSONValue] = [:]
     ) {
         self.inviterIdentity = inviterIdentity; self.groupId = groupId
-        self.expirationTimestamp = expirationTimestamp; self.secretSalt = secretSalt; self.invitedRole = invitedRole
+        self.expirationTimestamp = expirationTimestamp; self.secretSalt = secretSalt
+        self.invitedRole = invitedRole; self.admitters = admitters; self.passthrough = passthrough
     }
-    enum CodingKeys: String, CodingKey {
+
+    private enum Key: String {
         case inviterIdentity = "inviter_identity"
         case groupId = "group_id"
         case expirationTimestamp = "expiration_timestamp"
         case secretSalt = "secret_salt"
         case invitedRole = "invited_role"
+        case admitters
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode([String: JSONValue].self)
+        func ints(_ key: Key) throws -> [Int] {
+            guard let array = raw[key.rawValue]?.arrayValue else {
+                throw MeroError.decoding("invitation is missing \(key.rawValue)")
+            }
+            return array.compactMap(\.intValue)
+        }
+        inviterIdentity = try ints(.inviterIdentity)
+        groupId = try ints(.groupId)
+        secretSalt = try ints(.secretSalt)
+        guard let expires = raw[Key.expirationTimestamp.rawValue]?.intValue else {
+            throw MeroError.decoding("invitation is missing expiration_timestamp")
+        }
+        expirationTimestamp = expires
+        invitedRole = raw[Key.invitedRole.rawValue]?.intValue
+        admitters = raw[Key.admitters.rawValue]?.arrayValue?.compactMap(\.stringValue) ?? []
+        let named = Set(
+            [
+                Key.inviterIdentity, .groupId, .expirationTimestamp, .secretSalt, .invitedRole,
+                .admitters,
+            ].map(\.rawValue))
+        passthrough = raw.filter { !named.contains($0.key) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var raw = passthrough
+        raw[Key.inviterIdentity.rawValue] = .array(inviterIdentity.map { .number(Double($0)) })
+        raw[Key.groupId.rawValue] = .array(groupId.map { .number(Double($0)) })
+        raw[Key.expirationTimestamp.rawValue] = .number(Double(expirationTimestamp))
+        raw[Key.secretSalt.rawValue] = .array(secretSalt.map { .number(Double($0)) })
+        if let invitedRole { raw[Key.invitedRole.rawValue] = .number(Double(invitedRole)) }
+        // Absent rather than `[]` when empty, matching core's
+        // `skip_serializing_if = "Vec::is_empty"` — an invitation minted before
+        // the field existed must re-encode without it.
+        if !admitters.isEmpty {
+            raw[Key.admitters.rawValue] = .array(admitters.map { .string($0) })
+        }
+        var container = encoder.singleValueContainer()
+        try container.encode(raw)
     }
 }
 
+/// Where to reach one of an invitation's `admitters`.
+///
+/// Unsigned, like the rest of the envelope's hints: a wrong endpoint costs a
+/// failed dial, because the admitting node still has to appear in the signed
+/// `admitters` list for its admission to count. It misdirects where you knock,
+/// never who may answer.
+public enum AdmitterEndpoint: Codable, Sendable, Equatable {
+    /// A libp2p multiaddr including the peer id — for a joiner that runs a node.
+    case multiaddr(String)
+    /// An `https://` admin-API base URL — for a joiner that holds only a key.
+    case url(String)
+
+    private enum CodingKeys: String, CodingKey { case multiaddr, url }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let value = try container.decodeIfPresent(String.self, forKey: .multiaddr) {
+            self = .multiaddr(value)
+        } else if let value = try container.decodeIfPresent(String.self, forKey: .url) {
+            self = .url(value)
+        } else {
+            throw MeroError.decoding("admitter hint is neither a multiaddr nor a url")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .multiaddr(let value): try container.encode(value, forKey: .multiaddr)
+        case .url(let value): try container.encode(value, forKey: .url)
+        }
+    }
+}
+
+/// An invitation plus the admin's signature over it, and the unsigned bootstrap
+/// hints core ships beside it.
+///
+/// The hints are not covered by the signature, but dropping them still costs
+/// something real: `applicationId` and `appKey` are what let the joiner
+/// pre-populate its group meta with the same values the originator has. Without
+/// them the joiner records zeros, and `compute_group_state_hash` then diverges
+/// between the two peers permanently.
+///
+/// Same treatment as the signed body: named fields for what callers read,
+/// `passthrough` verbatim for everything else.
 public struct SignedGroupOpenInvitation: Codable, Sendable {
     public var invitation: GroupInvitationFromAdmin
     public var inviterSignature: String
-    public init(invitation: GroupInvitationFromAdmin, inviterSignature: String) {
+    /// The account the inviter acts as, 64 hex. A seed for the joiner's local
+    /// group meta, and never authority — the signature covers the inner
+    /// `invitation`, not this envelope.
+    public var inviterAccount: String?
+    /// Where to reach the signed `admitters`. Best-effort.
+    public var admitterHints: [AdmitterEndpoint]
+    /// The group's application id, 32 bytes.
+    public var applicationId: [Int]?
+    /// The group's `bytecode_id`, 32 bytes. Core renamed the field and kept
+    /// `app_key` as the wire key, with `bytecode_id` accepted as an alias.
+    public var appKey: [Int]?
+    /// Fields core sends that this type does not name, kept verbatim.
+    public var passthrough: [String: JSONValue]
+
+    public init(
+        invitation: GroupInvitationFromAdmin, inviterSignature: String,
+        inviterAccount: String? = nil, admitterHints: [AdmitterEndpoint] = [],
+        applicationId: [Int]? = nil, appKey: [Int]? = nil,
+        passthrough: [String: JSONValue] = [:]
+    ) {
         self.invitation = invitation; self.inviterSignature = inviterSignature
+        self.inviterAccount = inviterAccount; self.admitterHints = admitterHints
+        self.applicationId = applicationId; self.appKey = appKey; self.passthrough = passthrough
     }
+
     // core serializes this type snake_case (it lives in calimero_context_config,
     // which has no rename_all), unlike the camelCase admin DTOs.
-    enum CodingKeys: String, CodingKey {
+    private enum Key: String {
         case invitation
         case inviterSignature = "inviter_signature"
+        case inviterAccount = "inviter_account"
+        case admitterHints = "admitter_hints"
+        case applicationId = "application_id"
+        case appKey = "app_key"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode([String: JSONValue].self)
+        let coder = JSONDecoder()
+        guard let body = raw[Key.invitation.rawValue] else {
+            throw MeroError.decoding("signed invitation is missing invitation")
+        }
+        invitation = try coder.decode(
+            GroupInvitationFromAdmin.self, from: try JSONEncoder().encode(body))
+        inviterSignature = raw[Key.inviterSignature.rawValue]?.stringValue ?? ""
+        inviterAccount = raw[Key.inviterAccount.rawValue]?.stringValue
+        if let hints = raw[Key.admitterHints.rawValue] {
+            admitterHints = try coder.decode(
+                [AdmitterEndpoint].self, from: try JSONEncoder().encode(hints))
+        } else {
+            admitterHints = []
+        }
+        applicationId = raw[Key.applicationId.rawValue]?.arrayValue?.compactMap(\.intValue)
+        appKey = raw[Key.appKey.rawValue]?.arrayValue?.compactMap(\.intValue)
+        let named = Set(
+            [Key.invitation, .inviterSignature, .inviterAccount, .admitterHints, .applicationId, .appKey]
+                .map(\.rawValue))
+        passthrough = raw.filter { !named.contains($0.key) }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var raw = passthrough
+        raw[Key.invitation.rawValue] = try JSONDecoder().decode(
+            JSONValue.self, from: try JSONEncoder().encode(invitation))
+        raw[Key.inviterSignature.rawValue] = .string(inviterSignature)
+        // The trailing fields are `skip_serializing_if` on core's side; keep
+        // them absent rather than null so an older invitation re-encodes as one.
+        if let inviterAccount { raw[Key.inviterAccount.rawValue] = .string(inviterAccount) }
+        if !admitterHints.isEmpty {
+            raw[Key.admitterHints.rawValue] = try JSONDecoder().decode(
+                JSONValue.self, from: try JSONEncoder().encode(admitterHints))
+        }
+        if let applicationId {
+            raw[Key.applicationId.rawValue] = .array(applicationId.map { .number(Double($0)) })
+        }
+        if let appKey { raw[Key.appKey.rawValue] = .array(appKey.map { .number(Double($0)) }) }
+        var container = encoder.singleValueContainer()
+        try container.encode(raw)
     }
 }
 
@@ -539,10 +720,38 @@ public struct Namespace: Codable, Sendable {
 
 public typealias ListNamespacesResponseData = [Namespace]
 
-public struct NamespaceIdentity: Codable, Sendable {
-    public let namespaceId: String
+/// Who this node is.
+///
+/// Replaces the per-namespace identity this SDK used to ask for. core
+/// 0.11.0-rc.21 gave a node one identity, one signing key and one root
+/// (core#3439), and rc.23 deleted `GET /namespaces/{id}/identity` outright
+/// (core#3522) — "ask the node who it is, and delete the route that asked a
+/// namespace".
+///
+/// ⚠️ `accountId` and `deviceId` are BOTH 64 hex characters since rc.27 removed
+/// base58, so nothing about their shape tells them apart. This response is the
+/// only place that maps one to the other, and it matters: every authorization
+/// subject — a role grant, a writer-set add — is an ACCOUNT, while group
+/// membership listings report DEVICE keys. Handing a device key to a grant
+/// succeeds and authorizes nobody, with no error to see.
+public struct NodeIdentity: Codable, Sendable {
+    /// The account this node acts as. The id every authorization takes.
+    public let accountId: String
+    /// This node's device, when it has one.
+    public let deviceId: String?
+    /// The device signing key.
     public let publicKey: String
-    public init(namespaceId: String, publicKey: String) { self.namespaceId = namespaceId; self.publicKey = publicKey }
+    public let accountRootPublicKey: String
+    /// The device's key-agreement key, when the node has one.
+    public let deviceAgreementKey: String?
+    public init(
+        accountId: String, deviceId: String? = nil, publicKey: String,
+        accountRootPublicKey: String, deviceAgreementKey: String? = nil
+    ) {
+        self.accountId = accountId; self.deviceId = deviceId; self.publicKey = publicKey
+        self.accountRootPublicKey = accountRootPublicKey
+        self.deviceAgreementKey = deviceAgreementKey
+    }
 }
 
 /// Formerly how a namespace/group adopted new app versions. The concept is gone
@@ -584,10 +793,36 @@ public struct DeleteNamespaceResponseData: Codable, Sendable {
 }
 
 public struct CreateNamespaceInvitationRequest: Codable, Sendable {
+    /// Unix seconds. core 0.11.0-rc.29 CLAMPS this to at most 24 hours
+    /// (`MAX_INVITATION_VALIDITY_SECS`) — asking for longer is silently lowered,
+    /// not refused. It used to default to a year.
     public var expirationTimestamp: Int?
     public var recursive: Bool?
-    public init(expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
+    /// Accounts permitted to admit a claim of this invitation, 64 hex each.
+    ///
+    /// Leave empty and core picks the group's admins and TEE nodes, which is
+    /// what you want: an invitation restricted to nobody is claimed by
+    /// broadcast, and that staples the whole invitation to a readiness beacon
+    /// sent as plain borsh to every subscriber of the namespace topic.
+    ///
+    /// ⚠️ These are ACCOUNT ids, not device keys — and since rc.27 removed
+    /// base58 the two are indistinguishable by shape. `getNodeIdentity()` is
+    /// where an account id comes from. A device key here is accepted (it parses)
+    /// and names an admitter that does not exist.
+    ///
+    /// ⚠️ Sent only when non-empty: a node older than rc.29 rejects the field.
+    public var admitters: [String]
+    public init(
+        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = []
+    ) {
         self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
+        self.admitters = admitters
+    }
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(expirationTimestamp, forKey: .expirationTimestamp)
+        try container.encodeIfPresent(recursive, forKey: .recursive)
+        if !admitters.isEmpty { try container.encode(admitters, forKey: .admitters) }
     }
 }
 
@@ -1067,16 +1302,6 @@ public struct SyncGroupResponseData: Codable, Sendable {
     }
 }
 
-public struct RegisterGroupSigningKeyRequest: Codable, Sendable {
-    public var signingKey: String
-    public init(signingKey: String) { self.signingKey = signingKey }
-}
-
-public struct RegisterGroupSigningKeyResponseData: Codable, Sendable {
-    public let publicKey: String
-    public init(publicKey: String) { self.publicKey = publicKey }
-}
-
 public struct UpgradeGroupRequest: Codable, Sendable {
     public var targetApplicationId: String
     /// Fan the upgrade out to every descendant subgroup running the same app
@@ -1133,10 +1358,25 @@ public struct DetachContextFromGroupRequest: Codable, Sendable {
 // MARK: - Group Invitation & Join
 
 public struct CreateGroupInvitationRequest: Codable, Sendable {
+    /// Unix seconds. Same 24-hour ceiling as
+    /// ``CreateNamespaceInvitationRequest/expirationTimestamp``.
     public var expirationTimestamp: Int?
     public var recursive: Bool?
-    public init(expirationTimestamp: Int? = nil, recursive: Bool? = nil) {
+    /// Accounts permitted to admit a claim — see
+    /// ``CreateNamespaceInvitationRequest/admitters``. core refuses the request
+    /// with 400 if any entry is not 64 hex characters.
+    public var admitters: [String]
+    public init(
+        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = []
+    ) {
         self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
+        self.admitters = admitters
+    }
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(expirationTimestamp, forKey: .expirationTimestamp)
+        try container.encodeIfPresent(recursive, forKey: .recursive)
+        if !admitters.isEmpty { try container.encode(admitters, forKey: .admitters) }
     }
 }
 

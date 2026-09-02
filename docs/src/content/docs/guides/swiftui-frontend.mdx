@@ -103,8 +103,7 @@ Bind its published state directly in your own views.
 public init(session: URLSession? = nil,
             tokenStore: @escaping @Sendable () -> any TokenStore = { MemoryTokenStore() })
 
-func login(nodeURL: String, username: String, password: String,
-           bootstrapSecret: String? = nil) async
+func login(nodeURL: String, username: String, password: String) async
 func runSampleRpc(contextId: String, method: String) async
 func logout() async
 ```

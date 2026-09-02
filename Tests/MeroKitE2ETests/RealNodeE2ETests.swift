@@ -45,11 +45,12 @@ final class RealNodeE2ETests: XCTestCase {
         let providers = try await mero.auth.getProviders()
         XCTAssertGreaterThan(providers.count, 0)
 
-        // Authenticate (bootstrap secret only matters on a fresh node's first login).
+        // Authenticate. These are the admin credentials given to `merod init` —
+        // core 0.11.0-rc.17 creates the admin there, and there is no
+        // first-login bootstrap secret any more.
         let creds = Credentials(
             username: env("MERO_E2E_USER") ?? "dev",
-            password: env("MERO_E2E_PASS") ?? "dev-password",
-            bootstrapSecret: env("MERO_AUTH_BOOTSTRAP_SECRET")
+            password: env("MERO_E2E_PASS") ?? "dev-password"
         )
         let tokens = try await mero.authenticate(creds)
         XCTAssertFalse(tokens.accessToken.isEmpty)

@@ -190,6 +190,19 @@ private let appOps: [SDKOperation] = [
     ) { m, i in
         Fmt.json(try await m.admin.listNamespacesForApplication(i.v("appId")))
     },
+    SDKOperation(
+        id: "app.abi", category: "Applications", name: "getApplicationAbi",
+        summary: "The app's ABI",
+        fields: [
+            .line("appId", "Application ID"),
+            .line("serviceName", "Service name (multi-service bundles only)", ""),
+        ]
+    ) { m, i in
+        let service = i.opt("serviceName")
+        return Fmt.json(
+            try await m.admin.getApplicationAbi(
+                i.v("appId"), serviceName: (service?.isEmpty ?? true) ? nil : service))
+    },
 ]
 
 // MARK: Packages & Registry
@@ -316,11 +329,13 @@ private let ctxOps: [SDKOperation] = [
         return "✓ application updated"
     },
     SDKOperation(
-        id: "ctx.inviteNode", category: "Contexts", name: "inviteSpecializedNode",
-        summary: "Invite a specialized node", fields: [.json()]
+        id: "ctx.intent", category: "Contexts", name: "performIntent",
+        summary: "Write under a warrant",
+        fields: [.line("contextId", "Context ID"), .json("body", "PerformIntentRequest")]
     ) { m, i in
         Fmt.json(
-            try await m.admin.inviteSpecializedNode(try Fmt.decode(i.v("body"), InviteSpecializedNodeRequest.self)))
+            try await m.admin.performIntent(
+                i.v("contextId"), request: try Fmt.decode(i.v("body"), PerformIntentRequest.self)))
     },
 ]
 
@@ -344,6 +359,59 @@ private let ctxIdOps: [SDKOperation] = [
         summary: "Owned identities in a context", fields: [.line("contextId", "Context ID")]
     ) { m, i in
         Fmt.json(try await m.admin.getContextIdentitiesOwned(i.v("contextId")))
+    },
+]
+
+// MARK: Node & Account
+//
+// core 0.11.0-rc.21 gave a node one identity, one signing key and one root, and
+// rc.23 deleted the route that asked a namespace who it was. rc.28 then moved
+// device pairing off the namespace too: a device pairs to an ACCOUNT once and is
+// linked into namespaces afterwards.
+
+private let accountOps: [SDKOperation] = [
+    SDKOperation(
+        id: "node.identity", category: "Node & Account", name: "getNodeIdentity",
+        summary: "Who this node is (account + device)", fields: []
+    ) { m, _ in
+        Fmt.json(try await m.admin.getNodeIdentity())
+    },
+    SDKOperation(
+        id: "acct.devices", category: "Node & Account", name: "listAccountDevices",
+        summary: "This account's devices", fields: []
+    ) { m, _ in
+        Fmt.json(try await m.admin.listAccountDevices())
+    },
+    SDKOperation(
+        id: "acct.apps", category: "Node & Account", name: "listAccountApplications",
+        summary: "This account's applications", fields: []
+    ) { m, _ in
+        Fmt.json(try await m.admin.listAccountApplications())
+    },
+    SDKOperation(
+        id: "acct.pairInit", category: "Node & Account", name: "accountPairInit",
+        summary: "Start pairing a device", fields: [.json("body", "AccountPairInitRequest")]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.accountPairInit(
+                try Fmt.decode(i.v("body"), AccountPairInitRequest.self)))
+    },
+    SDKOperation(
+        id: "acct.pairComplete", category: "Node & Account", name: "accountPairComplete",
+        summary: "Finish pairing a device", fields: [.json("body", "AccountPairCompleteRequest")]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.accountPairComplete(
+                try Fmt.decode(i.v("body"), AccountPairCompleteRequest.self)))
+    },
+    SDKOperation(
+        id: "acct.relink", category: "Node & Account", name: "relinkDevice",
+        summary: "Re-link a device into namespaces",
+        fields: [.line("deviceId", "Device ID"), .json("body", "RelinkDeviceRequest")]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.relinkDevice(
+                i.v("deviceId"), request: try Fmt.decode(i.v("body"), RelinkDeviceRequest.self)))
     },
 ]
 
@@ -476,10 +544,22 @@ private let nsOps: [SDKOperation] = [
         Fmt.json(try await m.admin.getNamespace(i.v("namespaceId")))
     },
     SDKOperation(
-        id: "ns.identity", category: "Namespaces", name: "getNamespaceIdentity",
-        summary: "Namespace identity", fields: [.line("namespaceId", "Namespace ID")]
+        id: "ns.admit", category: "Namespaces", name: "admitJoin",
+        summary: "Carry a joiner's signed op",
+        fields: [.line("namespaceId", "Namespace ID"), .json("body", "AdmitJoinRequest")]
     ) { m, i in
-        Fmt.json(try await m.admin.getNamespaceIdentity(i.v("namespaceId")))
+        Fmt.json(
+            try await m.admin.admitJoin(
+                i.v("namespaceId"), request: try Fmt.decode(i.v("body"), AdmitJoinRequest.self)))
+    },
+    SDKOperation(
+        id: "ns.revokeDevice", category: "Namespaces", name: "revokeDevice",
+        summary: "Revoke a device here",
+        fields: [.line("namespaceId", "Namespace ID"), .json("body", "RevokeDeviceRequest")]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.revokeDevice(
+                i.v("namespaceId"), request: try Fmt.decode(i.v("body"), RevokeDeviceRequest.self)))
     },
     SDKOperation(
         id: "ns.create", category: "Namespaces", name: "createNamespace",
@@ -661,12 +741,10 @@ private let groupOps: [SDKOperation] = [
         return Fmt.json(try await m.admin.syncGroup(i.v("groupId"), request: req))
     },
     SDKOperation(
-        id: "grp.signKey", category: "Groups", name: "registerGroupSigningKey",
-        summary: "Register a signing key", fields: [.line("groupId", "Group ID"), .json("body", "Request")]
+        id: "grp.memberDevices", category: "Groups", name: "listMemberDevices",
+        summary: "Members → their devices", fields: [.line("groupId", "Group ID")]
     ) { m, i in
-        Fmt.json(
-            try await m.admin.registerGroupSigningKey(
-                i.v("groupId"), request: try Fmt.decode(i.v("body"), RegisterGroupSigningKeyRequest.self)))
+        Fmt.json(try await m.admin.listMemberDevices(i.v("groupId")))
     },
 ]
 
@@ -912,7 +990,7 @@ private let rpcOps: [SDKOperation] = [
 
 /// The full registry, in display order.
 let sdkOperations: [SDKOperation] =
-    healthOps + authOps + keyOps + appOps + pkgOps + ctxOps + ctxIdOps
+    healthOps + authOps + keyOps + appOps + pkgOps + ctxOps + ctxIdOps + accountOps
     + aliasOps + blobOps + nsOps + groupOps + memberOps + settingsOps + upgradeOps + teeOps + rpcOps
 
 /// Categories in display order (as first seen in `sdkOperations`).

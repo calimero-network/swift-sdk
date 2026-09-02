@@ -1,0 +1,9 @@
+{
+  "data": {
+    "accountId": "75362ad461397b631e1876c469d45888840d8978cdeb19f7faf9dee52058bdc5",
+    "deviceId": "a6ab032973d5f5462402047ba665ae9b01a7918a04b6b672bc2f96103f3a1a23",
+    "publicKey": "a28cd63eed56c420d4ae7eeafe3079be788c30936ec84b211dc77b120daa05f0",
+    "accountRootPublicKey": "caa95920a2131af12ae86f4a7a66a25503fff56542d0cedd853b5c91468446e7",
+    "deviceAgreementKey": "42d3dbb39de7e16886639cb39b9b7250fca07865f4ae4a0e06bdf9226fafe15e"
+  }
+}

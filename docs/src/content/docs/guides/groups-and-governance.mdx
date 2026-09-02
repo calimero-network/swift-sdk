@@ -22,7 +22,11 @@ let namespaceId = ns.namespaceId
 
 let all      = try await mero.admin.listNamespaces()               // [Namespace]
 let one      = try await mero.admin.getNamespace(namespaceId)
-let identity = try await mero.admin.getNamespaceIdentity(namespaceId)
+
+// Who this node is. A namespace no longer has an identity of its own — core
+// 0.11.0-rc.21 gave a node one identity, one signing key and one root, and
+// rc.23 deleted the per-namespace route.
+let identity = try await mero.admin.getNodeIdentity()               // NodeIdentity
 ```
 
 Invite and join:

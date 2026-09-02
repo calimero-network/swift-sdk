@@ -1,0 +1,14 @@
+{
+  "devices": [
+    {
+      "deviceId": "a6ab032973d5f5462402047ba665ae9b01a7918a04b6b672bc2f96103f3a1a23",
+      "signingKey": "a28cd63eed56c420d4ae7eeafe3079be788c30936ec84b211dc77b120daa05f0",
+      "isSelf": true,
+      "revoked": false,
+      "applications": [],
+      "namespaces": [
+        "f9c0679d2b17ea58ae08f03c126976102eb04cf175ac76a99cae47eea84ae2d2"
+      ]
+    }
+  ]
+}
