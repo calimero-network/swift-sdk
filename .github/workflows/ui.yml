@@ -28,6 +28,24 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # generate-ios.sh rewrites this key to the developer's Mac LAN IP for a
+      # physical-device install, and one such run got committed. Nothing failed
+      # here — `ui.yml` runs against the in-app mock, which never reads it — but
+      # every simulator run of the live-node suites then pointed at an address
+      # that does not exist on a runner, and both iOS E2E jobs failed for five
+      # weeks on "did not reach explorer". Two seconds here, in the job that
+      # gates every PR, so it cannot come back.
+      - name: Assert the sample app's default node URL is loopback
+        working-directory: Examples/MeroSampleApp
+        run: |
+          set -euo pipefail
+          URL=$(sed -n 's/.*DefaultNodeURL: *"\(.*\)".*/\1/p' project.yml)
+          echo "DefaultNodeURL: ${URL:-<unset>}"
+          case "$URL" in
+            http://localhost:*|http://127.0.0.1:*) ;;
+            *) echo "::error file=Examples/MeroSampleApp/project.yml::DefaultNodeURL must be a loopback URL, got '${URL:-<unset>}' — a LAN IP here points every simulator run at an address CI cannot reach (generate-ios.sh sets it for device installs and restores this file on exit)"; exit 1 ;;
+          esac
+
       - name: Generate Xcode project
         working-directory: Examples/MeroSampleApp
         run: xcodegen generate

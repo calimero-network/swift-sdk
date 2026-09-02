@@ -11,9 +11,17 @@ import XCTest
 final class AppE2ETests: XCTestCase {
     private var app: XCUIApplication!
 
+    /// The node e2e-ios.sh boots. Passed explicitly rather than relying on the
+    /// app's default: `ExplorerUI` adopts the Info.plist `DefaultNodeURL` over
+    /// the field's own default on every launch, so whatever that key happens to
+    /// hold decides which node this suite talks to. Naming it here makes the
+    /// test say what it is testing against, and makes it immune to that key.
+    private static let nodeURL = "http://localhost:4001"
+
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchEnvironment["E2E_NODE"] = Self.nodeURL
         app.launch()
     }
 
@@ -42,7 +50,15 @@ final class AppE2ETests: XCTestCase {
         type("passwordField", "dev-password")
         tap(app.buttons["loginButton"], "login button")
         dismissSavePasswordPrompt()
-        XCTAssertTrue(app.buttons["openChat"].waitForExistence(timeout: 20), "did not reach explorer")
+        // On failure, quote the app's own error line. "did not reach explorer"
+        // alone is the same message whether the node is down, the credentials
+        // are wrong, or the app is pointed at the wrong host — and it cost five
+        // weeks of red iOS E2E runs to tell those apart.
+        XCTAssertTrue(
+            app.buttons["openChat"].waitForExistence(timeout: 20),
+            "did not reach explorer (node \(Self.nodeURL)) — app error: "
+                + (app.staticTexts["loginError"].exists
+                    ? app.staticTexts["loginError"].label : "<none shown>"))
     }
 
     /// After submitting the password field, iOS pops a SpringBoard "Save
