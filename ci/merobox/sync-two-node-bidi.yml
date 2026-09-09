@@ -42,6 +42,15 @@ steps:
     outputs:
       app_id: applicationId
 
+  # On node 2 as well — see sync-two-node.yml: since rc.31 an `http`-registry
+  # node serves no application bytecode to peers, so a node that does not
+  # install the bundle itself has none.
+  - name: Install kv_store on node 2
+    type: install_application
+    node: calimero-node-2
+    path: ./ci/merobox/res/kv_store.mpk
+    dev: true
+
   - name: Mesh the context across node 1 + node 2
     type: create_mesh
     context_node: calimero-node-1

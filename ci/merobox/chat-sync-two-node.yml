@@ -46,6 +46,15 @@ steps:
     outputs:
       app_id: applicationId
 
+  # On node 2 as well — see sync-two-node.yml: since rc.31 an `http`-registry
+  # node serves no application bytecode to peers, so a node that does not
+  # install the bundle itself has none.
+  - name: Install curb (mero-chat) on node 2
+    type: install_application
+    node: calimero-node-2
+    path: ./ci/merobox/res/curb-app.mpk
+    dev: true
+
   # Create a curb "Channel" context (init params mirror ChatService.initParams)
   # and mesh node 2 into it. created_at is a fixed epoch — merobox scripts can't
   # call Date.now(), and curb only stores it.

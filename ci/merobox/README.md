@@ -66,6 +66,31 @@ refuses the body outright (`unknown field \`url\``). Coordinates are the
 replacement, and reaching them needs the node's `[registry]` to be configured —
 which is a poor fit for a hermetic Docker fixture, hence `path:` + a bundle.
 
+**4. An `http`-registry node serves no application bytecode to peers.** Same
+release. The serving gate is `NodeClient::may_share_blob`, and an `http` node
+withholds exactly the application's bytecode and compiled artifacts — so the
+joining node can no longer pick the blob up from the node that has it, and a
+`--dev` bundle is published nowhere for it to fetch by coordinates either.
+
+It fails far from the cause: node 2 joins, the context hash **converges**, and
+then the first method call dies inside the runtime —
+
+```
+JSON-RPC Error: InternalError - {}
+… bytecode blob c13ac279…78ed not found in blobstore
+```
+
+which reads as a WASM or a sync bug. `create_mesh` does not pre-install
+anything, so every node in the fixture now installs the bundle itself. That is
+safe to repeat: an application id is derived from the bundle's package and
+signer, so both nodes land on the same id.
+
+The alternative core documents for this shape of deployment is
+`[registry] mode = "dht"` (or `CALIMERO_REGISTRY_MODE=dht`), where members hand
+each other the bytes governance named. merobox's `nodes:` block has no key for
+it, and an explicit install keeps the scenario about state sync rather than
+about how bytecode travels.
+
 With the first two fixed, the scenarios converge in **under 2 seconds** (forward
 and backward), so this job is a **gating check** — a red run means a genuine
 regression in the node's sync path.
