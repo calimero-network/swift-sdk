@@ -68,7 +68,7 @@ public final class URLSessionHttpClient: HttpClient {
 
     public func download(_ req: HttpRequest, to fileURL: URL) async throws -> HeadResult {
         // Stream the body to disk rather than buffering in RAM (memory-safe for large blobs).
-        let urlRequest = try await buildURLRequest(req)
+        let urlRequest = buildURLRequest(req, bearer: await currentAuthToken())
         let (tempURL, response) = try await session.download(for: urlRequest)
         let http = response as? HTTPURLResponse
         let head = HeadResult(status: http?.statusCode ?? 0, headers: lowercasedHeaders(http))
@@ -92,7 +92,11 @@ public final class URLSessionHttpClient: HttpClient {
     // MARK: - Core request path
 
     private func attempt(_ req: HttpRequest, allowRefresh: Bool) async throws -> (Data, HeadResult) {
-        let urlRequest = try await buildURLRequest(req)
+        // Read the token once and keep it: a 401 has to be judged against what
+        // this request actually sent, not against whatever the token is by the
+        // time the response comes back.
+        let presentedToken = await currentAuthToken()
+        let urlRequest = buildURLRequest(req, bearer: presentedToken)
 
         let data: Data
         let response: URLResponse
@@ -140,7 +144,8 @@ public final class URLSessionHttpClient: HttpClient {
             let refreshToken = hooks.refreshToken,
             !(req.body?.isStream ?? false)
         {
-            let newToken = try await refreshGate.refresh(using: refreshToken)
+            let newToken = try await refreshGate.refresh(
+                presented: presentedToken, using: refreshToken)
             guard let newToken, !newToken.trimmingCharacters(in: .whitespaces).isEmpty else {
                 throw MeroError.http(httpError)
             }
@@ -161,16 +166,23 @@ public final class URLSessionHttpClient: HttpClient {
         return try await session.data(for: request)
     }
 
-    private func buildURLRequest(_ req: HttpRequest) async throws -> URLRequest {
+    /// The bearer to send, or nil for an unauthenticated request.
+    /// Best-effort: a token-fetch failure sends none, like mero-js.
+    private func currentAuthToken() async -> String? {
+        guard let getAuthToken = hooks.getAuthToken,
+            let token = await getAuthToken(),
+            !token.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return nil }
+        return token
+    }
+
+    private func buildURLRequest(_ req: HttpRequest, bearer: String?) -> URLRequest {
         var request = URLRequest(url: buildURL(req.path))
         request.httpMethod = req.method.rawValue
         request.timeoutInterval = req.timeout ?? defaultTimeout
 
-        // Auth header (best-effort; ignore token-fetch failures, like mero-js).
-        if let getAuthToken = hooks.getAuthToken {
-            if let token = await getAuthToken(), !token.trimmingCharacters(in: .whitespaces).isEmpty {
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            }
+        if let bearer {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
         }
 
         switch req.body {
@@ -225,26 +237,46 @@ private extension HttpBody {
 
 /// Single-flight gate so concurrent 401s share one refresh call.
 /// (== the `refreshTokenPromise` cache in mero-js `web-client.ts`.)
+///
+/// Sharing an *in-flight* refresh is only half of it. The gate clears when the
+/// first waiter returns, so a request that read the old access token before the
+/// rotation but whose 401 arrives after it finds the gate free and starts a
+/// second refresh — see ``refresh(presented:using:)``.
 private actor RefreshGate {
     private var inFlight: Task<String, Error>?
+    /// The newest access token a refresh through this gate produced.
+    private var latest: String?
 
-    func refresh(using refreshToken: @escaping @Sendable () async throws -> String) async throws -> String? {
+    /// - Parameter presented: the access token the request that got the 401
+    ///   actually sent, or nil if it sent none.
+    func refresh(
+        presented: String?,
+        using refreshToken: @escaping @Sendable () async throws -> String
+    ) async throws -> String? {
+        // Already refreshed past the token this request presented, so its 401 is
+        // stale news: the caller retries with `latest` and no second refresh
+        // happens. Without this the request starts one of its own — which is
+        // wasteful at best, and at worst hands a consumer that still holds the
+        // older bundle a refresh token the server has already rotated away.
+        if let presented, let latest, presented != latest {
+            return latest
+        }
         if let inFlight {
             return try await inFlight.value
         }
         let task = Task { try await refreshToken() }
         inFlight = task
         defer { inFlight = nil }
-        do {
-            return try await task.value
-        } catch {
-            throw error
-        }
+        let token = try await task.value
+        latest = token
+        return token
     }
 
     func invalidate() {
         inFlight?.cancel()
         inFlight = nil
+        // The family is gone; nothing this gate produced is worth retrying with.
+        latest = nil
     }
 }
 

@@ -13,16 +13,31 @@ public final class MockURLProtocol: URLProtocol {
         public let status: Int
         public let headers: [String: String]
         public let body: Data
+        /// Hold the response back this long before delivering it.
+        ///
+        /// The handler still runs when the request is *made*, so a stub decided
+        /// against the state of the world at t=0 can be delivered after that
+        /// state has moved on — which is the only way to reproduce a response
+        /// that races a token rotation.
+        public let delay: TimeInterval
 
-        public init(status: Int, headers: [String: String], body: Data) {
+        public init(status: Int, headers: [String: String], body: Data, delay: TimeInterval = 0) {
             self.status = status
             self.headers = headers
             self.body = body
+            self.delay = delay
         }
     }
 
     private static let lock = NSLock()
     nonisolated(unsafe) private static var _handler: (@Sendable (URLRequest) -> Stub)?
+
+    private let lock = NSLock()
+    private var _cancelled = false
+    private var cancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _cancelled
+    }
 
     /// Register the single handler that serves all requests.
     public static func setHandler(_ handler: @escaping @Sendable (URLRequest) -> Stub) {
@@ -56,6 +71,21 @@ public final class MockURLProtocol: URLProtocol {
             return
         }
         let stub = handler(request)
+        guard stub.delay > 0 else {
+            deliver(stub)
+            return
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + stub.delay) { [weak self] in
+            guard let self, !self.cancelled else { return }
+            self.deliver(stub)
+        }
+    }
+
+    public override func stopLoading() {
+        lock.lock(); _cancelled = true; lock.unlock()
+    }
+
+    private func deliver(_ stub: Stub) {
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: stub.status,
@@ -66,8 +96,6 @@ public final class MockURLProtocol: URLProtocol {
         client?.urlProtocol(self, didLoad: stub.body)
         client?.urlProtocolDidFinishLoading(self)
     }
-
-    public override func stopLoading() {}
 }
 
 /// A mutable, thread-safe counter for tests.
