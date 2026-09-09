@@ -4,9 +4,16 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// A node event pushed over SSE. `payload` is the raw event JSON — for a
-/// contract emission (`type == "ExecutionEvent"`) the events live under
-/// `data.events[].data` (a byte array carrying the encoded contract event).
+/// A node event pushed over SSE.
+///
+/// ``kind`` is the frame's `result.type`, and a node sends exactly two:
+/// **`StateMutation`** (the context's state moved) and **`SyncStatus`**
+/// (`syncing` / `waitingForPeers` / …). There is no `ExecutionEvent`, despite
+/// what this comment used to say — a caller switching on one never matches.
+///
+/// ``payload`` is the raw frame JSON. The contract's own events are a level
+/// down, under `data.events[]`, each with its own `kind` and a `data` byte
+/// array carrying the encoded event.
 public struct ContextEvent: Sendable {
     public let contextId: String
     public let kind: String

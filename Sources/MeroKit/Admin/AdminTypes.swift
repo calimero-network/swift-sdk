@@ -726,14 +726,24 @@ public struct Namespace: Codable, Sendable {
     public let memberCount: Int
     public let contextCount: Int
     public let subgroupCount: Int
+    /// The application version this namespace runs, e.g. `"3.1.1"` — the value an
+    /// Updates flow compares against what the registry publishes.
+    ///
+    /// Optional only because a node predating the field omits it; a released one
+    /// always sends it. It arrived alongside the removal of `upgradePolicy`,
+    /// which is the shape of the change: a policy nobody applied, replaced by the
+    /// version actually in force.
+    public let appVersion: String?
     public init(
         namespaceId: String, appKey: String, targetApplicationId: String,
         upgradePolicy: String? = nil, createdAt: Int,
-        name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int
+        name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int,
+        appVersion: String? = nil
     ) {
         self.namespaceId = namespaceId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
         self.upgradePolicy = upgradePolicy; self.createdAt = createdAt; self.name = name
         self.memberCount = memberCount; self.contextCount = contextCount; self.subgroupCount = subgroupCount
+        self.appVersion = appVersion
     }
 }
 
@@ -1157,17 +1167,28 @@ public struct GroupInfo: Codable, Sendable {
     /// The group's generic metadata record (replaces the old `alias` field).
     /// `null` if no metadata has ever been set for this group.
     public let metadata: MetadataRecord?
+    /// Hash of the group's governance state, 64 hex.
+    ///
+    /// The group-level member of core's three-level naming (context / group /
+    /// namespace state hash): two nodes that agree here agree on membership,
+    /// roles and capabilities, which is what makes it the convergence check for
+    /// governance rather than for context data.
+    ///
+    /// Optional only because a node predating the field omits it.
+    public let groupStateHash: String?
     public init(
         groupId: String, appKey: String, targetApplicationId: String,
         upgradePolicy: String? = nil, memberCount: Int, contextCount: Int,
         activeUpgrade: GroupUpgradeStatus? = nil,
-        defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil
+        defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil,
+        groupStateHash: String? = nil
     ) {
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
         self.upgradePolicy = upgradePolicy
         self.memberCount = memberCount; self.contextCount = contextCount
         self.activeUpgrade = activeUpgrade; self.defaultCapabilities = defaultCapabilities
         self.subgroupVisibility = subgroupVisibility; self.metadata = metadata
+        self.groupStateHash = groupStateHash
     }
 }
 

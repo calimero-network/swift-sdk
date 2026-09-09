@@ -316,6 +316,62 @@ final class Rc32SurfaceTests: XCTestCase {
         XCTAssertEqual(req.path, "/admin-api/contexts/sync/c1")
     }
 
+    // MARK: - Fields core sends that the SDK was dropping
+
+    /// `upgradePolicy` is gone from a namespace and `appVersion` took its place:
+    /// a policy nobody applied, replaced by the version actually in force. It is
+    /// what an Updates flow compares against the registry.
+    func testNamespaceCarriesAppVersionAndNoUpgradePolicy() throws {
+        let wrapper = try fixture(ApiResponse<ListNamespacesResponseData>.self, "rc32-namespaces")
+        let namespace = try XCTUnwrap(try XCTUnwrap(wrapper.data).first)
+        XCTAssertEqual(namespace.appVersion, "3.1.1")
+        XCTAssertNil(namespace.upgradePolicy, "rc.32 does not send it")
+        // Optional, not required: a node predating the field must still decode.
+        let older = try JSONDecoder().decode(
+            Namespace.self,
+            from: Data(
+                #"{"namespaceId":"a","appKey":"b","targetApplicationId":"c","createdAt":1,"#
+                    .appending(#""memberCount":1,"contextCount":0,"subgroupCount":0}"#).utf8))
+        XCTAssertNil(older.appVersion)
+    }
+
+    /// The group-level member of core's three-level state-hash naming (context /
+    /// group / namespace): agreement here is agreement on membership, roles and
+    /// capabilities.
+    func testGroupInfoCarriesGroupStateHash() throws {
+        let wrapper = try fixture(ApiResponse<GroupInfo>.self, "rc32-group-info")
+        let info = try XCTUnwrap(wrapper.data)
+        XCTAssertEqual(try XCTUnwrap(info.groupStateHash).count, 64)
+        XCTAssertNil(info.upgradePolicy, "rc.32 does not send it")
+        XCTAssertEqual(info.subgroupVisibility, "restricted")
+    }
+
+    // MARK: - SSE frames say `StateMutation`, never `ExecutionEvent`
+
+    /// The discriminator is `result.type`, and a node sends `StateMutation` or
+    /// `SyncStatus`. The SDK's own docs told callers to switch on an
+    /// `ExecutionEvent` that no node has ever sent, so the branch never fired.
+    ///
+    /// The frame below is verbatim from a live 0.11.0-rc.32 node, produced by a
+    /// `set` on a kv-store context.
+    func testSseFrameIsAStateMutationCarryingNestedContractEvents() throws {
+        let frame = try Fixture.object("rc32-sse-state-mutation")
+        let result = try XCTUnwrap(frame["result"]?.objectValue)
+        XCTAssertEqual(result["type"]?.stringValue, "StateMutation")
+        XCTAssertNotEqual(result["type"]?.stringValue, "ExecutionEvent")
+        XCTAssertEqual(try XCTUnwrap(result["contextId"]?.stringValue).count, 64)
+
+        // The contract's own events sit a level down, each with its own `kind`.
+        let data = try XCTUnwrap(result["data"]?.objectValue)
+        XCTAssertEqual(try XCTUnwrap(data["newRoot"]?.stringValue).count, 64)
+        let events = try XCTUnwrap(data["events"]?.arrayValue)
+        let first = try XCTUnwrap(events.first?.objectValue)
+        XCTAssertEqual(first["kind"]?.stringValue, "Inserted")
+        XCTAssertFalse(
+            try XCTUnwrap(first["data"]?.arrayValue).isEmpty,
+            "the encoded contract event, as a byte array")
+    }
+
     // MARK: - The flat-envelope quirks, re-verified at rc.32
 
     /// Three routes answer their payload flat rather than under `data`. Nothing

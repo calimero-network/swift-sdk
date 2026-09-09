@@ -42,6 +42,8 @@ curl -s "$B/account/devices"           -H "$AUTH"  # rc32-account-devices.json
 curl -s "$B/account/applications"      -H "$AUTH"  # rc32-account-applications.json
 curl -s "$B/groups/$NS/member-devices" -H "$AUTH"  # rc32-member-devices.json
 curl -s "$B/alias/list/device"         -H "$AUTH"  # rc32-alias-list-device.json
+curl -s "$B/namespaces"                -H "$AUTH"  # rc32-namespaces.json  (appVersion, no upgradePolicy)
+curl -s "$B/groups/$NS"                -H "$AUTH"  # rc32-group-info.json  (groupStateHash)
 
 curl -s -X POST "$B/namespaces/$NS/invite" -H "$AUTH" -H "$JSON" \
   -d '{"inviteeIdentity":"11…11"}'                 # rc32-namespace-invitation.json
@@ -51,6 +53,16 @@ curl -s -X POST "$B/install-application" -H "$AUTH" -H "$JSON" \
   -d '{"package":"com.calimero.chat","version":"3.1.1"}'   # rc32-install-application.json
 curl -s -X POST "$B/install-application" -H "$AUTH" -H "$JSON" \
   -d '{"url":"https://example/a.mpk","metadata":[]}'       # rc32-install-application-url-refused.json
+```
+
+An SSE frame needs a subscription and a write, not just a GET
+(`rc32-sse-state-mutation.json`):
+
+```sh
+curl -sN "http://localhost:4001/sse?token=$TOK" > sse.log &   # read session_id
+curl -s -X POST http://localhost:4001/sse/subscription -H "$AUTH" -H "$JSON" \
+  -d "{\"id\":\"$SID\",\"method\":\"subscribe\",\"params\":{\"contextIds\":[\"$CTX\"]}}"
+# then any state-changing RPC on $CTX; the frame lands in sse.log
 ```
 
 Ids, signatures and multiaddrs differ per node, so a re-capture will not be a
