@@ -1,0 +1,12 @@
+{
+  "data": {
+    "groupId": "60cb3b581a42882c764f7646940c639746f71ec42fe92ead5d6d07804deae487",
+    "appKey": "c13ac279136a351cd9004d7fab16994c02bb7c485876dcca9628fc0b3c7778ed",
+    "targetApplicationId": "ad61b1324e760fc4a8cb2beaeb1a799e4bac774b5f78bebe66f2cb863774926f",
+    "memberCount": 1,
+    "contextCount": 1,
+    "defaultCapabilities": 4,
+    "subgroupVisibility": "restricted",
+    "groupStateHash": "907d45d6ba47aa3f24a7251d8d88d890139deb71c2104c3a13b6d96ef3222075"
+  }
+}

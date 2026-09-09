@@ -22,8 +22,10 @@ let task = Task {
     do {
         for try await event in mero.events(contextIds: [contextId]) {
             switch event.kind {
-            case "ExecutionEvent":
+            case "StateMutation":
                 await reloadMessages()
+            case "SyncStatus":
+                print("syncing: \(event.payload)")
             default:
                 print("event on \(event.contextId): \(event.kind)")
             }
@@ -39,13 +41,28 @@ Each event is:
 ```swift
 public struct ContextEvent: Sendable {
     public let contextId: String
-    public let kind: String        // e.g. "ExecutionEvent"
+    public let kind: String        // "StateMutation" or "SyncStatus"
     public let payload: JSONValue  // raw event JSON
 }
 ```
 
-For a contract emission (`kind == "ExecutionEvent"`) the encoded contract events
-are nested under `payload`'s `data.events[].data`.
+`kind` is the frame's `result.type`, and a node sends exactly two:
+**`StateMutation`** (the context's state moved) and **`SyncStatus`**
+(`syncing` / `waitingForPeers` / …). There is no `ExecutionEvent` — a `case` for
+one never fires.
+
+The contract's own events are nested a level down, under `payload`'s
+`data.events[]`, each with its **own** `kind` and a `data` byte array carrying
+the encoded event. Captured from a live 0.11.0-rc.32 node:
+
+```json
+{"result":{"contextId":"…","type":"StateMutation","data":{
+  "newRoot":"7320c55a…",
+  "events":[{"kind":"Inserted","data":[123,34,107,…],"handler":null}]}}}
+```
+
+So the frame tells you *that* state moved and the nested `events[]` tell you
+*what* the contract emitted.
 
 ## Reconnection
 

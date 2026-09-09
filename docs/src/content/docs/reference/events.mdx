@@ -44,12 +44,12 @@ task.cancel()   // closes the SSE stream
 ```swift
 public struct ContextEvent: Sendable {
     public let contextId: String
-    public let kind: String        // event discriminator, e.g. "ExecutionEvent"
+    public let kind: String        // "StateMutation" or "SyncStatus"
     public let payload: JSONValue  // raw event JSON
 }
 ```
 
-For a contract emission (`kind == "ExecutionEvent"`) the encoded contract events
+For a state change (`kind == "StateMutation"`) the encoded contract events
 live under `payload`'s `data.events[].data`.
 
 ## `SseClient`
