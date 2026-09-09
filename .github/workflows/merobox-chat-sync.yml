@@ -104,10 +104,10 @@ jobs:
           pip install 'merobox==0.6.74' 'calimero-client-py==0.6.37'
           merobox --version
 
-      # Download the published curb bundle and hand it over whole: core
-      # 0.11.0-rc.31 (core#3652) refuses a raw module on dev install.
-      # and extract the wasm to the path the workflow references. Resolve the
-      # latest version from the registry unless one was given.
+      # Download the published curb bundle to the path the scenario references,
+      # and hand it over whole: core 0.11.0-rc.31 (core#3652) refuses a raw
+      # module on dev install. Resolve the latest version from the registry
+      # unless one was given.
       - name: Download the curb bundle from the registry
         run: |
           set -euo pipefail
