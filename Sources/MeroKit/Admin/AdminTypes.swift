@@ -39,25 +39,50 @@ public struct AdminAuthStatus: Codable, Sendable {
 
 // MARK: - Applications
 
+/// Coordinates of a published application: what to install, by name.
+///
+/// core 0.11.0-rc.31 (core#3652, "registry-only application distribution") took
+/// the URL away. A node now installs only from the one source its own
+/// `[registry]` section names, so the caller says *which* application and the
+/// node decides *where from* — which is the point: a URL in the request was a
+/// caller-chosen code source, and nothing downstream re-checked it.
+///
+/// The old body does not degrade, it is refused: core declares this type
+/// `deny_unknown_fields`, so a request carrying `url` answers
+/// `400 unknown field \`url\`, expected \`package\` or \`version\`` rather than
+/// installing something the caller did not name.
+///
+/// A node whose `[registry]` has nothing published at these coordinates answers
+/// **502**, not 404 or 500: neither side is at fault and the version may simply
+/// not be published yet, so it is worth retrying.
 public struct InstallApplicationRequest: Codable, Sendable {
-    public var url: String
-    public var hash: String?
-    public var metadata: [Int]
-    public var package: String?
-    public var version: String?
-    public init(url: String, hash: String? = nil, metadata: [Int], package: String? = nil, version: String? = nil) {
-        self.url = url; self.hash = hash; self.metadata = metadata; self.package = package; self.version = version
+    /// Package name, e.g. `com.calimero.chat`. Max 128 characters, non-empty.
+    public var package: String
+    /// Published version, e.g. `3.1.1`. Max 64 characters, non-empty.
+    public var version: String
+    public init(package: String, version: String) {
+        self.package = package; self.version = version
     }
 }
 
+/// A local `.mpk` bundle, by path on the node's own filesystem.
+///
+/// The development counterpart to ``InstallApplicationRequest``, and the only
+/// way to install bytecode that is not published anywhere. rc.32 reduced the
+/// body to the path alone: `metadata`, `package` and `version` are gone, and
+/// coordinates now come from the bundle's own `manifest.json`.
+///
+/// ⚠️ It also has to BE a bundle now. The same release made a raw `.wasm` a
+/// 500 — `not a signed application bundle: <path>` — because an application id
+/// is derived from a bundle's package and signer, so a bare module has no
+/// identity to install under.
+///
+/// Unlike the coordinate install this type is *not* `deny_unknown_fields` on
+/// core's side, so an old client sending the dropped fields still gets a 200 —
+/// with the values it sent silently ignored. Released in 0.11.0-rc.31.
 public struct InstallDevApplicationRequest: Codable, Sendable {
     public var path: String
-    public var metadata: [Int]
-    public var package: String?
-    public var version: String?
-    public init(path: String, metadata: [Int], package: String? = nil, version: String? = nil) {
-        self.path = path; self.metadata = metadata; self.package = package; self.version = version
-    }
+    public init(path: String) { self.path = path }
 }
 
 public struct InstallApplicationResponseData: Codable, Sendable {
@@ -414,10 +439,18 @@ public struct CreateApplicationAliasRequest: Codable, Sendable {
     public init(alias: String, applicationId: String) { self.alias = alias; self.applicationId = applicationId }
 }
 
-public struct CreateContextIdentityAliasRequest: Codable, Sendable {
+/// A device alias.
+///
+/// ⚠️ This replaces the "context identity alias" family this SDK used to carry.
+/// core has no per-context identity aliases and never had the routes: an alias
+/// scopes to a *device*, and `/admin-api/alias/{create,lookup,delete,list}/identity/...`
+/// answers **404** on every released node. Verified against a live 0.11.0-rc.32.
+public struct CreateDeviceAliasRequest: Codable, Sendable {
     public var alias: String
-    public var identity: String
-    public init(alias: String, identity: String) { self.alias = alias; self.identity = identity }
+    /// The device key the alias points at, 64 hex. Note the wire name: core
+    /// spells this `deviceId`, not `identity` or `value`.
+    public var deviceId: String
+    public init(alias: String, deviceId: String) { self.alias = alias; self.deviceId = deviceId }
 }
 
 public struct AliasEntry: Codable, Sendable {
@@ -426,12 +459,34 @@ public struct AliasEntry: Codable, Sendable {
     public init(name: String, value: String) { self.name = name; self.value = value }
 }
 
+/// An alias listing.
+///
+/// ⚠️ core answers `{"data": {"<name>": "<value>"}}` — a **map**, keyed by alias
+/// name. It is not `{"aliases": [...]}`, which is what this type used to model
+/// and what made every `list*Aliases()` call throw a decoding error, the empty
+/// listing included. Captured from a live 0.11.0-rc.32 node.
 public struct ListAliasesResponseData: Codable, Sendable {
-    public let aliases: [AliasEntry]
-    public init(aliases: [AliasEntry]) { self.aliases = aliases }
+    /// Alias name → value, as core sends it.
+    public let entries: [String: String]
+    /// The same listing as a stable, name-sorted array.
+    public var aliases: [AliasEntry] {
+        entries.sorted { $0.key < $1.key }.map { AliasEntry(name: $0.key, value: $0.value) }
+    }
+    public init(entries: [String: String]) { self.entries = entries }
+    public init(aliases: [AliasEntry]) {
+        entries = Dictionary(aliases.map { ($0.name, $0.value) }, uniquingKeysWith: { _, last in last })
+    }
+    public init(from decoder: Decoder) throws {
+        entries = try decoder.singleValueContainer().decode([String: String].self)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(entries)
+    }
 }
 
-// Create/delete alias returns empty (`Record<string, never>`).
+// Create/delete alias carries no payload. ⚠️ core answers `{"data": null}`, not
+// `{"data": {}}`, so these must not be unwrapped — see `AdminApi.emptyOK`.
 public typealias CreateAliasResponseData = Empty
 public typealias DeleteAliasResponseData = Empty
 
@@ -439,18 +494,6 @@ public struct LookupAliasResponseData: Codable, Sendable {
     public let value: String?
     public init(value: String? = nil) { self.value = value }
 }
-
-// MARK: - Context identity aliases
-
-public typealias ListContextIdentityAliasesResponseData = ListAliasesResponseData
-public typealias CreateContextIdentityAliasResponseData = Empty
-
-public struct LookupContextIdentityAliasResponseData: Codable, Sendable {
-    public let value: String?
-    public init(value: String? = nil) { self.value = value }
-}
-
-public typealias DeleteContextIdentityAliasResponseData = Empty
 
 // MARK: - Shared invitation types
 
@@ -554,44 +597,10 @@ public struct GroupInvitationFromAdmin: Codable, Sendable {
     }
 }
 
-/// Where to reach one of an invitation's `admitters`.
-///
-/// Unsigned, like the rest of the envelope's hints: a wrong endpoint costs a
-/// failed dial, because the admitting node still has to appear in the signed
-/// `admitters` list for its admission to count. It misdirects where you knock,
-/// never who may answer.
-public enum AdmitterEndpoint: Codable, Sendable, Equatable {
-    /// A libp2p multiaddr including the peer id — for a joiner that runs a node.
-    case multiaddr(String)
-    /// An `https://` admin-API base URL — for a joiner that holds only a key.
-    case url(String)
-
-    private enum CodingKeys: String, CodingKey { case multiaddr, url }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        if let value = try container.decodeIfPresent(String.self, forKey: .multiaddr) {
-            self = .multiaddr(value)
-        } else if let value = try container.decodeIfPresent(String.self, forKey: .url) {
-            self = .url(value)
-        } else {
-            throw MeroError.decoding("admitter hint is neither a multiaddr nor a url")
-        }
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        switch self {
-        case .multiaddr(let value): try container.encode(value, forKey: .multiaddr)
-        case .url(let value): try container.encode(value, forKey: .url)
-        }
-    }
-}
-
 /// An invitation plus the admin's signature over it, and the unsigned bootstrap
-/// hints core ships beside it.
+/// fields core ships beside it.
 ///
-/// The hints are not covered by the signature, but dropping them still costs
+/// Those are not covered by the signature, but dropping them still costs
 /// something real: `applicationId` and `appKey` are what let the joiner
 /// pre-populate its group meta with the same values the originator has. Without
 /// them the joiner records zeros, and `compute_group_state_hash` then diverges
@@ -606,8 +615,23 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
     /// group meta, and never authority — the signature covers the inner
     /// `invitation`, not this envelope.
     public var inviterAccount: String?
-    /// Where to reach the signed `admitters`. Best-effort.
-    public var admitterHints: [AdmitterEndpoint]
+    /// libp2p addresses for the signed `admitters`, each a full multiaddr
+    /// *including* the `/p2p/<peer-id>` suffix — the peer id travels with the
+    /// address because resolving an account to a peer needs governance state,
+    /// which is exactly what a joiner has not synced yet.
+    ///
+    /// Unsigned and best-effort, and safe to be: libp2p authenticates the peer
+    /// id on connect and an admission only counts from an account in the signed
+    /// `admitters` list, so a wrong address misdirects where you knock, never
+    /// who may answer. Possibly empty; an address recorded at mint may have
+    /// moved, which is survivable now an invitation lives at most 24 hours.
+    ///
+    /// ⚠️ core renamed this from `admitter_hints` and flattened it
+    /// from a tagged `{multiaddr}`/`{url}` enum to a plain multiaddr string
+    /// (core#3819 / core#3770). The old key is not read by an rc.32 node and the
+    /// old shape is not written by one. rc.31 started populating it; rc.32 made
+    /// the `admitters` it points at an authorization boundary rather than a hint.
+    public var admitterAddrs: [String]
     /// The group's application id, 32 bytes.
     public var applicationId: [Int]?
     /// The group's `bytecode_id`, 32 bytes. Core renamed the field and kept
@@ -618,12 +642,12 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
 
     public init(
         invitation: GroupInvitationFromAdmin, inviterSignature: String,
-        inviterAccount: String? = nil, admitterHints: [AdmitterEndpoint] = [],
+        inviterAccount: String? = nil, admitterAddrs: [String] = [],
         applicationId: [Int]? = nil, appKey: [Int]? = nil,
         passthrough: [String: JSONValue] = [:]
     ) {
         self.invitation = invitation; self.inviterSignature = inviterSignature
-        self.inviterAccount = inviterAccount; self.admitterHints = admitterHints
+        self.inviterAccount = inviterAccount; self.admitterAddrs = admitterAddrs
         self.applicationId = applicationId; self.appKey = appKey; self.passthrough = passthrough
     }
 
@@ -633,7 +657,7 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
         case invitation
         case inviterSignature = "inviter_signature"
         case inviterAccount = "inviter_account"
-        case admitterHints = "admitter_hints"
+        case admitterAddrs = "admitter_addrs"
         case applicationId = "application_id"
         case appKey = "app_key"
     }
@@ -648,16 +672,12 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
             GroupInvitationFromAdmin.self, from: try JSONEncoder().encode(body))
         inviterSignature = raw[Key.inviterSignature.rawValue]?.stringValue ?? ""
         inviterAccount = raw[Key.inviterAccount.rawValue]?.stringValue
-        if let hints = raw[Key.admitterHints.rawValue] {
-            admitterHints = try coder.decode(
-                [AdmitterEndpoint].self, from: try JSONEncoder().encode(hints))
-        } else {
-            admitterHints = []
-        }
+        admitterAddrs =
+            raw[Key.admitterAddrs.rawValue]?.arrayValue?.compactMap(\.stringValue) ?? []
         applicationId = raw[Key.applicationId.rawValue]?.arrayValue?.compactMap(\.intValue)
         appKey = raw[Key.appKey.rawValue]?.arrayValue?.compactMap(\.intValue)
         let named = Set(
-            [Key.invitation, .inviterSignature, .inviterAccount, .admitterHints, .applicationId, .appKey]
+            [Key.invitation, .inviterSignature, .inviterAccount, .admitterAddrs, .applicationId, .appKey]
                 .map(\.rawValue))
         passthrough = raw.filter { !named.contains($0.key) }
     }
@@ -670,9 +690,8 @@ public struct SignedGroupOpenInvitation: Codable, Sendable {
         // The trailing fields are `skip_serializing_if` on core's side; keep
         // them absent rather than null so an older invitation re-encodes as one.
         if let inviterAccount { raw[Key.inviterAccount.rawValue] = .string(inviterAccount) }
-        if !admitterHints.isEmpty {
-            raw[Key.admitterHints.rawValue] = try JSONDecoder().decode(
-                JSONValue.self, from: try JSONEncoder().encode(admitterHints))
+        if !admitterAddrs.isEmpty {
+            raw[Key.admitterAddrs.rawValue] = .array(admitterAddrs.map { .string($0) })
         }
         if let applicationId {
             raw[Key.applicationId.rawValue] = .array(applicationId.map { .number(Double($0)) })
@@ -744,13 +763,40 @@ public struct NodeIdentity: Codable, Sendable {
     public let accountRootPublicKey: String
     /// The device's key-agreement key, when the node has one.
     public let deviceAgreementKey: String?
+    /// Whether this node holds the **root** key of the account it speaks for —
+    /// i.e. whether it can certify another device into that account.
+    ///
+    /// New in core 0.11.0-rc.31 (core#3774). Not the same question as "does this
+    /// node have a root at all": a paired node has one of its own and still
+    /// answers `false`, because the account it speaks for is rooted on another
+    /// machine and certifying into that one is not its to do.
+    ///
+    /// Defaults to `false` on a node that predates the field, matching core's
+    /// own `#[serde(default)]`.
+    public let holdsAccountRoot: Bool
     public init(
         accountId: String, deviceId: String? = nil, publicKey: String,
-        accountRootPublicKey: String, deviceAgreementKey: String? = nil
+        accountRootPublicKey: String, deviceAgreementKey: String? = nil,
+        holdsAccountRoot: Bool = false
     ) {
         self.accountId = accountId; self.deviceId = deviceId; self.publicKey = publicKey
         self.accountRootPublicKey = accountRootPublicKey
         self.deviceAgreementKey = deviceAgreementKey
+        self.holdsAccountRoot = holdsAccountRoot
+    }
+
+    // Decoded by hand for one field: `holdsAccountRoot` has to survive a node
+    // that does not send it, and a synthesized `init(from:)` would fail the
+    // whole response instead.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountId = try container.decode(String.self, forKey: .accountId)
+        deviceId = try container.decodeIfPresent(String.self, forKey: .deviceId)
+        publicKey = try container.decode(String.self, forKey: .publicKey)
+        accountRootPublicKey = try container.decode(String.self, forKey: .accountRootPublicKey)
+        deviceAgreementKey = try container.decodeIfPresent(String.self, forKey: .deviceAgreementKey)
+        holdsAccountRoot =
+            try container.decodeIfPresent(Bool.self, forKey: .holdsAccountRoot) ?? false
     }
 }
 
@@ -812,17 +858,30 @@ public struct CreateNamespaceInvitationRequest: Codable, Sendable {
     ///
     /// ⚠️ Sent only when non-empty: a node older than rc.29 rejects the field.
     public var admitters: [String]
+    /// libp2p addresses for the accounts in ``admitters``, each a full multiaddr
+    /// including the `/p2p/<peer-id>` suffix.
+    ///
+    /// Leave empty and the node fills them in from addresses it already has on
+    /// file, which is what you want on a node that has been running. Supplied
+    /// values are used **as given**, not merged with what the node knows.
+    ///
+    /// Unsigned: a wrong address misdirects where a joiner knocks, never who may
+    /// answer. New in core 0.11.0-rc.32; sent only when non-empty, and an older
+    /// node ignores it.
+    public var admitterAddrs: [String]
     public init(
-        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = []
+        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = [],
+        admitterAddrs: [String] = []
     ) {
         self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
-        self.admitters = admitters
+        self.admitters = admitters; self.admitterAddrs = admitterAddrs
     }
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(expirationTimestamp, forKey: .expirationTimestamp)
         try container.encodeIfPresent(recursive, forKey: .recursive)
         if !admitters.isEmpty { try container.encode(admitters, forKey: .admitters) }
+        if !admitterAddrs.isEmpty { try container.encode(admitterAddrs, forKey: .admitterAddrs) }
     }
 }
 
@@ -1366,17 +1425,30 @@ public struct CreateGroupInvitationRequest: Codable, Sendable {
     /// ``CreateNamespaceInvitationRequest/admitters``. core refuses the request
     /// with 400 if any entry is not 64 hex characters.
     public var admitters: [String]
+    /// libp2p addresses for the accounts in ``admitters``, each a full multiaddr
+    /// including the `/p2p/<peer-id>` suffix.
+    ///
+    /// Leave empty and the node fills them in from addresses it already has on
+    /// file, which is what you want on a node that has been running. Supplied
+    /// values are used **as given**, not merged with what the node knows.
+    ///
+    /// Unsigned: a wrong address misdirects where a joiner knocks, never who may
+    /// answer. New in core 0.11.0-rc.32; sent only when non-empty, and an older
+    /// node ignores it.
+    public var admitterAddrs: [String]
     public init(
-        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = []
+        expirationTimestamp: Int? = nil, recursive: Bool? = nil, admitters: [String] = [],
+        admitterAddrs: [String] = []
     ) {
         self.expirationTimestamp = expirationTimestamp; self.recursive = recursive
-        self.admitters = admitters
+        self.admitters = admitters; self.admitterAddrs = admitterAddrs
     }
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(expirationTimestamp, forKey: .expirationTimestamp)
         try container.encodeIfPresent(recursive, forKey: .recursive)
         if !admitters.isEmpty { try container.encode(admitters, forKey: .admitters) }
+        if !admitterAddrs.isEmpty { try container.encode(admitterAddrs, forKey: .admitterAddrs) }
     }
 }
 

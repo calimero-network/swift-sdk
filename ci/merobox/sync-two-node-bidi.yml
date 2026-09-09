@@ -15,7 +15,7 @@ description: Writes on BOTH nodes must replicate to the other; context hash conv
 nodes:
   count: 2
   # Pinned; the CI job overwrites this line from ci/core-version.
-  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.32
   prefix: calimero-node
   # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
   # OFF by default, and these two containers have nothing else to find each
@@ -36,10 +36,20 @@ steps:
   - name: Install kv_store on node 1
     type: install_application
     node: calimero-node-1
-    path: ./ci/merobox/res/kv_store.wasm
+    # A BUNDLE, not a module — see sync-two-node.yml (core#3652, rc.31).
+    path: ./ci/merobox/res/kv_store.mpk
     dev: true
     outputs:
       app_id: applicationId
+
+  # On node 2 as well — see sync-two-node.yml: since rc.31 an `http`-registry
+  # node serves no application bytecode to peers, so a node that does not
+  # install the bundle itself has none.
+  - name: Install kv_store on node 2
+    type: install_application
+    node: calimero-node-2
+    path: ./ci/merobox/res/kv_store.mpk
+    dev: true
 
   - name: Mesh the context across node 1 + node 2
     type: create_mesh

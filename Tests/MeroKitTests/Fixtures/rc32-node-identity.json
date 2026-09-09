@@ -1,0 +1,10 @@
+{
+  "data": {
+    "accountId": "96c8a97ab268d076ed1f662138b330b2edff5a4159775eca4a383b3e5918f3e4",
+    "deviceId": "2143f6f273d9a81d0790093d84acb4514d645389dd0b016aa0560dd59057b88a",
+    "publicKey": "3f690ef1a6c0c09c3b5f998b24a78d6423144796574d110364703d9926129fc3",
+    "accountRootPublicKey": "4d86ada5aee7f6e91ec4e58b9d3ad0cf07d7deebdc78438b86baa7586bac606f",
+    "deviceAgreementKey": "7a014859b884c79804ab01dd22f6889b74e96cdf44aba5f771b769b838c23645",
+    "holdsAccountRoot": true
+  }
+}

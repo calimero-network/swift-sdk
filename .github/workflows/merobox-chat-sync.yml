@@ -104,10 +104,11 @@ jobs:
           pip install 'merobox==0.6.74' 'calimero-client-py==0.6.37'
           merobox --version
 
-      # Download the published curb bundle (.mpk = gzip tar of app.wasm + manifest)
-      # and extract the wasm to the path the workflow references. Resolve the
-      # latest version from the registry unless one was given.
-      - name: Download curb app.wasm from the registry
+      # Download the published curb bundle to the path the scenario references,
+      # and hand it over whole: core 0.11.0-rc.31 (core#3652) refuses a raw
+      # module on dev install. Resolve the latest version from the registry
+      # unless one was given.
+      - name: Download the curb bundle from the registry
         run: |
           set -euo pipefail
           VER="${CURB_VERSION}"
@@ -136,11 +137,10 @@ jobs:
           echo "curb version: $VER"
           echo "CURB_RESOLVED=$VER" >> "$GITHUB_ENV"
           curl -sfL "${REGISTRY}/artifacts/${PACKAGE}/${VER}/${PACKAGE}-${VER}.mpk" -o curb.mpk
-          mkdir -p extract ci/merobox/res
-          tar xzf curb.mpk -C extract
-          cp "$(find extract -name '*.wasm' | head -1)" ci/merobox/res/curb-app.wasm
-          ls -la ci/merobox/res/curb-app.wasm
-          file ci/merobox/res/curb-app.wasm
+          mkdir -p ci/merobox/res
+          cp curb.mpk ci/merobox/res/curb-app.mpk
+          ls -la ci/merobox/res/curb-app.mpk
+          file ci/merobox/res/curb-app.mpk
 
       - name: Pull merod image
         run: docker pull "$MEROD_IMAGE"

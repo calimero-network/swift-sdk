@@ -42,6 +42,30 @@ let joined = try await mero.admin.joinNamespace(
 // joined.memberAccount (what the member-addressing calls below take)
 ```
 
+### Admitters
+
+An invitation names the **accounts** that may admit a claim of it (`admitters`,
+signed) and, since core 0.11.0-rc.32, **where to reach them** (`admitterAddrs`,
+unsigned — full multiaddrs including the `/p2p/<peer-id>` suffix). Leave both
+empty and the node fills them in: the group's admins and TEE nodes, at the
+addresses it already has on file.
+
+```swift
+let invite = try await mero.admin.createNamespaceInvitation(
+  namespaceId,
+  request: CreateNamespaceInvitationRequest(
+    admitters: [try await mero.admin.getNodeIdentity().accountId],
+    admitterAddrs: ["/ip4/10.0.0.7/tcp/2428/p2p/12D3KooW…"]))
+```
+
+Supplied addresses are used **as given**, not merged. Getting one wrong costs a
+failed dial and nothing more — authority comes from the signed `admitters` list,
+so an address can misdirect where a joiner knocks, never who may answer.
+
+⚠️ rc.32 renamed the envelope field carrying these from `admitter_hints` and
+flattened it from a tagged `{multiaddr}`/`{url}` enum to a plain string. An rc.32
+node neither reads the old key nor writes the old shape.
+
 ## Groups, members & roles
 
 ```swift

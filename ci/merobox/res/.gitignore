@@ -1,11 +1,18 @@
-# Both wasms in this directory are downloaded at run time, version-matched to
+# Both bundles in this directory are downloaded at run time, version-matched to
 # what the run is actually testing, and must never be committed:
-#   kv_store.wasm  — from the pinned core release's kv-store-test-fixture.mpk
-#                    (.github/workflows/merobox-sync.yml)
-#   curb-app.wasm  — from the app registry
-#                    (.github/workflows/merobox-chat-sync.yml)
+#   kv_store.mpk  — from the pinned core release's kv-store-test-fixture.mpk
+#                   (.github/workflows/merobox-sync.yml)
+#   curb-app.mpk  — from the app registry
+#                   (.github/workflows/merobox-chat-sync.yml)
 # A committed copy is a copy that goes stale silently: the vendored kv_store.wasm
 # drifted 10 release candidates behind the node, and a wasm that predates the
 # node's host ABI leaves the joining node on the all-ones "uninitialized" hash
 # forever — which reads as a cross-node sync bug.
+#
+# ⚠️ `.mpk`, not `.wasm`. core 0.11.0-rc.31 (core#3652) made a raw module a 500
+# on dev install — `not a signed application bundle: <path>` — because an
+# application id is derived from a bundle's package and signer, so a bare module
+# has no identity to install under. Both patterns stay ignored so a leftover
+# `.wasm` from before that cannot be committed either.
+*.mpk
 *.wasm

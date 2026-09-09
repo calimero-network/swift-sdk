@@ -1,9 +1,14 @@
 # Response fixtures
 
-Bodies captured **verbatim** from a live `merod` on core `0.11.0-rc.29`
-(`ci/core-version`). Nothing here is hand-assembled from what the SDK expects,
-which is the point: a fixture written to match the model can only confirm the
-model agrees with itself.
+Bodies captured **verbatim** from a live `merod`, named for the core release
+they came from. `rc32-*` is the current pin (`ci/core-version`); the `rc29-*`
+files are kept because an older node's response is itself a case worth
+decoding — `rc29-node-identity.json` has no `holdsAccountRoot`, which is how
+`Rc32SurfaceTests` checks the field defaults instead of failing the response.
+
+Nothing here is hand-assembled from what the SDK expects, which is the point: a
+fixture written to match the model can only confirm the model agrees with
+itself.
 
 That is not hypothetical. `joinNamespace` shipped broken against core rc.25
 because every test asserted the *request* — verb, path, body — and none decoded
@@ -14,19 +19,42 @@ built its input from the same model it then asserted on.
 
 ## Refreshing after a core bump
 
-Boot a node at the pinned release (TESTING.md §4a) and re-capture:
+Boot a node at the pinned release (TESTING.md §4a) and re-capture. An
+application has to be installed first — since rc.32 that means coordinates the
+node's own `[registry]` can resolve, and `merod init` writes the public registry
+into a fresh config:
 
 ```sh
 TOK=…   # POST /auth/token, see TESTING.md §4b
 B=http://localhost:4001/admin-api
+AUTH="Authorization: Bearer $TOK"
+JSON='Content-Type: application/json'
 
-curl -s "$B/identity"                      -H "Authorization: Bearer $TOK"  # rc29-node-identity.json
-curl -s "$B/account/devices"               -H "Authorization: Bearer $TOK"  # rc29-account-devices.json
-curl -s "$B/account/applications"          -H "Authorization: Bearer $TOK"  # rc29-account-applications.json
-curl -s "$B/groups/$NS/member-devices"     -H "Authorization: Bearer $TOK"  # rc29-member-devices.json
-curl -s -X POST "$B/namespaces/$NS/invite" -H "Authorization: Bearer $TOK" \
-  -H 'Content-Type: application/json' -d '{}'                              # .data.invitation
+APP=$(curl -s -X POST "$B/install-application" -H "$AUTH" -H "$JSON" \
+  -d '{"package":"com.calimero.chat","version":"3.1.1"}' \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["applicationId"])')
+NS=$(curl -s -X POST "$B/namespaces" -H "$AUTH" -H "$JSON" \
+  -d "{\"applicationId\":\"$APP\"}" \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["namespaceId"])')
+
+curl -s "$B/identity"                  -H "$AUTH"  # rc32-node-identity.json
+curl -s "$B/account/devices"           -H "$AUTH"  # rc32-account-devices.json
+curl -s "$B/account/applications"      -H "$AUTH"  # rc32-account-applications.json
+curl -s "$B/groups/$NS/member-devices" -H "$AUTH"  # rc32-member-devices.json
+curl -s "$B/alias/list/device"         -H "$AUTH"  # rc32-alias-list-device.json
+
+curl -s -X POST "$B/namespaces/$NS/invite" -H "$AUTH" -H "$JSON" \
+  -d '{"inviteeIdentity":"11…11"}'                 # rc32-namespace-invitation.json
+
+# The two install shapes: coordinates, and the stale URL body core now refuses.
+curl -s -X POST "$B/install-application" -H "$AUTH" -H "$JSON" \
+  -d '{"package":"com.calimero.chat","version":"3.1.1"}'   # rc32-install-application.json
+curl -s -X POST "$B/install-application" -H "$AUTH" -H "$JSON" \
+  -d '{"url":"https://example/a.mpk","metadata":[]}'       # rc32-install-application-url-refused.json
 ```
+
+Ids, signatures and multiaddrs differ per node, so a re-capture will not be a
+clean diff. What matters is the **key set** and the shape of each value.
 
 A diff against the committed file is itself the signal: if a field appeared or
 changed shape, that is a wire change to handle, not a fixture to overwrite

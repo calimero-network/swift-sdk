@@ -151,8 +151,13 @@ final class ChatService: ObservableObject {
             let versions = try await self.mero.admin.getRegistryVersions(
                 registryUrl: Self.registryURL, packageName: Self.packageName)
             guard let version = versions.first else { self.status = "no registry versions found"; return }
+            // The version comes from the registry's own listing; the install
+            // itself names only coordinates, and the node fetches them from the
+            // registry *it* is configured with (core 0.11.0-rc.32). Those are
+            // the same public registry here — if they were not, the node would
+            // answer 502 for a version this listing offered.
             let resp = try await self.mero.admin.installFromRegistry(
-                registryUrl: Self.registryURL, packageName: Self.packageName, version: version)
+                packageName: Self.packageName, version: version)
             self.appId = resp.applicationId
             self.status = "installed \(Self.packageName)@\(version)"
             await self.loadSpaces()

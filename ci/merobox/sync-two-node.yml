@@ -7,7 +7,7 @@
 # exercises node + WASM + sync, independent of the curb chat app or iOS.
 #
 # Run:  merobox bootstrap run ci/merobox/sync-two-node.yml   (from repo root)
-#       — needs ci/merobox/res/kv_store.wasm, which the CI job downloads from
+#       — needs ci/merobox/res/kv_store.mpk, which the CI job downloads from
 #         the pinned core release (see ci/merobox/README.md "Node image").
 #
 # Node image: pinned to the release named in ci/core-version, which the CI job
@@ -19,7 +19,7 @@ description: Write on node 1 must replicate to node 2 and the context hash must 
 nodes:
   count: 2
   # Pinned; the CI job overwrites this line from ci/core-version.
-  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.32
   prefix: calimero-node
   # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
   # OFF by default, and these two containers have nothing else to find each
@@ -41,15 +41,32 @@ steps:
   - name: Install kv_store on node 1
     type: install_application
     node: calimero-node-1
-    path: ./ci/merobox/res/kv_store.wasm
+    # A BUNDLE, not a module: core 0.11.0-rc.31 (core#3652) answers a raw
+    # `.wasm` with `not a signed application bundle`, because an application id
+    # is derived from a bundle's package and signer.
+    path: ./ci/merobox/res/kv_store.mpk
     dev: true
     outputs:
       app_id: applicationId
 
-  # Creates the context on node 1 and wires node 2 into it (pre-installs the
-  # app on node 2, invites + joins). The join protocol no longer ships the app
-  # blob, so the pre-install (auto-resolved from the step above) is what lets
-  # node 2's context state initialize instead of staying uninitialized.
+  # ⚠️ On node 2 as well, and this is load-bearing. `create_mesh` does not
+  # pre-install anything, and core 0.11.0-rc.31 (core#3652) stopped an
+  # `http`-registry node from serving application bytecode to peers at all — so
+  # node 2 can no longer pick the blob up from node 1 the way it used to, and a
+  # dev bundle is published nowhere for it to fetch by coordinates. Without this
+  # step node 2 joins, converges on the context hash, and then every method call
+  # dies inside the runtime with `bytecode blob <id> not found in blobstore`,
+  # which reads as a WASM bug three layers from the cause.
+  #
+  # Installing the same bundle twice is safe: an application id is derived from
+  # the bundle's package and signer, so both nodes land on the same id.
+  - name: Install kv_store on node 2
+    type: install_application
+    node: calimero-node-2
+    path: ./ci/merobox/res/kv_store.mpk
+    dev: true
+
+  # Creates the context on node 1 and wires node 2 into it (invites + joins).
   - name: Mesh the context across node 1 + node 2
     type: create_mesh
     context_node: calimero-node-1
