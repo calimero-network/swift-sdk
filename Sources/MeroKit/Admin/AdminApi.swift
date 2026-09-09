@@ -98,6 +98,20 @@ public struct AdminApi: Sendable {
         return data
     }
 
+    /// For routes whose success body carries no payload.
+    ///
+    /// ⚠️ Needed because core answers the alias mutations `{"data": null}`, and
+    /// `unwrap` reads a null `data` as a failure — so these calls used to throw
+    /// on success. A transport-level failure has already thrown by the time this
+    /// runs; an `error` string alongside a null `data` is the only thing left to
+    /// catch here.
+    private func emptyOK(_ resp: ApiResponse<Empty>, _ context: String) throws -> Empty {
+        if let error = resp.error, !error.isEmpty {
+            throw MeroError.emptyResponse("\(context): \(error)")
+        }
+        return resp.data ?? Empty()
+    }
+
     private func jsonRequest(
         _ path: String, method: HTTPMethod, body: some Encodable, timeout: TimeInterval? = nil
     ) throws -> HttpRequest {
@@ -151,6 +165,12 @@ public struct AdminApi: Sendable {
 
     // MARK: - Application Management
 
+    /// Install a published application by coordinates.
+    ///
+    /// The node fetches it from the one source its own `[registry]` section
+    /// names — see ``InstallApplicationRequest`` for why there is no URL any
+    /// more, and what an rc.32 node answers when the coordinates are not
+    /// published there.
     public func installApplication(_ request: InstallApplicationRequest) async throws -> InstallApplicationResponseData
     {
         let resp: ApiResponse<InstallApplicationResponseData> = try await http.post(
@@ -158,41 +178,24 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "installApplication")
     }
 
-    /// Resolve a `package@version` to its registry artifact URL and install it.
-    /// Node install is URL-based (no node-side package+version resolution), so this
-    /// fetches the bundle manifest from the registry, derives the `.mpk` artifact
-    /// URL, then calls `installApplication`. `registryUrl` is the registry origin.
-    /// This is the discrete "download" step an Updates flow pairs with a
-    /// subsequent `upgradeGroup`.
+    /// Install `package@version` from the node's configured registry.
     ///
-    /// NOTE: the registry lives off-node, so this method reaches it via
-    /// `URLSession` directly rather than the node `HttpClient`.
+    /// The discrete "download" step an Updates flow pairs with a subsequent
+    /// `upgradeGroup`. One request now: the node resolves the version, fetches
+    /// the `.mpk` and checks its blob id against the coordinates itself.
+    ///
+    /// ⚠️ Where it comes from is the **node's** `[registry]`, not a URL this
+    /// call chooses. Before core 0.11.0-rc.31 this method fetched the registry's
+    /// bundle manifest, derived an artifact URL and posted that; rc.31 refuses a
+    /// body carrying a URL outright (core#3652), so the `registryUrl` argument
+    /// is gone with nothing to replace it — a node pointed at the wrong registry
+    /// is fixed in the node's config, not per call.
     public func installFromRegistry(
-        registryUrl: String,
         packageName: String,
         version: String
     ) async throws -> InstallApplicationResponseData {
-        let base = try origin(of: registryUrl)
-        guard
-            let manifestUrl = URL(
-                string: "\(base)/api/v2/bundles/\(packageName.percentEncoded())/\(version.percentEncoded())")
-        else {
-            throw MeroError.emptyResponse("invalid manifest URL for \(packageName)@\(version)")
-        }
-        let bundle: RegistryBundleManifest = try await fetchJSON(
-            manifestUrl,
-            failure: "registry manifest fetch failed for \(packageName)@\(version)"
-        )
-        // Encode the path segments — the package/version come from a (best-effort
-        // trusted) registry response, so guard against odd characters breaking or
-        // traversing the artifact path. For normal ids/semvers this is a no-op.
-        let pkg = bundle.package.percentEncoded()
-        let ver = bundle.appVersion.percentEncoded()
-        let artifactUrl = "\(base)/artifacts/\(pkg)/\(ver)/\(pkg)-\(ver).mpk"
         return try await installApplication(
-            InstallApplicationRequest(
-                url: artifactUrl, metadata: [], package: bundle.package, version: bundle.appVersion)
-        )
+            InstallApplicationRequest(package: packageName, version: version))
     }
 
     /// List a package's published versions from the registry, newest-first by
@@ -376,9 +379,16 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "getContextStorage")
     }
 
+    /// Sync one context, or every context when `contextId` is nil.
+    ///
+    /// ⚠️ The sync-everything form must not carry a trailing slash. core moved to
+    /// axum 0.8 in 0.11.0-rc.30, which stopped matching `/contexts/sync/` against
+    /// the `/contexts/sync` route — so the interpolated-empty-id path this used to
+    /// build now answers 404, and nothing gets synced.
     public func syncContext(_ contextId: String? = nil) async throws {
-        try await http.sendVoid(
-            jsonRequest("/admin-api/contexts/sync/\(contextId ?? "")", method: .post, body: EmptyObject()))
+        let path =
+            contextId.map { "/admin-api/contexts/sync/\($0)" } ?? "/admin-api/contexts/sync"
+        try await http.sendVoid(jsonRequest(path, method: .post, body: EmptyObject()))
     }
 
     /// Kick off a full state re-pull for a context (operator recovery for a
@@ -485,14 +495,14 @@ public struct AdminApi: Sendable {
     public func createContextAlias(_ request: CreateContextAliasRequest) async throws -> CreateAliasResponseData {
         let resp: ApiResponse<CreateAliasResponseData> = try await http.post(
             "/admin-api/alias/create/context", json: request)
-        return try unwrap(resp, "createContextAlias")
+        return try emptyOK(resp, "createContextAlias")
     }
 
     public func createApplicationAlias(_ request: CreateApplicationAliasRequest) async throws -> CreateAliasResponseData
     {
         let resp: ApiResponse<CreateAliasResponseData> = try await http.post(
             "/admin-api/alias/create/application", json: request)
-        return try unwrap(resp, "createApplicationAlias")
+        return try emptyOK(resp, "createApplicationAlias")
     }
 
     public func lookupContextAlias(_ name: String) async throws -> LookupAliasResponseData {
@@ -510,13 +520,13 @@ public struct AdminApi: Sendable {
     public func deleteContextAlias(_ name: String) async throws -> DeleteAliasResponseData {
         let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
             "/admin-api/alias/delete/context/\(name.percentEncoded())", json: EmptyObject())
-        return try unwrap(resp, "deleteContextAlias")
+        return try emptyOK(resp, "deleteContextAlias")
     }
 
     public func deleteApplicationAlias(_ name: String) async throws -> DeleteAliasResponseData {
         let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
             "/admin-api/alias/delete/application/\(name.percentEncoded())", json: EmptyObject())
-        return try unwrap(resp, "deleteApplicationAlias")
+        return try emptyOK(resp, "deleteApplicationAlias")
     }
 
     public func listContextAliases() async throws -> ListAliasesResponseData {
@@ -529,36 +539,36 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "listApplicationAliases")
     }
 
-    // MARK: - Context Identity Aliases
+    // MARK: - Device Aliases
 
-    public func listContextIdentityAliases(_ contextId: String) async throws -> ListContextIdentityAliasesResponseData {
-        let resp: ApiResponse<ListContextIdentityAliasesResponseData> = try await http.get(
-            "/admin-api/alias/list/identity/\(contextId)")
-        return try unwrap(resp, "listContextIdentityAliases")
+    // ⚠️ These four replace a "context identity alias" family that called
+    // `/admin-api/alias/*/identity/{contextId}[/{name}]`. Those routes do not
+    // exist and never did: an alias scopes to a device, not to an identity
+    // within a context. A live 0.11.0-rc.32 node answers all four with 404, and
+    // rc.32 also deleted the optional two-segment extractor the handlers used to
+    // carry, so there is nothing left that could ever have matched.
+
+    public func listDeviceAliases() async throws -> ListAliasesResponseData {
+        let resp: ApiResponse<ListAliasesResponseData> = try await http.get("/admin-api/alias/list/device")
+        return try unwrap(resp, "listDeviceAliases")
     }
 
-    public func createContextIdentityAlias(
-        _ contextId: String, request: CreateContextIdentityAliasRequest
-    ) async throws -> CreateContextIdentityAliasResponseData {
-        let resp: ApiResponse<CreateContextIdentityAliasResponseData> = try await http.post(
-            "/admin-api/alias/create/identity/\(contextId)", json: request)
-        return try unwrap(resp, "createContextIdentityAlias")
+    public func createDeviceAlias(_ request: CreateDeviceAliasRequest) async throws -> CreateAliasResponseData {
+        let resp: ApiResponse<CreateAliasResponseData> = try await http.post(
+            "/admin-api/alias/create/device", json: request)
+        return try emptyOK(resp, "createDeviceAlias")
     }
 
-    public func lookupContextIdentityAlias(
-        _ contextId: String, name: String
-    ) async throws -> LookupContextIdentityAliasResponseData {
-        let resp: ApiResponse<LookupContextIdentityAliasResponseData> = try await http.post(
-            "/admin-api/alias/lookup/identity/\(contextId)/\(name.percentEncoded())", json: EmptyObject())
-        return try unwrap(resp, "lookupContextIdentityAlias")
+    public func lookupDeviceAlias(_ name: String) async throws -> LookupAliasResponseData {
+        let resp: ApiResponse<LookupAliasResponseData> = try await http.post(
+            "/admin-api/alias/lookup/device/\(name.percentEncoded())", json: EmptyObject())
+        return try unwrap(resp, "lookupDeviceAlias")
     }
 
-    public func deleteContextIdentityAlias(
-        _ contextId: String, name: String
-    ) async throws -> DeleteContextIdentityAliasResponseData {
-        let resp: ApiResponse<DeleteContextIdentityAliasResponseData> = try await http.post(
-            "/admin-api/alias/delete/identity/\(contextId)/\(name.percentEncoded())", json: EmptyObject())
-        return try unwrap(resp, "deleteContextIdentityAlias")
+    public func deleteDeviceAlias(_ name: String) async throws -> DeleteAliasResponseData {
+        let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
+            "/admin-api/alias/delete/device/\(name.percentEncoded())", json: EmptyObject())
+        return try emptyOK(resp, "deleteDeviceAlias")
     }
 
     // MARK: - Namespace Management

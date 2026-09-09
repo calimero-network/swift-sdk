@@ -11,7 +11,7 @@
 # curb's channel/message contract shape mirrors Examples/MeroSampleApp
 # Sources/Chat/ChatService.swift (init params + send_message/get_messages args).
 #
-# The wasm is downloaded + extracted by the CI job to ./ci/merobox/res/curb-app.wasm
+# The bundle is downloaded by the CI job to ./ci/merobox/res/curb-app.mpk
 # (see .github/workflows/merobox-chat-sync.yml).
 name: Two-node mero-chat (curb) message sync
 description: A message sent on node 1 in a curb channel must replicate to node 2.
@@ -19,7 +19,7 @@ description: A message sent on node 1 in a curb channel must replicate to node 2
 nodes:
   count: 2
   # Pinned; the CI job overwrites this line from ci/core-version.
-  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.32
   prefix: calimero-node
   # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
   # OFF by default, and these two containers have nothing else to find each
@@ -40,7 +40,8 @@ steps:
   - name: Install curb (mero-chat) on node 1
     type: install_application
     node: calimero-node-1
-    path: ./ci/merobox/res/curb-app.wasm
+    # A BUNDLE, not a module — see sync-two-node.yml (core#3652, rc.31).
+    path: ./ci/merobox/res/curb-app.mpk
     dev: true
     outputs:
       app_id: applicationId

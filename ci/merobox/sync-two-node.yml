@@ -7,7 +7,7 @@
 # exercises node + WASM + sync, independent of the curb chat app or iOS.
 #
 # Run:  merobox bootstrap run ci/merobox/sync-two-node.yml   (from repo root)
-#       — needs ci/merobox/res/kv_store.wasm, which the CI job downloads from
+#       — needs ci/merobox/res/kv_store.mpk, which the CI job downloads from
 #         the pinned core release (see ci/merobox/README.md "Node image").
 #
 # Node image: pinned to the release named in ci/core-version, which the CI job
@@ -19,7 +19,7 @@ description: Write on node 1 must replicate to node 2 and the context hash must 
 nodes:
   count: 2
   # Pinned; the CI job overwrites this line from ci/core-version.
-  image: ghcr.io/calimero-network/merod:0.11.0-rc.29
+  image: ghcr.io/calimero-network/merod:0.11.0-rc.32
   prefix: calimero-node
   # core rc.26 ("leave mDNS off unless asked for", core#3620) turned multicast
   # OFF by default, and these two containers have nothing else to find each
@@ -41,7 +41,10 @@ steps:
   - name: Install kv_store on node 1
     type: install_application
     node: calimero-node-1
-    path: ./ci/merobox/res/kv_store.wasm
+    # A BUNDLE, not a module: core 0.11.0-rc.31 (core#3652) answers a raw
+    # `.wasm` with `not a signed application bundle`, because an application id
+    # is derived from a bundle's package and signer.
+    path: ./ci/merobox/res/kv_store.mpk
     dev: true
     outputs:
       app_id: applicationId

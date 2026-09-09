@@ -112,14 +112,18 @@ jobs:
       - name: Pull merod image
         run: docker pull "$MEROD_IMAGE"
 
-      # The wasm must match the node's host ABI or the joining node can never
+      # The bundle must match the node's host ABI or the joining node can never
       # initialize the context and sits on the all-ones "uninitialized" hash
       # forever — which reads as a sync bug, not a fixture bug. This used to be
       # a binary vendored into the repo and rebuilt by hand after a core bump;
       # it went 10 release candidates stale. core publishes a version-matched
       # `kv-store-test-fixture.mpk` (a gzip tar of manifest.json + app.wasm +
       # abi.json) on every release, so take it from the pinned tag instead.
-      - name: Download the version-matched kv_store wasm
+      # ⚠️ The bundle goes in whole. core 0.11.0-rc.31 (core#3652) made a raw
+      # module a 500 on dev install (`not a signed application bundle`), so
+      # extracting app.wasm — which is what this step used to do — now fails the
+      # scenario at its first step.
+      - name: Download the version-matched kv_store bundle
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -127,10 +131,11 @@ jobs:
           gh release download "$CORE_TAG" --repo calimero-network/core \
             --pattern 'kv-store-test-fixture.mpk' --output kv-store.mpk --clobber
           mkdir -p kv-store-fixture ci/merobox/res
+          cp kv-store.mpk ci/merobox/res/kv_store.mpk
+          # Unpacked only to log which version the run is actually testing.
           tar xzf kv-store.mpk -C kv-store-fixture
-          cp kv-store-fixture/app.wasm ci/merobox/res/kv_store.wasm
           python3 -c "import json;m=json.load(open('kv-store-fixture/manifest.json'));print('kv_store fixture appVersion:', m['appVersion'])"
-          ls -l ci/merobox/res/kv_store.wasm
+          ls -l ci/merobox/res/kv_store.mpk
 
       # Point the scenario at the resolved image without editing the checked-in
       # YAML. Matches the `image:` line by shape rather than by its current

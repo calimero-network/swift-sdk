@@ -149,7 +149,9 @@ private let appOps: [SDKOperation] = [
     },
     SDKOperation(
         id: "app.install", category: "Applications", name: "installApplication",
-        summary: "Install by URL", fields: [.json()]
+        // core 0.11.0-rc.32 took the URL away: the node installs from the one
+        // source its own `[registry]` names, so the body is `{package, version}`.
+        summary: "Install by package@version", fields: [.json()]
     ) { m, i in
         Fmt.json(try await m.admin.installApplication(try Fmt.decode(i.v("body"), InstallApplicationRequest.self)))
     },
@@ -234,12 +236,14 @@ private let pkgOps: [SDKOperation] = [
     },
     SDKOperation(
         id: "pkg.install", category: "Packages & Registry", name: "installFromRegistry",
-        summary: "Resolve + install from registry",
-        fields: [.line("registryUrl", "Registry URL"), .line("packageName", "Package"), .line("version", "Version")]
+        // No registry URL any more: rc.32 resolves the coordinates on the node,
+        // against the registry the node itself is configured with.
+        summary: "Install from the node's registry",
+        fields: [.line("packageName", "Package"), .line("version", "Version")]
     ) { m, i in
         Fmt.json(
             try await m.admin.installFromRegistry(
-                registryUrl: i.v("registryUrl"), packageName: i.v("packageName"), version: i.v("version")))
+                packageName: i.v("packageName"), version: i.v("version")))
     },
     SDKOperation(
         id: "pkg.semver", category: "Packages & Registry", name: "compareSemver",
@@ -463,31 +467,31 @@ private let aliasOps: [SDKOperation] = [
         id: "al.appList", category: "Aliases", name: "listApplicationAliases",
         summary: "All application aliases", fields: []
     ) { m, _ in Fmt.json(try await m.admin.listApplicationAliases()) },
+    // The device alias family. It replaces four "context identity alias"
+    // operations that called `/admin-api/alias/*/identity/...` — routes a live
+    // node answers with 404, so those four could only ever fail here.
     SDKOperation(
-        id: "al.idList", category: "Aliases", name: "listContextIdentityAliases",
-        summary: "Identity aliases in a context", fields: [.line("contextId", "Context ID")]
-    ) { m, i in
-        Fmt.json(try await m.admin.listContextIdentityAliases(i.v("contextId")))
-    },
+        id: "al.devList", category: "Aliases", name: "listDeviceAliases",
+        summary: "All device aliases", fields: []
+    ) { m, _ in Fmt.json(try await m.admin.listDeviceAliases()) },
     SDKOperation(
-        id: "al.idCreate", category: "Aliases", name: "createContextIdentityAlias",
-        summary: "Create identity alias", fields: [.line("contextId", "Context ID"), .json("body", "Request")]
+        id: "al.devCreate", category: "Aliases", name: "createDeviceAlias",
+        summary: "Create device alias", fields: [.json("body", "Request")]
     ) { m, i in
         Fmt.json(
-            try await m.admin.createContextIdentityAlias(
-                i.v("contextId"), request: try Fmt.decode(i.v("body"), CreateContextIdentityAliasRequest.self)))
+            try await m.admin.createDeviceAlias(try Fmt.decode(i.v("body"), CreateDeviceAliasRequest.self)))
     },
     SDKOperation(
-        id: "al.idLookup", category: "Aliases", name: "lookupContextIdentityAlias",
-        summary: "Resolve identity alias", fields: [.line("contextId", "Context ID"), .line("name", "Alias name")]
+        id: "al.devLookup", category: "Aliases", name: "lookupDeviceAlias",
+        summary: "Resolve device alias", fields: [.line("name", "Alias name")]
     ) { m, i in
-        Fmt.json(try await m.admin.lookupContextIdentityAlias(i.v("contextId"), name: i.v("name")))
+        Fmt.json(try await m.admin.lookupDeviceAlias(i.v("name")))
     },
     SDKOperation(
-        id: "al.idDelete", category: "Aliases", name: "deleteContextIdentityAlias",
-        summary: "Delete identity alias", fields: [.line("contextId", "Context ID"), .line("name", "Alias name")]
+        id: "al.devDelete", category: "Aliases", name: "deleteDeviceAlias",
+        summary: "Delete device alias", fields: [.line("name", "Alias name")]
     ) { m, i in
-        Fmt.json(try await m.admin.deleteContextIdentityAlias(i.v("contextId"), name: i.v("name")))
+        Fmt.json(try await m.admin.deleteDeviceAlias(i.v("name")))
     },
 ]
 

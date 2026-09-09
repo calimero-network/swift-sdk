@@ -33,7 +33,7 @@ shared [`HttpClient`](/reference/error-model/#transport); **every method is
 | --- | --- |
 | `installApplication(_ request: InstallApplicationRequest) -> InstallApplicationResponseData` | `POST /install-application` |
 | `installDevApplication(_ request: InstallDevApplicationRequest) -> InstallApplicationResponseData` | `POST /install-dev-application` |
-| `installFromRegistry(registryUrl:packageName:version:) -> InstallApplicationResponseData` | resolves registry manifest, then installs |
+| `installFromRegistry(packageName:version:) -> InstallApplicationResponseData` | `POST /install-application` by coordinates |
 | `getRegistryVersions(registryUrl:packageName:) -> [String]` | registry bundles (newest first) |
 | `uninstallApplication(_ appId: String) -> UninstallApplicationResponseData` | `DELETE /applications/{appId}` |
 | `listApplications() -> ListApplicationsResponseData` | `GET /applications` |
@@ -92,6 +92,13 @@ other, and it matters: every authorization subject is an account, while group
 membership listings report devices. A device key handed to a role grant succeeds
 and authorizes nobody.
 
+rc.32 added `NodeIdentity.holdsAccountRoot` (core#3774): whether this node holds
+the root key of the account it speaks for, and so whether it can certify another
+device into that account. It is not "does this node have a root" — a paired node
+has one of its own and still answers `false`, because the account it speaks for
+is rooted elsewhere. The field is defaulted, so a response from an older node
+decodes as `false` rather than failing.
+
 | Method | Endpoint |
 | --- | --- |
 | `getNodeIdentity() -> NodeIdentity` | `GET /identity` |
@@ -124,10 +131,16 @@ and authorizes nobody.
 | `deleteApplicationAlias(_ name: String) -> DeleteAliasResponseData` | `POST /alias/delete/application/{name}` |
 | `listContextAliases() -> ListAliasesResponseData` | `GET /alias/list/context` |
 | `listApplicationAliases() -> ListAliasesResponseData` | `GET /alias/list/application` |
-| `listContextIdentityAliases(_ contextId: String) -> ListContextIdentityAliasesResponseData` | `GET /alias/list/identity/{contextId}` |
-| `createContextIdentityAlias(_ contextId: String, request:) -> CreateContextIdentityAliasResponseData` | `POST /alias/create/identity/{contextId}` |
-| `lookupContextIdentityAlias(_ contextId: String, name:) -> LookupContextIdentityAliasResponseData` | `POST /alias/lookup/identity/{contextId}/{name}` |
-| `deleteContextIdentityAlias(_ contextId: String, name:) -> DeleteContextIdentityAliasResponseData` | `POST /alias/delete/identity/{contextId}/{name}` |
+| `listDeviceAliases() -> ListAliasesResponseData` | `GET /alias/list/device` |
+| `createDeviceAlias(_ request: CreateDeviceAliasRequest) -> CreateAliasResponseData` | `POST /alias/create/device` |
+| `lookupDeviceAlias(_ name: String) -> LookupAliasResponseData` | `POST /alias/lookup/device/{name}` |
+| `deleteDeviceAlias(_ name: String) -> DeleteAliasResponseData` | `POST /alias/delete/device/{name}` |
+
+An alias scopes to a **device**, and a listing comes back as a map keyed by alias
+name (`ListAliasesResponseData.entries`, with `.aliases` for a name-sorted array).
+The four `…ContextIdentityAlias` methods this table used to list called
+`/alias/*/identity/…`, which no released node serves — a live 0.11.0-rc.32
+answers all four with 404.
 
 ## Namespaces
 

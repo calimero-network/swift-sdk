@@ -41,7 +41,7 @@ That looks exactly like a cross-node sync bug. It was a `kv_store.wasm` whose
 host ABI predated the node, so the joining node could never initialize the
 context. Rebuilding it by hand fixed it — and then it went stale again, ten
 release candidates behind, because nothing made it move. It is no longer
-vendored: see *Node image and wasm* below.
+vendored: see *Node image and app bundle* below.
 
 **2. mDNS off by default → `join_namespace` HTTP 500.** core rc.26 (core#3620,
 "leave mDNS off unless asked for") turned multicast off. These two containers
@@ -54,8 +54,20 @@ times out waiting for a group key only a peer could send, and the handler answer
 The scenarios now ask for multicast explicitly with `mdns: true` on the `nodes:`
 block, which is the honest thing for a test fleet sharing one Docker bridge.
 
-With both fixed, the scenarios converge in **under 2 seconds** (forward and
-backward), so this job is a **gating check** — a red run means a genuine
+**3. A raw `.wasm` is no longer installable.** core 0.11.0-rc.31 (core#3652,
+"registry-only application distribution") answers a module on dev install with
+`500 not a signed application bundle: <path>`, because an application id is
+derived from a bundle's package and signer. The scenarios hand over the whole
+`.mpk` now; the CI jobs stopped unpacking one.
+
+The same release removed URL installs, so a step with `url:` instead of `path:`
+cannot work either: merobox's non-dev branch posts `{url, metadata}` and core
+refuses the body outright (`unknown field \`url\``). Coordinates are the
+replacement, and reaching them needs the node's `[registry]` to be configured —
+which is a poor fit for a hermetic Docker fixture, hence `path:` + a bundle.
+
+With the first two fixed, the scenarios converge in **under 2 seconds** (forward
+and backward), so this job is a **gating check** — a red run means a genuine
 regression in the node's sync path.
 
 ## Run locally
@@ -64,20 +76,19 @@ Requires Docker running.
 
 ```sh
 pip install 'merobox>=0.6.69'   # floor: parses the hex ids core rc.27 made universal
-merobox bootstrap validate ci/merobox/sync-two-node.yml   # schema only, no Docker or wasm
+merobox bootstrap validate ci/merobox/sync-two-node.yml   # schema only, no Docker or bundle
 
-# `run` needs the wasm the CI job downloads; fetch the same one first:
+# `run` needs the bundle the CI job downloads; fetch the same one first:
 gh release download "$(. ci/core-version; echo "$CORE_TAG")" \
   --repo calimero-network/core --pattern 'kv-store-test-fixture.mpk' \
   --output kv-store.mpk --clobber
-mkdir -p kv-store-fixture ci/merobox/res
-tar xzf kv-store.mpk -C kv-store-fixture
-cp kv-store-fixture/app.wasm ci/merobox/res/kv_store.wasm
+mkdir -p ci/merobox/res
+cp kv-store.mpk ci/merobox/res/kv_store.mpk
 
 merobox bootstrap run ci/merobox/sync-two-node.yml        # boots 2 nodes in Docker
 ```
 
-## Node image and wasm
+## Node image and app bundle
 
 Both are **pinned to one core release**, named in [`ci/core-version`](../core-version):
 
@@ -85,12 +96,17 @@ Both are **pinned to one core release**, named in [`ci/core-version`](../core-ve
   substitutes it into each scenario's `image:` line, so the checked-in value and
   the value CI uses cannot disagree. Override for a single run with the
   `merod_image` `workflow_dispatch` input.
-- **`res/kv_store.wasm`** — extracted from that release's
-  `kv-store-test-fixture.mpk` asset (a gzip tar of `manifest.json` + `app.wasm` +
-  `abi.json`), downloaded per run and **gitignored**. A wasm whose host ABI
-  predates the node leaves the joiner uninitialized forever, and a committed
-  binary is one nothing forces you to refresh — so it is no longer committed,
-  and it can no longer drift from the node it runs against.
+- **`res/kv_store.mpk`** — that release's `kv-store-test-fixture.mpk` asset,
+  downloaded per run and **gitignored**. A bundle whose host ABI predates the
+  node leaves the joiner uninitialized forever, and a committed binary is one
+  nothing forces you to refresh — so it is no longer committed, and it can no
+  longer drift from the node it runs against.
+
+  ⚠️ The **bundle**, not the module inside it. This used to unpack the archive
+  and install `app.wasm`; core 0.11.0-rc.31 (core#3652) made that a 500 —
+  `not a signed application bundle` — because an application id is derived from
+  a bundle's package and signer, so a bare module has no identity to install
+  under.
 
 Bumping to a new core is a one-line change to `ci/core-version`; the image and
-the wasm both follow.
+the bundle both follow.

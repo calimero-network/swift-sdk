@@ -25,7 +25,7 @@ the [admin API reference](/reference/admin-api/).
   ]}
   steps={[
     { from: 0, to: 1, label: 'installApplication(request)' },
-    { from: 1, to: 2, label: 'POST /install-application' },
+    { from: 1, to: 2, label: 'POST /install-application {package,version}' },
     { from: 2, to: 1, label: 'applicationId', dashed: true },
     { from: 0, to: 1, label: 'createContext(request)' },
     { from: 1, to: 2, label: 'POST /contexts' },
@@ -41,25 +41,38 @@ the [admin API reference](/reference/admin-api/).
 
 ## Install an application
 
-From a hosted bundle URL:
+By **coordinates** — a package name and a published version:
 
 ```swift
 let installed = try await mero.admin.installApplication(
-  InstallApplicationRequest(url: "https://example.com/app.wasm", hash: nil, metadata: [])
+  InstallApplicationRequest(package: "com.calimero.chat", version: "3.1.1")
 )
 let applicationId = installed.applicationId
 ```
 
-From a **registry** package — MeroKit resolves the manifest, derives the bundle
-artifact URL, and installs it:
+Where the bytes come from is the node's decision, not the caller's: it fetches
+from the single registry its own `[registry]` config names, and accepts the
+download only if the blob id matches. core 0.11.0-rc.32 removed URL installs
+outright (core#3652), and refuses a body carrying `url` rather than
+reinterpreting it — so there is no URL form of this call to fall back to.
+
+A node whose registry has nothing published at those coordinates answers **502**
+with `the configured <mode> source has no application published at <pkg>@<ver>`.
+That is retryable: the version may simply not be published yet.
+
+To pick a version, list what the registry has (an off-node call — the node's own
+`listPackageVersions` reports only what is *installed*):
 
 ```swift
 let versions = try await mero.admin.getRegistryVersions(
   registryUrl: registryURL, packageName: "my-package")            // newest first
 
 let app = try await mero.admin.installFromRegistry(
-  registryUrl: registryURL, packageName: "my-package", version: versions[0])
+  packageName: "my-package", version: versions[0])
 ```
+
+List from the same registry the node installs from. If the two differ, a version
+this listing offers is one the node will answer 502 for.
 
 During development, install from a path with `installDevApplication(_:)`.
 

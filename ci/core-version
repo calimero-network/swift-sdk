@@ -11,5 +11,5 @@
 #
 # Shell:  set -a; . ci/core-version; set +a   ->  $CORE_TAG, $MEROD_IMAGE
 # Actions: cat it into $GITHUB_ENV (see .github/workflows/e2e.yml)
-CORE_TAG=0.11.0-rc.29
-MEROD_IMAGE=ghcr.io/calimero-network/merod:0.11.0-rc.29
+CORE_TAG=0.11.0-rc.32
+MEROD_IMAGE=ghcr.io/calimero-network/merod:0.11.0-rc.32
