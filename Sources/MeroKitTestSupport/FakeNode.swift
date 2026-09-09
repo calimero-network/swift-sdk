@@ -30,6 +30,20 @@ public final class FakeNode: @unchecked Sendable {
     /// Canned contract output for `/jsonrpc`, keyed by method.
     public var rpcOutputs: [String: Any] = ["get": 42]
 
+    /// Per-protected-call response delays, consumed in arrival order (missing
+    /// entries mean no delay).
+    ///
+    /// The auth check still happens when the request arrives, so a call that
+    /// presented a now-stale token is judged 401 at t=0 and *delivered* later —
+    /// the shape needed to land a 401 after a concurrent refresh has already
+    /// rotated the bundle.
+    private var protectedDelays: [TimeInterval] = []
+
+    /// Delay the Nth protected response by `delays[N]` seconds.
+    public func delayProtectedResponses(_ delays: [TimeInterval]) {
+        lock.lock(); protectedDelays = delays; lock.unlock()
+    }
+
     public init() {}
 
     /// Route every request on `MockURLProtocol` through this node.
@@ -160,8 +174,13 @@ public final class FakeNode: @unchecked Sendable {
     /// Run `handler` only if the bearer token is currently valid; otherwise a 401.
     private func guarded(_ req: URLRequest, _ handler: () -> MockURLProtocol.Stub) -> MockURLProtocol.Stub {
         bump(\.protectedCalls)
-        if let reason = authError(req) { return unauthorized(reason) }
-        return handler()
+        lock.lock()
+        let index = protectedCalls - 1
+        let delay = index < protectedDelays.count ? protectedDelays[index] : 0
+        lock.unlock()
+        let stub = authError(req).map { unauthorized($0) } ?? handler()
+        guard delay > 0 else { return stub }
+        return .init(status: stub.status, headers: stub.headers, body: stub.body, delay: delay)
     }
 
     /// Returns the `x-auth-error` reason if the request's bearer is not valid, else nil.

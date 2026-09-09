@@ -100,6 +100,38 @@ final class EndToEndMockTests: XCTestCase {
         XCTAssertEqual(node.refreshCalls, 1, "concurrent 401s must share one refresh")
     }
 
+    /// A 401 that arrives *after* a concurrent refresh already rotated the
+    /// bundle must not start a second refresh.
+    ///
+    /// This is the case the single-flight gate alone does not cover: it dedupes
+    /// only refreshes that overlap in time, and it opens again the moment the
+    /// first one finishes. A request that read the old access token before the
+    /// rotation, but whose 401 lands after it, then finds the gate free.
+    ///
+    /// Deterministic where `testConcurrentCallsShareOneRefresh` is not: the
+    /// second protected response is held back 150ms, so its 401 is decided
+    /// against the old token and delivered after the refresh has completed. That
+    /// test only failed on a loaded CI runner, where task start-up drifted far
+    /// enough apart to open the same window by accident.
+    func testAStale401AfterARotationDoesNotRefreshAgain() async throws {
+        _ = try await mero.authenticate(Credentials(username: "dev", password: "pw"))
+        node.expireAccessToken()
+        // Whichever of the two arrives second is the one held back.
+        node.delayProtectedResponses([0, 0.15])
+
+        try await withThrowingTaskGroup(of: Int.self) { group in
+            for _ in 0..<2 {
+                group.addTask { try await self.mero.rpc.execute(contextId: "ctx", method: "get") }
+            }
+            for try await value in group { XCTAssertEqual(value, 42) }
+        }
+
+        XCTAssertEqual(
+            node.refreshCalls, 1,
+            "a 401 from a token the node had already rotated past must retry, not refresh")
+        XCTAssertEqual(store.getTokens()?.refreshToken, "refresh-2", "one rotation, not two")
+    }
+
     /// A revoked family surfaces as `authRevoked` and clears the local bundle.
     func testRevokedFamilyForcesReLogin() async throws {
         _ = try await mero.authenticate(Credentials(username: "dev", password: "pw"))
