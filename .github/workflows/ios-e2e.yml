@@ -28,7 +28,9 @@ jobs:
   single-node-e2e:
     name: Full-feature e2e (1 node)
     runs-on: macos-15
-    timeout-minutes: 35
+    # A healthy run is ~6 minutes. See the note on the chat job for why the
+    # STEP timeout below is the one that matters.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -61,6 +63,9 @@ jobs:
           merod --version
 
       - name: Run AppE2ETests (boots node + sim)
+        # Tighter than the job timeout so a hang FAILS the step and still lets
+        # the log upload run — see the note on the chat job.
+        timeout-minutes: 15
         run: ./e2e-ios.sh
 
       - name: Upload logs
@@ -77,11 +82,22 @@ jobs:
   multi-node-e2e:
     name: Multi-user chat e2e (2 nodes / 2 sims)
     runs-on: macos-15
-    # Headroom so the two-sim run reaches a real pass/FAIL conclusion rather than
-    # being CANCELLED at the job timeout — a cancellation is NOT absorbed by
-    # continue-on-error and would fail the whole workflow run, whereas a clean
-    # failure is absorbed (this job is informational).
-    timeout-minutes: 75
+    # ⚠️ Was 75, and that is exactly what it cost: on 2026-09-09 this job hung
+    # three times in a row and burned 75 minutes of a macOS runner (billed 10x)
+    # each time — ~2,250 Linux-equivalent minutes in an afternoon. The real work
+    # had stopped 3 minutes in; the rest was `simctl bootstatus` blocking on a
+    # simulator that never booted.
+    #
+    # The script now bounds that wait itself (`with_timeout` in
+    # chat-multi-e2e.sh), so this is the outer guard for anything else that
+    # hangs. Prefer the STEP timeout below: a step timeout still runs the
+    # `if: always()` log upload, a job timeout cancels it and you lose the
+    # evidence — which is how the first two of those three runs told us nothing.
+    #
+    # The original reason for the headroom still stands (a CANCELLED job is not
+    # absorbed by continue-on-error, a clean failure is), which is why the step
+    # timeout is deliberately tighter than the job timeout.
+    timeout-minutes: 35
     # Informational: cross-node sync between co-located merods is flaky on one host.
     continue-on-error: true
     steps:
@@ -116,6 +132,9 @@ jobs:
           merod --version
 
       - name: Run chat-multi-e2e.sh (2 nodes, 2 sims)
+        # Tighter than the job timeout on purpose, so this FAILS (and the logs
+        # upload) instead of the job being CANCELLED.
+        timeout-minutes: 25
         run: ./chat-multi-e2e.sh
 
       - name: Upload logs

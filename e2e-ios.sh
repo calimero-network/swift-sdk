@@ -19,6 +19,23 @@ DEVICE="iPhone 17"
 RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$'\033[0m'
 die() { echo "${RED}✘ $*${RESET}"; exit 1; }
 
+# Hard deadline in seconds; returns 124 on timeout, like GNU `timeout` (which
+# macOS does not ship). `xcrun simctl bootstatus` can block forever on a
+# simulator that never boots, and `|| true` / `|| sleep 5` does not save you —
+# they catch a non-zero exit, not a hang. See chat-multi-e2e.sh for the run that
+# burned 75 minutes on exactly this.
+with_timeout() {
+  local secs="$1"; shift
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    [ "$waited" -ge "$secs" ] && { kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 124; }
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 xcrun --find xctest >/dev/null 2>&1 || die "full Xcode not selected (see TESTING.md §0)"
 
 echo "${BOLD}▶ fresh node on :4001${RESET}"
@@ -32,7 +49,14 @@ printf 'dev-password' | merod --home "$NODE_HOME" --node app init \
   --admin-user dev --admin-password-stdin >/dev/null 2>&1 || die "node init failed"
 merod --home "$NODE_HOME" --node app run > "$REPO_ROOT/.mero-e2e-node.log" 2>&1 &
 echo $! > "$REPO_ROOT/.mero-e2e-node.pid"
-until curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1; do sleep 1; done
+# Bounded: an unbounded `until` spins forever if the node never comes up, which
+# is the same shape of bug as the simulator hang above.
+for _ in $(seq 1 60); do
+  curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 \
+  || die "the node never became healthy within 60s — see .mero-e2e-node.log"
 echo "node healthy (dev / dev-password)"
 
 echo "${BOLD}▶ prep simulator: $DEVICE${RESET}"
@@ -44,9 +68,13 @@ if [ -z "$UDID" ]; then  # fall back to any available iPhone (CI images differ)
 fi
 [ -n "$UDID" ] || die "no iPhone simulator available"
 echo "device: $DEVICE"
-xcrun simctl boot "$UDID" 2>/dev/null || true
-xcrun simctl bootstatus "$UDID" 2>/dev/null || sleep 5
-xcrun simctl spawn "$UDID" defaults write com.apple.security.AutoFill Enabled -bool NO 2>/dev/null || true
+with_timeout 120 xcrun simctl boot "$UDID" >/dev/null 2>&1 || true
+if ! with_timeout 180 xcrun simctl bootstatus "$UDID" >/dev/null 2>&1; then
+  rc=$?
+  [ "$rc" = "124" ] && die "simulator $UDID did not finish booting within 180s — the runner's simulator runtime is wedged, not the app."
+  sleep 5
+fi
+with_timeout 60 xcrun simctl spawn "$UDID" defaults write com.apple.security.AutoFill Enabled -bool NO >/dev/null 2>&1 || true
 
 echo "${BOLD}▶ run AppE2ETests${RESET}"
 ( cd Examples/MeroSampleApp && command -v xcodegen >/dev/null 2>&1 && xcodegen generate >/dev/null 2>&1 || true )

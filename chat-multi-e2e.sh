@@ -26,6 +26,28 @@ GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; BOLD=$'\033[1m'; RESET=$
 step() { echo; echo "${BOLD}▶ $*${RESET}"; }
 die() { echo "${RED}✘ $*${RESET}"; exit 1; }
 
+# Run a command with a hard deadline, in seconds. Returns 124 on timeout, like
+# GNU `timeout` — which macOS does not ship, hence the hand-rolled version.
+#
+# ⚠️ This exists because `xcrun simctl bootstatus` can block FOREVER on a
+# simulator that never finishes booting, and `|| true` does not save you: it
+# catches a non-zero exit, not a hang. On 2026-09-09 that burned three
+# consecutive 75-minute macOS runs — the log's last line was device A's boot
+# erroring (`Status=4294967295, isTerminal=YES`), then 72 minutes of silence
+# while device B's bootstatus hung, then the job timeout. Wrap anything that
+# waits on a simulator.
+with_timeout() {
+  local secs="$1"; shift
+  "$@" &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    [ "$waited" -ge "$secs" ] && { kill -9 "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; return 124; }
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"
+}
+
 command -v merod >/dev/null 2>&1 || die "merod not on PATH"
 xcrun --find xctest >/dev/null 2>&1 || die "full Xcode not selected"
 
@@ -44,7 +66,14 @@ printf 'dev-password' | merod --home "$REPO_ROOT/.mero-a" --node a init \
   --admin-user dev --admin-password-stdin --mdns >/dev/null 2>&1 || die "node A init failed"
 merod --home "$REPO_ROOT/.mero-a" --node a run > "$REPO_ROOT/.mero-a.log" 2>&1 &
 echo $! > "$REPO_ROOT/.mero-a.pid"
-until curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1; do sleep 1; done
+# Bounded: an unbounded `until` spins forever if the node never comes up, which
+# is the same shape of bug as the simulator hang above.
+for _ in $(seq 1 60); do
+  curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 \
+  || die "node A never became healthy within 60s — see .mero-a.log"
 echo "node A healthy"
 
 # best-effort: extract A's swarm multiaddr for bootstrapping B
@@ -61,7 +90,14 @@ printf 'dev-password' | merod --home "$REPO_ROOT/.mero-b" --node b init \
   --admin-user dev --admin-password-stdin --mdns ${BOOT_ARGS[@]+"${BOOT_ARGS[@]}"} >/dev/null 2>&1 || die "node B init failed"
 merod --home "$REPO_ROOT/.mero-b" --node b run > "$REPO_ROOT/.mero-b.log" 2>&1 &
 echo $! > "$REPO_ROOT/.mero-b.pid"
-until curl -sf http://localhost:4011/admin-api/health >/dev/null 2>&1; do sleep 1; done
+# Bounded: an unbounded `until` spins forever if the node never comes up, which
+# is the same shape of bug as the simulator hang above.
+for _ in $(seq 1 60); do
+  curl -sf http://localhost:4011/admin-api/health >/dev/null 2>&1 && break
+  sleep 1
+done
+curl -sf http://localhost:4011/admin-api/health >/dev/null 2>&1 \
+  || die "node B never became healthy within 60s — see .mero-b.log"
 echo "node B healthy"
 echo "waiting for peers to connect…"; sleep 8
 echo "  A peers: $(curl -s http://localhost:4001/admin-api/peers 2>/dev/null)"
@@ -82,9 +118,14 @@ if [ -z "$UDID_A" ] || [ -z "$UDID_B" ] || [ "$UDID_A" = "$UDID_B" ]; then
 fi
 [ -n "$UDID_A" ] || die "no simulator '$DEV_A'"; [ -n "$UDID_B" ] || die "no simulator '$DEV_B'"
 for u in "$UDID_A" "$UDID_B"; do
-  xcrun simctl boot "$u" 2>/dev/null || true
-  xcrun simctl bootstatus "$u" 2>/dev/null || true
-  xcrun simctl spawn "$u" defaults write com.apple.security.AutoFill Enabled -bool NO 2>/dev/null || true
+  with_timeout 120 xcrun simctl boot "$u" >/dev/null 2>&1 || true
+  # Bounded: an unbootable simulator must cost 3 minutes, not the whole job.
+  if ! with_timeout 180 xcrun simctl bootstatus "$u" >/dev/null 2>&1; then
+    rc=$?
+    [ "$rc" = "124" ] && die "simulator $u did not finish booting within 180s — the runner's simulator runtime is wedged, not the app. Re-run; if it persists, the macOS image changed."
+    echo "${YELLOW}⚠ bootstatus for $u exited $rc — continuing, xcodebuild will fail fast if the sim is unusable${RESET}"
+  fi
+  with_timeout 60 xcrun simctl spawn "$u" defaults write com.apple.security.AutoFill Enabled -bool NO >/dev/null 2>&1 || true
 done
 open "$(xcode-select -p)/Applications/Simulator.app" 2>/dev/null || true
 
