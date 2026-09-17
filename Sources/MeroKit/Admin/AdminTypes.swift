@@ -810,9 +810,13 @@ public struct NodeIdentity: Codable, Sendable {
     }
 }
 
-/// Formerly how a namespace/group adopted new app versions. The concept is gone
-/// server-side; the value is still sent on the two create requests because a
-/// released node declares the field required and rejects a body without it.
+/// Formerly how a namespace/group adopted new app versions. core#3485 removed
+/// the concept; nothing sends this any more.
+///
+/// It survives only so a call site that names the type still compiles. A node
+/// has never *read* this value — it was simply tolerated, until 0.11.0-rc.38
+/// closed the request bodies and made it fatal.
+@available(*, deprecated, message: "core#3485 removed upgrade policies; the field is no longer sent")
 public enum UpgradePolicy: String, Codable, Sendable {
     case automatic = "Automatic"
     case lazyOnAccess = "LazyOnAccess"
@@ -820,17 +824,23 @@ public enum UpgradePolicy: String, Codable, Sendable {
 
 public struct CreateNamespaceRequest: Codable, Sendable {
     public var applicationId: String
-    /// Ignored by any node that has dropped the concept, required by every
-    /// released one. Defaulted so a caller need not choose.
-    public var upgradePolicy: UpgradePolicy
     public var name: String?
     /// Hex 32-byte blob id; pins the namespace to a specific installed version.
     public var appKey: String?
+    public init(applicationId: String, name: String? = nil, appKey: String? = nil) {
+        self.applicationId = applicationId; self.name = name; self.appKey = appKey
+    }
+
+    /// Source-compatibility shim: `upgradePolicy` is accepted and dropped.
+    ///
+    /// Passing it on the wire is a 400 from 0.11.0-rc.38 — the node lists the
+    /// fields it takes and this is not one of them.
+    @available(*, deprecated, message: "upgradePolicy is no longer sent; drop the argument")
+    @_disfavoredOverload
     public init(
-        applicationId: String, upgradePolicy: UpgradePolicy = .lazyOnAccess,
-        name: String? = nil, appKey: String? = nil
+        applicationId: String, upgradePolicy: String, name: String? = nil, appKey: String? = nil
     ) {
-        self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.name = name; self.appKey = appKey
+        self.init(applicationId: applicationId, name: name, appKey: appKey)
     }
 }
 
@@ -997,10 +1007,27 @@ public struct JoinNamespaceResponseData: Codable, Sendable {
     }
 }
 
+/// Body for `POST /admin-api/namespaces/{id}/groups`.
+///
+/// ⚠️ This route is NOT the group-create body. It takes `groupName` and
+/// `visibility`, and nothing else — a `name` or a `groupId` here is a **422**
+/// from 0.11.0-rc.38, which is every call that bothered to name the subgroup.
+/// Only the empty body ever worked.
 public struct CreateGroupInNamespaceRequest: Codable, Sendable {
-    public var groupId: String?
-    public var name: String?
-    public init(groupId: String? = nil, name: String? = nil) { self.groupId = groupId; self.name = name }
+    /// The subgroup's name. Sent as `groupName`, which is what the route reads.
+    public var groupName: String?
+    /// `"open"` or `"restricted"` — lowercase; the node rejects other spellings.
+    public var visibility: String?
+    public init(groupName: String? = nil, visibility: String? = nil) {
+        self.groupName = groupName; self.visibility = visibility
+    }
+
+    /// Source-compatibility shim for the spelling that never reached the node.
+    @available(*, deprecated, message: "the route reads `groupName`; `groupId` was never accepted")
+    @_disfavoredOverload
+    public init(groupId: String? = nil, name: String? = nil) {
+        self.init(groupName: name, visibility: nil)
+    }
 }
 
 public struct CreateGroupInNamespaceResponseData: Codable, Sendable {
@@ -1018,20 +1045,28 @@ public struct SubgroupEntry: Codable, Sendable {
 
 public struct CreateGroupRequest: Codable, Sendable {
     public var applicationId: String
-    /// Ignored by any node that has dropped the concept, required by every
-    /// released one. Defaulted so a caller need not choose.
-    public var upgradePolicy: String
     public var groupId: String?
     public var appKey: String?
     public var name: String?
     public var parentGroupId: String?
     public init(
-        applicationId: String, upgradePolicy: String = "LazyOnAccess",
-        groupId: String? = nil, appKey: String? = nil,
+        applicationId: String, groupId: String? = nil, appKey: String? = nil,
         name: String? = nil, parentGroupId: String? = nil
     ) {
-        self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.groupId = groupId
+        self.applicationId = applicationId; self.groupId = groupId
         self.appKey = appKey; self.name = name; self.parentGroupId = parentGroupId
+    }
+
+    /// Source-compatibility shim: `upgradePolicy` is accepted and dropped.
+    @available(*, deprecated, message: "upgradePolicy is no longer sent; drop the argument")
+    @_disfavoredOverload
+    public init(
+        applicationId: String, upgradePolicy: String, groupId: String? = nil,
+        appKey: String? = nil, name: String? = nil, parentGroupId: String? = nil
+    ) {
+        self.init(
+            applicationId: applicationId, groupId: groupId, appKey: appKey,
+            name: name, parentGroupId: parentGroupId)
     }
 }
 

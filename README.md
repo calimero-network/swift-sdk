@@ -14,7 +14,7 @@ HTTP(S) call to a remote node's endpoints.
 - Swift 5.9+ (built and tested on Swift 6)
 - iOS 15+ / macOS 12+
 - Zero third-party dependencies (uses `URLSession`, `Foundation`, `Security`).
-- A Calimero node on **core `0.11.0-rc.32`**.
+- A Calimero node on **core `0.11.0-rc.38`**.
 
 ### Which core release?
 

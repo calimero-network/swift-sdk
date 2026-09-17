@@ -72,4 +72,48 @@ final class RealNodeE2ETests: XCTestCase {
         let stillAuthed = await mero.isAuthenticated
         XCTAssertFalse(stillAuthed)
     }
+
+    /// Provisioning, against the real node — the gap this suite had.
+    ///
+    /// Everything else that checks request shape here is MOCKED: it asserts
+    /// what the SDK sends, which cannot notice that the node stopped accepting
+    /// it. And the live suite only ever did health, auth and one read. So the
+    /// two calls an app must make before it can do anything — create a
+    /// namespace, create a named subgroup — were covered by neither, and both
+    /// had been returning 400/422 since core closed its request bodies.
+    ///
+    /// This is deliberately the whole chain rather than one call: an app that
+    /// cannot reach a context has nothing, no matter which link broke.
+    func testProvisioningChainAgainstARealNode() async throws {
+        try skipUnlessConfigured()
+        let mero = try makeClient()
+        _ = try await mero.authenticate(
+            Credentials(
+                username: env("MERO_E2E_USER") ?? "dev",
+                password: env("MERO_E2E_PASS") ?? "dev-password"))
+
+        // An application has to exist to hang a namespace off. Any installed
+        // one will do; the wire shape under test is the namespace call.
+        let apps = try await mero.admin.listApplications()
+        try XCTSkipIf(apps.apps.isEmpty, "no application installed on the e2e node")
+        let applicationId = apps.apps[0].id
+
+        // 400 if the body carries `upgradePolicy`.
+        let namespace = try await mero.admin.createNamespace(
+            CreateNamespaceRequest(applicationId: applicationId, name: "e2e-workspace"))
+        XCTAssertFalse(namespace.namespaceId.isEmpty)
+
+        // 422 if the body spells the name `name` instead of `groupName`.
+        let subgroup = try await mero.admin.createGroupInNamespace(
+            namespace.namespaceId,
+            request: CreateGroupInNamespaceRequest(groupName: "e2e-room"))
+        XCTAssertFalse(subgroup.groupId.isEmpty)
+
+        // And the subgroup really is named — a request the node accepted but
+        // read as unnamed would pass every assertion above.
+        let subgroups = try await mero.admin.listNamespaceGroups(namespace.namespaceId)
+        XCTAssertTrue(
+            subgroups.contains { $0.groupId == subgroup.groupId },
+            "the subgroup the node just created should be listed under its namespace")
+    }
 }
