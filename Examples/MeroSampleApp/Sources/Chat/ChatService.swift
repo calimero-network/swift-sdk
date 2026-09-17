@@ -199,7 +199,7 @@ final class ChatService: ObservableObject {
         guard let appId else { status = "install the app first"; return }
         await run("creating space “\(name)”…") {
             let resp = try await self.mero.admin.createNamespace(
-                CreateNamespaceRequest(applicationId: appId, upgradePolicy: .automatic, name: name))
+                CreateNamespaceRequest(applicationId: appId, name: name))
             self.status = "space created: \(resp.namespaceId)"
             await self.loadSpaces()
         }
@@ -268,7 +268,7 @@ final class ChatService: ObservableObject {
         guard let appId else { status = "install the app first"; return }
         await run("creating channel #\(name)…") {
             let sg = try await self.mero.admin.createGroupInNamespace(
-                space.id, request: CreateGroupInNamespaceRequest(name: name))
+                space.id, request: CreateGroupInNamespaceRequest(groupName: name))
             try await self.mero.admin.setSubgroupVisibility(
                 sg.groupId, request: SetSubgroupVisibilityRequest(subgroupVisibility: open ? "open" : "restricted"))
             let ctx = try await self.mero.admin.createContext(
