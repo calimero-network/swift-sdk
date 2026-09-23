@@ -102,7 +102,7 @@ Requires Docker running.
 ```sh
 pip install 'merobox==0.6.75' 'calimero-client-py==0.7.0'   # the PAIR CI installs
 # ⚠️ Pin both. client-py is an unpinned transitive dep that tracks core, and the
-# older pair cannot talk to an rc.38 node: 0.6.37 still sends `metadata` on the
+# older pair cannot talk to an rc.38-or-newer node: 0.6.37 still sends `metadata` on the
 # dev install, which rc.38 refuses with `400 unknown field \`metadata\``.
 merobox bootstrap validate ci/merobox/sync-two-node.yml   # schema only, no Docker or bundle
 

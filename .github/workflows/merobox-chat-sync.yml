@@ -95,7 +95,7 @@ jobs:
       # kwarg merobox 0.6.74 still passed, and the job died with
       # `TypeError: unexpected keyword argument 'metadata'` on an unchanged tree.
       #
-      # ⚠️ And the old pair cannot serve an rc.38 node at all. client-py 0.6.37
+      # ⚠️ And the old pair cannot serve an rc.38-or-newer node at all. client-py 0.6.37
       # still SENDS `metadata` on `install_dev_application`, which rc.38 refuses
       # outright — `400 unknown field \`metadata\`, expected \`path\`` — because
       # rc.38 closed 37 admin request bodies that used to ignore extra keys.

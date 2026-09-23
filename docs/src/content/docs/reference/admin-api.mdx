@@ -78,6 +78,15 @@ strings ascending.
 | `getContextIdentities(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities` |
 | `getContextIdentitiesOwned(_ contextId: String) -> GetContextIdentitiesResponseData` | `GET /contexts/{contextId}/identities-owned` |
 
+⚠️ `identities-owned` answers a different question depending on who asks: the
+node's own signing identities for a node-owner session, the calling account's
+certified devices for a delegated one. core 0.11.0-rc.41 added `identitiesOf`
+(`members` / `node` / `caller`) so the response says which reading it is,
+instead of leaving a caller to infer it from its own token. It is optional — a
+node predating the field said nothing, and `nil` is the honest answer for one.
+A variant this SDK does not recognise also decodes as `nil` rather than failing
+the whole response: the identities are still the identities.
+
 ## Node & account
 
 core 0.11.0-rc.21 gave a node one identity, one signing key and one root, and
@@ -99,6 +108,23 @@ has one of its own and still answers `false`, because the account it speaks for
 is rooted elsewhere. The field is defaulted, so a response from an older node
 decodes as `false` rather than failing.
 
+rc.41 added `NodeIdentity.revokedFrom`: which account withdrew this node's
+device, and which device it was. Absent on a node no revocation has reached —
+skipped rather than sent as null — so it is worth checking before reporting a
+node as merely unauthorized. A device its account revoked is not a login
+problem.
+
+rc.41 also gave a device a **name**. `AccountDeviceEntry.label` is the
+replicated name the account gave it (every device of the account reads the same
+one), and `labelDevice` sets it. `rescopeDevice` is the counterpart to
+`relinkDevice`, which is add-only: it REPLACES the scope, so an application can
+be taken away again. `DeviceScope` is tagged — `"all"` or `{"only": [...]}` —
+rather than a list whose emptiness means everything, so the slip a caller can
+make is never silently the widest ask; an `only` naming nothing is a `400`.
+Read `descoped[].keyRotated` before calling a narrowing done: `false` means the
+device stopped writing there but still holds the key it had, until an admin
+rotates.
+
 | Method | Endpoint |
 | --- | --- |
 | `getNodeIdentity() -> NodeIdentity` | `GET /identity` |
@@ -107,6 +133,8 @@ decodes as `false` rather than failing.
 | `accountPairInit(_ request: AccountPairInitRequest) -> PairDeviceInitResponseData` | `POST /account/pair-init` |
 | `accountPairComplete(_ request: AccountPairCompleteRequest) -> PairDeviceCompleteResponseData` | `POST /account/pair-complete` |
 | `relinkDevice(_ deviceId: String, request: RelinkDeviceRequest = .init()) -> RelinkDeviceResponseData` | `POST /account/devices/{deviceId}/relink` |
+| `rescopeDevice(_ deviceId: String, request: RescopeDeviceRequest) -> RescopeDeviceResponseData` | `PUT /account/devices/{deviceId}/scope` |
+| `labelDevice(_ deviceId: String, request: LabelDeviceRequest) -> LabelDeviceResponseData` | `PUT /account/devices/{deviceId}/label` |
 | `revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) -> RevokeDeviceResponseData` | `POST /namespaces/{namespaceId}/account/revoke` |
 
 ## Blobs

@@ -712,6 +712,39 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "relinkDevice")
     }
 
+    /// Replace what a device may reach — the direction ``relinkDevice(_:request:)``
+    /// deliberately cannot go, since a relink is add-only.
+    ///
+    /// New in core 0.11.0-rc.41. Run on the node holding the account root; the
+    /// device need not be online. `descoped` names the namespaces the new scope
+    /// took away, and `keyRotated: false` there means the device stopped
+    /// writing but still holds the key it had until an admin rotates — so a
+    /// narrowing is not complete until that says `true`.
+    ///
+    /// A ``DeviceScope/only(_:)`` naming nothing is a `400`, not "everything".
+    public func rescopeDevice(
+        _ deviceId: String, request: RescopeDeviceRequest
+    ) async throws -> RescopeDeviceResponseData {
+        let resp: ApiResponse<RescopeDeviceResponseData> = try await http.put(
+            "/admin-api/account/devices/\(deviceId)/scope", json: request)
+        return try unwrap(resp, "rescopeDevice")
+    }
+
+    /// Name a device of this account, for a listing to render.
+    ///
+    /// New in core 0.11.0-rc.41. The name is replicated: every device of the
+    /// account reads the same one, and `labelEpoch` orders this rename against
+    /// one another device made at the same time. Run on the node holding the
+    /// account root to name any device; a paired node is accepted only for its
+    /// own device id.
+    public func labelDevice(
+        _ deviceId: String, request: LabelDeviceRequest
+    ) async throws -> LabelDeviceResponseData {
+        let resp: ApiResponse<LabelDeviceResponseData> = try await http.put(
+            "/admin-api/account/devices/\(deviceId)/label", json: request)
+        return try unwrap(resp, "labelDevice")
+    }
+
     public func createGroupInNamespace(
         _ namespaceId: String, request: CreateGroupInNamespaceRequest? = nil
     ) async throws -> CreateGroupInNamespaceResponseData {

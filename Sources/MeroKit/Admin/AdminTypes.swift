@@ -294,9 +294,46 @@ public struct GenerateContextIdentityResponseData: Codable, Sendable {
     public init(publicKey: String) { self.publicKey = publicKey }
 }
 
+/// Whose identities a ``GetContextIdentitiesResponseData`` is listing.
+///
+/// `identities-owned` answers a different question depending on who asks — the
+/// node's own signing identities for a node-owner session, the calling
+/// account's certified devices for a delegated one. core 0.11.0-rc.41 started
+/// saying which reading it is rather than leaving a caller to infer it from its
+/// own token.
+public enum IdentitiesOf: String, Codable, Sendable {
+    /// Every identity that is a member of the context — the `/identities`
+    /// roster, the same for every caller.
+    case members
+    /// The identities this NODE holds a signing key for.
+    case node
+    /// The calling account's certified, unrevoked devices in the group owning
+    /// this context. Keys the CLIENT holds, not the node.
+    case caller
+}
+
 public struct GetContextIdentitiesResponseData: Codable, Sendable {
     public let identities: [String]
-    public init(identities: [String]) { self.identities = identities }
+    /// Which reading of the request this list is, or `nil` on a node predating
+    /// the field — which said nothing about it. Absent is the honest answer for
+    /// such a node; defaulting it to a variant would be a guess that could be
+    /// wrong in the direction that matters.
+    public let identitiesOf: IdentitiesOf?
+    public init(identities: [String], identitiesOf: IdentitiesOf? = nil) {
+        self.identities = identities
+        self.identitiesOf = identitiesOf
+    }
+
+    // Decoded by hand so a variant this SDK does not know yet reads as `nil`
+    // rather than failing the whole response. A listing is still a listing when
+    // the label on it is unfamiliar, and the synthesized decoder would throw
+    // away the identities to complain about the label.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        identities = try container.decode([String].self, forKey: .identities)
+        identitiesOf = (try container.decodeIfPresent(String.self, forKey: .identitiesOf))
+            .flatMap(IdentitiesOf.init(rawValue:))
+    }
 }
 
 // MARK: - Context join (group membership; POST /contexts/:id/join)
@@ -784,15 +821,33 @@ public struct NodeIdentity: Codable, Sendable {
     /// Defaults to `false` on a node that predates the field, matching core's
     /// own `#[serde(default)]`.
     public let holdsAccountRoot: Bool
+    /// The account namespace, as this node's identity reports it — the id a
+    /// pairing records and follows like one more namespace.
+    ///
+    /// `nil` before the holder's account namespace exists, and on a node
+    /// predating the field. This SDK used to drop it on the floor, which left
+    /// ``AccountPairInitRequest/accountNamespace`` with nothing to fill it
+    /// from.
+    public let accountNamespaceId: String?
+    /// The account that withdrew this node's device, `nil` on a node no
+    /// revocation has reached.
+    ///
+    /// New in core 0.11.0-rc.41, and skipped rather than sent as null. Worth
+    /// checking before reporting a node as merely unauthorized: a device whose
+    /// account revoked it is not a login problem.
+    public let revokedFrom: RevokedFrom?
     public init(
         accountId: String, deviceId: String? = nil, publicKey: String,
         accountRootPublicKey: String, deviceAgreementKey: String? = nil,
-        holdsAccountRoot: Bool = false
+        holdsAccountRoot: Bool = false, accountNamespaceId: String? = nil,
+        revokedFrom: RevokedFrom? = nil
     ) {
         self.accountId = accountId; self.deviceId = deviceId; self.publicKey = publicKey
         self.accountRootPublicKey = accountRootPublicKey
         self.deviceAgreementKey = deviceAgreementKey
         self.holdsAccountRoot = holdsAccountRoot
+        self.accountNamespaceId = accountNamespaceId
+        self.revokedFrom = revokedFrom
     }
 
     // Decoded by hand for one field: `holdsAccountRoot` has to survive a node
@@ -807,6 +862,20 @@ public struct NodeIdentity: Codable, Sendable {
         deviceAgreementKey = try container.decodeIfPresent(String.self, forKey: .deviceAgreementKey)
         holdsAccountRoot =
             try container.decodeIfPresent(Bool.self, forKey: .holdsAccountRoot) ?? false
+        accountNamespaceId = try container.decodeIfPresent(
+            String.self, forKey: .accountNamespaceId)
+        revokedFrom = try container.decodeIfPresent(RevokedFrom.self, forKey: .revokedFrom)
+    }
+}
+
+/// Which account withdrew this node's device, and which device it was.
+public struct RevokedFrom: Codable, Sendable, Equatable {
+    /// Hex-encoded account id the device spoke for.
+    public let accountId: String
+    /// Hex-encoded device id that was withdrawn.
+    public let deviceId: String
+    public init(accountId: String, deviceId: String) {
+        self.accountId = accountId; self.deviceId = deviceId
     }
 }
 
