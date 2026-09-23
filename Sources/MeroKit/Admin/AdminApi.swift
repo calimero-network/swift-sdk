@@ -468,26 +468,66 @@ public struct AdminApi: Sendable {
         return ListBlobsResponseData(blobs: inner.blobs.map { BlobInfo(blobId: $0.blobId, size: $0.size) })
     }
 
+    /// How long to wait on a blob call that names a context.
+    ///
+    /// Discovery is a probe sweep with a 30s deadline on the node's side, so a
+    /// client timeout under that aborts the sweep before the node has finished
+    /// asking — and reads as "no such blob" rather than as a timeout. The
+    /// default transport timeout is 10s, which is why this is not left to it.
+    private static let blobDiscoveryTimeout: TimeInterval = 60
+
     /// Download a blob's raw bytes. `GET /admin-api/blobs/:id` streams the blob
     /// content (e.g. `application/gzip`), NOT JSON. Use `listBlobs` for
     /// `{ blobId, size }` metadata.
-    public func getBlob(_ blobId: String) async throws -> Data {
-        let (data, _) = try await http.sendRaw(HttpRequest(path: "/admin-api/blobs/\(blobId)"))
+    ///
+    /// ⚠️ Pass `contextId` for anything this node did not upload itself.
+    /// core 0.11.0-rc.39 removed blob discovery from the DHT, so naming the
+    /// context is now the ONLY way to find a blob a peer holds — without it
+    /// this call sees the local store and nothing else, and answers 404 for a
+    /// blob that plainly exists on the node next to it.
+    public func getBlob(_ blobId: String, contextId: String? = nil) async throws -> Data {
+        let req = HttpRequest(
+            path: Self.blobPath(blobId, contextId: contextId),
+            timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
+        let (data, _) = try await http.sendRaw(req)
         return data
     }
 
     /// Fetch a blob's metadata without downloading it. `HEAD /admin-api/blobs/:id`
     /// returns the info in response headers (size via `content-length`, plus
-    /// `x-blob-id`/`x-blob-hash`/`x-blob-mime-type`). Header names are lowercased.
-    public func getBlobInfo(_ blobId: String) async throws -> GetBlobInfoResponseData {
-        let result = try await http.head("/admin-api/blobs/\(blobId)", headers: [:])
-        let size = Int(result.headers["content-length"] ?? "") ?? 0
+    /// `x-blob-id`/`x-blob-hash`/`x-blob-mime-type`/`x-blob-source`). Header
+    /// names are lowercased.
+    ///
+    /// With `contextId` — new in core 0.11.0-rc.41 — a blob this node does not
+    /// hold is looked for among the context's peers by probing them, which
+    /// answers presence and size without transferring a byte. A `HEAD` never
+    /// transfers the blob, with or without a context.
+    ///
+    /// Read ``GetBlobInfoResponseData/source`` before trusting the rest: a
+    /// `peer` answer carries a size and nothing else, and that size is one
+    /// peer's word, verified by nobody.
+    public func getBlobInfo(
+        _ blobId: String, contextId: String? = nil
+    ) async throws -> GetBlobInfoResponseData {
+        let req = HttpRequest(
+            path: Self.blobPath(blobId, contextId: contextId), method: .head,
+            timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
+        let (_, result) = try await http.sendRaw(req)
         return GetBlobInfoResponseData(
             blobId: result.headers["x-blob-id"] ?? blobId,
-            size: size,
+            // Absent means "exists, size unknown" — not zero. See the type.
+            size: result.headers["content-length"].flatMap(Int.init),
             hash: result.headers["x-blob-hash"],
-            mimeType: result.headers["x-blob-mime-type"]
+            mimeType: result.headers["x-blob-mime-type"],
+            source: result.headers["x-blob-source"].flatMap(BlobSource.init(rawValue:))
         )
+    }
+
+    private static func blobPath(_ blobId: String, contextId: String?) -> String {
+        let path = "/admin-api/blobs/\(blobId)"
+        // `context_id`, snake_case — the same spelling `uploadBlob` uses.
+        guard let contextId else { return path }
+        return path + "?context_id=\(contextId.percentEncoded())"
     }
 
     // MARK: - Alias Management

@@ -31,8 +31,12 @@ nothing.
 rc.39–rc.41 were additive on the wire: no route this SDK calls was removed and
 no request body closed further. What they added is served here —
 `PUT /account/devices/{id}/label` and `PUT /account/devices/{id}/scope`, the
-`label` on a device listing, `identitiesOf` on a context-identity listing, and
-`revokedFrom` on the node identity.
+`label` on a device listing, `identitiesOf` on a context-identity listing,
+`revokedFrom` on the node identity, and `X-Blob-Source` on a blob `HEAD`.
+
+⚠️ rc.39 also removed blob discovery from the DHT, which is a behaviour change
+rather than a wire one: `context_id` is now the only way to reach a blob a peer
+holds, so `getBlob` and `getBlobInfo` take one.
 
 Bumping to a newer core is a one-line change there, plus whatever wire changes
 it brings to `Sources/MeroKit/Admin`.

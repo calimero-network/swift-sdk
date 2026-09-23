@@ -139,12 +139,31 @@ rotates.
 
 ## Blobs
 
+⚠️ **Name the context.** core 0.11.0-rc.39 removed blob discovery from the DHT,
+so `context_id` is now the only way to find a blob a peer holds. Without it
+`getBlob` and `getBlobInfo` see this node's local store and nothing else, and
+answer 404 for a blob that plainly exists on the node next to it. The parameter
+is optional in the type and effectively required in practice.
+
+Discovery is a probe sweep with a 30s deadline on the node's side, so these
+calls raise their own timeout when a context is named — a client timeout under
+that aborts the sweep and reads as "no such blob" rather than as a timeout.
+
+rc.41 added `X-Blob-Source` to the `HEAD`, surfaced as
+`GetBlobInfoResponseData.source`. `local` means this node holds the blob and
+every field is its own; `peer` means only a context peer does, so `hash` and
+`mimeType` are **absent** — both are derived from bytes this node does not have,
+and a `HEAD` never transfers the blob to find out — and `size` is that peer's
+word, verified by nobody. `size` is also optional: a peer that reported none
+omits `Content-Length`, and "exists, size unknown" is true where `0` would be a
+lie about a blob that exists.
+
 | Method | Endpoint |
 | --- | --- |
 | `uploadBlob(_ request: UploadBlobRequest) -> BlobInfo` | `PUT /blobs?hash=&context_id=` (octet-stream) |
 | `listBlobs() -> ListBlobsResponseData` | `GET /blobs` |
-| `getBlob(_ blobId: String) -> Data` | `GET /blobs/{blobId}` (raw bytes) |
-| `getBlobInfo(_ blobId: String) -> GetBlobInfoResponseData` | `HEAD /blobs/{blobId}` |
+| `getBlob(_ blobId: String, contextId: String? = nil) -> Data` | `GET /blobs/{blobId}?context_id=` (raw bytes) |
+| `getBlobInfo(_ blobId: String, contextId: String? = nil) -> GetBlobInfoResponseData` | `HEAD /blobs/{blobId}?context_id=` |
 | `deleteBlob(_ blobId: String) -> DeleteBlobResponseData` | `DELETE /blobs/{blobId}` |
 
 ## Aliases

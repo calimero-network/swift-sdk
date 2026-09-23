@@ -448,15 +448,49 @@ public struct ListBlobsResponseData: Codable, Sendable {
 
 public typealias GetBlobResponseData = BlobInfo
 
+/// Where a blob lookup got its answer, from `X-Blob-Source` (core
+/// 0.11.0-rc.41).
+///
+/// It exists so a caller can tell the two apart without inferring it from
+/// which headers happen to be missing — a missing `X-Blob-Hash` would
+/// otherwise be indistinguishable from a bug.
+public enum BlobSource: String, Codable, Sendable {
+    /// This node holds the blob. Every field is present and is this node's own.
+    case local
+    /// Only a context peer holds it. ``GetBlobInfoResponseData/hash`` and
+    /// ``GetBlobInfoResponseData/mimeType`` are `nil` — both are derived from
+    /// bytes this node does not have, and a `HEAD` never transfers the blob to
+    /// find out. ``GetBlobInfoResponseData/size`` is the peer's word, verified
+    /// by nobody.
+    case peer
+}
+
 /// `GetBlobInfoResponseData` extends `BlobInfo` with the extra HEAD-header
-/// fields (`x-blob-hash` / `x-blob-mime-type`).
+/// fields (`x-blob-hash` / `x-blob-mime-type` / `x-blob-source`).
 public struct GetBlobInfoResponseData: Codable, Sendable {
     public let blobId: String
-    public let size: Int
+    /// `nil` means "it exists, size unknown" — a peer answered and reported
+    /// none, so core omits `Content-Length` rather than sending `0`.
+    ///
+    /// ⚠️ This used to be a non-optional `Int` defaulting to `0`, which is a
+    /// lie about a blob that exists: a caller checking `size > 0` reads
+    /// "present but unmeasured" as "absent".
+    public let size: Int?
+    /// `nil` on a peer answer: it is computed from bytes this node does not
+    /// hold, and core will not fabricate one.
     public let hash: String?
+    /// `nil` on a peer answer, for the same reason as ``hash`` — it is sniffed
+    /// from the blob's first chunk.
     public let mimeType: String?
-    public init(blobId: String, size: Int, hash: String? = nil, mimeType: String? = nil) {
+    /// `nil` from a node predating `X-Blob-Source`, where the answer is always
+    /// this node's own store.
+    public let source: BlobSource?
+    public init(
+        blobId: String, size: Int?, hash: String? = nil, mimeType: String? = nil,
+        source: BlobSource? = nil
+    ) {
         self.blobId = blobId; self.size = size; self.hash = hash; self.mimeType = mimeType
+        self.source = source
     }
 }
 

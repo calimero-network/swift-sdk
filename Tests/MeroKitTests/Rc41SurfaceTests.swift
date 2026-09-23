@@ -270,6 +270,96 @@ final class Rc41SurfaceTests: XCTestCase {
         XCTAssertEqual(identity.revokedFrom?.accountId, String(repeating: "44", count: 32))
     }
 
+    // MARK: - Blob discovery is context-scoped or it is nothing  (rc.39/rc.41)
+
+    /// core 0.11.0-rc.39 removed blob discovery from the DHT. Naming the
+    /// context is now the ONLY way to reach a blob a peer holds, so a call
+    /// without one sees the local store and nothing else — and answers 404 for
+    /// a blob that plainly exists on the node next to it.
+    func testGetBlobNamesTheContextWhenGivenOne() async {
+        let req = await capture { _ = try await self.admin.getBlob("blob-1", contextId: "ctx-1") }
+        XCTAssertEqual(req.method, "GET")
+        XCTAssertEqual(req.path, "/admin-api/blobs/blob-1")
+        XCTAssertEqual(req.query, "context_id=ctx-1", "snake_case, as `uploadBlob` spells it")
+    }
+
+    /// And stays exactly the call it was when no context is named, so a local
+    /// fetch does not start paying for a probe sweep.
+    func testGetBlobWithoutAContextSendsNoQuery() async {
+        let req = await capture { _ = try await self.admin.getBlob("blob-1") }
+        XCTAssertNil(req.query)
+    }
+
+    func testGetBlobInfoNamesTheContextWhenGivenOne() async {
+        let req = await capture { _ = try await self.admin.getBlobInfo("blob-1", contextId: "ctx-1") }
+        XCTAssertEqual(req.method, "HEAD")
+        XCTAssertEqual(req.path, "/admin-api/blobs/blob-1")
+        XCTAssertEqual(req.query, "context_id=ctx-1")
+    }
+
+    /// The whole point of `X-Blob-Source`: a `peer` answer omits every header
+    /// derived from bytes this node does not hold, and without the source
+    /// header a missing `X-Blob-Hash` is indistinguishable from a bug.
+    func testBlobInfoReportsAPeerAnswerAsSuch() async throws {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 200,
+                headers: [
+                    "X-Blob-ID": "blob-1", "Content-Length": "1024", "X-Blob-Source": "peer",
+                ],
+                body: Data())
+        }
+        let info = try await admin.getBlobInfo("blob-1", contextId: "ctx-1")
+        XCTAssertEqual(info.source, .peer)
+        XCTAssertEqual(info.size, 1024, "the holder's word, verified by nobody")
+        XCTAssertNil(info.hash, "computed from bytes this node does not have")
+        XCTAssertNil(info.mimeType, "sniffed from a first chunk this node does not have")
+    }
+
+    /// A local answer is what it always was, plus the label.
+    func testBlobInfoReportsALocalAnswerAsSuch() async throws {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 200,
+                headers: [
+                    "X-Blob-ID": "blob-1", "Content-Length": "7", "X-Blob-Source": "local",
+                    "X-Blob-Hash": "abcd", "X-Blob-MIME-Type": "image/png",
+                ],
+                body: Data())
+        }
+        let info = try await admin.getBlobInfo("blob-1")
+        XCTAssertEqual(info.source, .local)
+        XCTAssertEqual(info.size, 7)
+        XCTAssertEqual(info.hash, "abcd")
+        XCTAssertEqual(info.mimeType, "image/png")
+    }
+
+    /// `Content-Length` is OMITTED when a peer reported no size — "it exists,
+    /// size unknown", which is true, where `0` would be a lie about a blob
+    /// that exists. A caller testing `size > 0` would read present as absent.
+    func testABlobOfUnknownSizeIsNilAndNotZero() async throws {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 200, headers: ["X-Blob-ID": "blob-1", "X-Blob-Source": "peer"],
+                body: Data())
+        }
+        let info = try await admin.getBlobInfo("blob-1", contextId: "ctx-1")
+        XCTAssertNil(info.size)
+        XCTAssertEqual(info.source, .peer)
+    }
+
+    /// A node predating `X-Blob-Source` answers from its own store and says
+    /// nothing about it. `nil` is the reading; `.local` would be a guess.
+    func testBlobInfoFromAnOlderNodeHasNoSource() async throws {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 200, headers: ["X-Blob-ID": "blob-1", "Content-Length": "7"], body: Data())
+        }
+        let info = try await admin.getBlobInfo("blob-1")
+        XCTAssertNil(info.source)
+        XCTAssertEqual(info.size, 7)
+    }
+
     // MARK: - pair-init: the optional key must stay optional
 
     /// `accountNamespace` is new to this SDK, not to core, and the body is
