@@ -94,9 +94,33 @@ final class RealNodeE2ETests: XCTestCase {
 
         // An application has to exist to hang a namespace off. Any installed
         // one will do; the wire shape under test is the namespace call.
-        let apps = try await mero.admin.listApplications()
-        try XCTSkipIf(apps.apps.isEmpty, "no application installed on the e2e node")
-        let applicationId = apps.apps[0].id
+        //
+        // ⚠️ This used to be `XCTSkipIf(apps.isEmpty)` and nothing else, which
+        // is why this guard had NEVER run in CI: the workflow boots a bare
+        // node, so the listing was always empty and the one test that proves
+        // the provisioning chain skipped itself on every single run. It passed
+        // locally, where the author's node happened to have an app installed,
+        // and the job still reported "Executed 3 tests" — a vacuous-pass guard
+        // that counts executions cannot see a skip inside them.
+        //
+        // So the bundle is installed here rather than assumed. `.mpk`, not a
+        // raw `.wasm`: since rc.31 an application id is derived from a
+        // bundle's package and signer, and a bare module has no identity to
+        // install under (`500 not a signed application bundle`). The path is
+        // the NODE's filesystem, which is the same machine in this job.
+        let applicationId: String
+        if let bundle = env("MERO_E2E_APP_BUNDLE") {
+            applicationId = try await mero.admin.installDevApplication(
+                InstallDevApplicationRequest(path: bundle)
+            ).applicationId
+            XCTAssertFalse(applicationId.isEmpty)
+        } else {
+            let apps = try await mero.admin.listApplications()
+            try XCTSkipIf(
+                apps.apps.isEmpty,
+                "no application installed and MERO_E2E_APP_BUNDLE unset")
+            applicationId = apps.apps[0].id
+        }
 
         // 400 if the body carries `upgradePolicy`.
         let namespace = try await mero.admin.createNamespace(
