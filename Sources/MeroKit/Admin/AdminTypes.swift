@@ -294,9 +294,46 @@ public struct GenerateContextIdentityResponseData: Codable, Sendable {
     public init(publicKey: String) { self.publicKey = publicKey }
 }
 
+/// Whose identities a ``GetContextIdentitiesResponseData`` is listing.
+///
+/// `identities-owned` answers a different question depending on who asks — the
+/// node's own signing identities for a node-owner session, the calling
+/// account's certified devices for a delegated one. core 0.11.0-rc.41 started
+/// saying which reading it is rather than leaving a caller to infer it from its
+/// own token.
+public enum IdentitiesOf: String, Codable, Sendable {
+    /// Every identity that is a member of the context — the `/identities`
+    /// roster, the same for every caller.
+    case members
+    /// The identities this NODE holds a signing key for.
+    case node
+    /// The calling account's certified, unrevoked devices in the group owning
+    /// this context. Keys the CLIENT holds, not the node.
+    case caller
+}
+
 public struct GetContextIdentitiesResponseData: Codable, Sendable {
     public let identities: [String]
-    public init(identities: [String]) { self.identities = identities }
+    /// Which reading of the request this list is, or `nil` on a node predating
+    /// the field — which said nothing about it. Absent is the honest answer for
+    /// such a node; defaulting it to a variant would be a guess that could be
+    /// wrong in the direction that matters.
+    public let identitiesOf: IdentitiesOf?
+    public init(identities: [String], identitiesOf: IdentitiesOf? = nil) {
+        self.identities = identities
+        self.identitiesOf = identitiesOf
+    }
+
+    // Decoded by hand so a variant this SDK does not know yet reads as `nil`
+    // rather than failing the whole response. A listing is still a listing when
+    // the label on it is unfamiliar, and the synthesized decoder would throw
+    // away the identities to complain about the label.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        identities = try container.decode([String].self, forKey: .identities)
+        identitiesOf = (try container.decodeIfPresent(String.self, forKey: .identitiesOf))
+            .flatMap(IdentitiesOf.init(rawValue:))
+    }
 }
 
 // MARK: - Context join (group membership; POST /contexts/:id/join)
@@ -411,15 +448,49 @@ public struct ListBlobsResponseData: Codable, Sendable {
 
 public typealias GetBlobResponseData = BlobInfo
 
+/// Where a blob lookup got its answer, from `X-Blob-Source` (core
+/// 0.11.0-rc.41).
+///
+/// It exists so a caller can tell the two apart without inferring it from
+/// which headers happen to be missing — a missing `X-Blob-Hash` would
+/// otherwise be indistinguishable from a bug.
+public enum BlobSource: String, Codable, Sendable {
+    /// This node holds the blob. Every field is present and is this node's own.
+    case local
+    /// Only a context peer holds it. ``GetBlobInfoResponseData/hash`` and
+    /// ``GetBlobInfoResponseData/mimeType`` are `nil` — both are derived from
+    /// bytes this node does not have, and a `HEAD` never transfers the blob to
+    /// find out. ``GetBlobInfoResponseData/size`` is the peer's word, verified
+    /// by nobody.
+    case peer
+}
+
 /// `GetBlobInfoResponseData` extends `BlobInfo` with the extra HEAD-header
-/// fields (`x-blob-hash` / `x-blob-mime-type`).
+/// fields (`x-blob-hash` / `x-blob-mime-type` / `x-blob-source`).
 public struct GetBlobInfoResponseData: Codable, Sendable {
     public let blobId: String
-    public let size: Int
+    /// `nil` means "it exists, size unknown" — a peer answered and reported
+    /// none, so core omits `Content-Length` rather than sending `0`.
+    ///
+    /// ⚠️ This used to be a non-optional `Int` defaulting to `0`, which is a
+    /// lie about a blob that exists: a caller checking `size > 0` reads
+    /// "present but unmeasured" as "absent".
+    public let size: Int?
+    /// `nil` on a peer answer: it is computed from bytes this node does not
+    /// hold, and core will not fabricate one.
     public let hash: String?
+    /// `nil` on a peer answer, for the same reason as ``hash`` — it is sniffed
+    /// from the blob's first chunk.
     public let mimeType: String?
-    public init(blobId: String, size: Int, hash: String? = nil, mimeType: String? = nil) {
+    /// `nil` from a node predating `X-Blob-Source`, where the answer is always
+    /// this node's own store.
+    public let source: BlobSource?
+    public init(
+        blobId: String, size: Int?, hash: String? = nil, mimeType: String? = nil,
+        source: BlobSource? = nil
+    ) {
         self.blobId = blobId; self.size = size; self.hash = hash; self.mimeType = mimeType
+        self.source = source
     }
 }
 
@@ -784,15 +855,33 @@ public struct NodeIdentity: Codable, Sendable {
     /// Defaults to `false` on a node that predates the field, matching core's
     /// own `#[serde(default)]`.
     public let holdsAccountRoot: Bool
+    /// The account namespace, as this node's identity reports it — the id a
+    /// pairing records and follows like one more namespace.
+    ///
+    /// `nil` before the holder's account namespace exists, and on a node
+    /// predating the field. This SDK used to drop it on the floor, which left
+    /// ``AccountPairInitRequest/accountNamespace`` with nothing to fill it
+    /// from.
+    public let accountNamespaceId: String?
+    /// The account that withdrew this node's device, `nil` on a node no
+    /// revocation has reached.
+    ///
+    /// New in core 0.11.0-rc.41, and skipped rather than sent as null. Worth
+    /// checking before reporting a node as merely unauthorized: a device whose
+    /// account revoked it is not a login problem.
+    public let revokedFrom: RevokedFrom?
     public init(
         accountId: String, deviceId: String? = nil, publicKey: String,
         accountRootPublicKey: String, deviceAgreementKey: String? = nil,
-        holdsAccountRoot: Bool = false
+        holdsAccountRoot: Bool = false, accountNamespaceId: String? = nil,
+        revokedFrom: RevokedFrom? = nil
     ) {
         self.accountId = accountId; self.deviceId = deviceId; self.publicKey = publicKey
         self.accountRootPublicKey = accountRootPublicKey
         self.deviceAgreementKey = deviceAgreementKey
         self.holdsAccountRoot = holdsAccountRoot
+        self.accountNamespaceId = accountNamespaceId
+        self.revokedFrom = revokedFrom
     }
 
     // Decoded by hand for one field: `holdsAccountRoot` has to survive a node
@@ -807,12 +896,30 @@ public struct NodeIdentity: Codable, Sendable {
         deviceAgreementKey = try container.decodeIfPresent(String.self, forKey: .deviceAgreementKey)
         holdsAccountRoot =
             try container.decodeIfPresent(Bool.self, forKey: .holdsAccountRoot) ?? false
+        accountNamespaceId = try container.decodeIfPresent(
+            String.self, forKey: .accountNamespaceId)
+        revokedFrom = try container.decodeIfPresent(RevokedFrom.self, forKey: .revokedFrom)
     }
 }
 
-/// Formerly how a namespace/group adopted new app versions. The concept is gone
-/// server-side; the value is still sent on the two create requests because a
-/// released node declares the field required and rejects a body without it.
+/// Which account withdrew this node's device, and which device it was.
+public struct RevokedFrom: Codable, Sendable, Equatable {
+    /// Hex-encoded account id the device spoke for.
+    public let accountId: String
+    /// Hex-encoded device id that was withdrawn.
+    public let deviceId: String
+    public init(accountId: String, deviceId: String) {
+        self.accountId = accountId; self.deviceId = deviceId
+    }
+}
+
+/// Formerly how a namespace/group adopted new app versions. core#3485 removed
+/// the concept; nothing sends this any more.
+///
+/// It survives only so a call site that names the type still compiles. A node
+/// has never *read* this value — it was simply tolerated, until 0.11.0-rc.38
+/// closed the request bodies and made it fatal.
+@available(*, deprecated, message: "core#3485 removed upgrade policies; the field is no longer sent")
 public enum UpgradePolicy: String, Codable, Sendable {
     case automatic = "Automatic"
     case lazyOnAccess = "LazyOnAccess"
@@ -820,17 +927,23 @@ public enum UpgradePolicy: String, Codable, Sendable {
 
 public struct CreateNamespaceRequest: Codable, Sendable {
     public var applicationId: String
-    /// Ignored by any node that has dropped the concept, required by every
-    /// released one. Defaulted so a caller need not choose.
-    public var upgradePolicy: UpgradePolicy
     public var name: String?
     /// Hex 32-byte blob id; pins the namespace to a specific installed version.
     public var appKey: String?
+    public init(applicationId: String, name: String? = nil, appKey: String? = nil) {
+        self.applicationId = applicationId; self.name = name; self.appKey = appKey
+    }
+
+    /// Source-compatibility shim: `upgradePolicy` is accepted and dropped.
+    ///
+    /// Passing it on the wire is a 400 from 0.11.0-rc.38 — the node lists the
+    /// fields it takes and this is not one of them.
+    @available(*, deprecated, message: "upgradePolicy is no longer sent; drop the argument")
+    @_disfavoredOverload
     public init(
-        applicationId: String, upgradePolicy: UpgradePolicy = .lazyOnAccess,
-        name: String? = nil, appKey: String? = nil
+        applicationId: String, upgradePolicy: String, name: String? = nil, appKey: String? = nil
     ) {
-        self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.name = name; self.appKey = appKey
+        self.init(applicationId: applicationId, name: name, appKey: appKey)
     }
 }
 
@@ -997,10 +1110,27 @@ public struct JoinNamespaceResponseData: Codable, Sendable {
     }
 }
 
+/// Body for `POST /admin-api/namespaces/{id}/groups`.
+///
+/// ⚠️ This route is NOT the group-create body. It takes `groupName` and
+/// `visibility`, and nothing else — a `name` or a `groupId` here is a **422**
+/// from 0.11.0-rc.38, which is every call that bothered to name the subgroup.
+/// Only the empty body ever worked.
 public struct CreateGroupInNamespaceRequest: Codable, Sendable {
-    public var groupId: String?
-    public var name: String?
-    public init(groupId: String? = nil, name: String? = nil) { self.groupId = groupId; self.name = name }
+    /// The subgroup's name. Sent as `groupName`, which is what the route reads.
+    public var groupName: String?
+    /// `"open"` or `"restricted"` — lowercase; the node rejects other spellings.
+    public var visibility: String?
+    public init(groupName: String? = nil, visibility: String? = nil) {
+        self.groupName = groupName; self.visibility = visibility
+    }
+
+    /// Source-compatibility shim for the spelling that never reached the node.
+    @available(*, deprecated, message: "the route reads `groupName`; `groupId` was never accepted")
+    @_disfavoredOverload
+    public init(groupId: String? = nil, name: String? = nil) {
+        self.init(groupName: name, visibility: nil)
+    }
 }
 
 public struct CreateGroupInNamespaceResponseData: Codable, Sendable {
@@ -1018,20 +1148,28 @@ public struct SubgroupEntry: Codable, Sendable {
 
 public struct CreateGroupRequest: Codable, Sendable {
     public var applicationId: String
-    /// Ignored by any node that has dropped the concept, required by every
-    /// released one. Defaulted so a caller need not choose.
-    public var upgradePolicy: String
     public var groupId: String?
     public var appKey: String?
     public var name: String?
     public var parentGroupId: String?
     public init(
-        applicationId: String, upgradePolicy: String = "LazyOnAccess",
-        groupId: String? = nil, appKey: String? = nil,
+        applicationId: String, groupId: String? = nil, appKey: String? = nil,
         name: String? = nil, parentGroupId: String? = nil
     ) {
-        self.applicationId = applicationId; self.upgradePolicy = upgradePolicy; self.groupId = groupId
+        self.applicationId = applicationId; self.groupId = groupId
         self.appKey = appKey; self.name = name; self.parentGroupId = parentGroupId
+    }
+
+    /// Source-compatibility shim: `upgradePolicy` is accepted and dropped.
+    @available(*, deprecated, message: "upgradePolicy is no longer sent; drop the argument")
+    @_disfavoredOverload
+    public init(
+        applicationId: String, upgradePolicy: String, groupId: String? = nil,
+        appKey: String? = nil, name: String? = nil, parentGroupId: String? = nil
+    ) {
+        self.init(
+            applicationId: applicationId, groupId: groupId, appKey: appKey,
+            name: name, parentGroupId: parentGroupId)
     }
 }
 

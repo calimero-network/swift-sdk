@@ -51,6 +51,25 @@ jobs:
           chmod +x ./merod
           ./merod --version
 
+      # The provisioning-chain test needs an application to hang a namespace
+      # off, and this job boots a BARE node — so for every run before this step
+      # existed, that test skipped itself and the job still reported three
+      # executed tests. Every core release ships this fixture bundle, so the
+      # app the chain runs against moves with the pin like everything else.
+      #
+      # `.mpk`, not a raw `.wasm`: since rc.31 an application id is derived
+      # from a bundle's package and signer, so a bare module has no identity to
+      # install under and the node answers 500.
+      - name: Download the kv-store fixture bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CORE_TAG" --repo calimero-network/core \
+            --pattern 'kv-store-test-fixture.mpk' --output kv-store.mpk --clobber
+          echo "MERO_E2E_APP_BUNDLE=$PWD/kv-store.mpk" >> "$GITHUB_ENV"
+          ls -l kv-store.mpk
+
       # core rc.17 (core#3276/#3277) moved admin provisioning to `init`: there is
       # no first-login bootstrap secret any more, and `--auth-mode embedded`
       # REFUSES to init without credentials. `--auth-storage persistent` is
@@ -81,6 +100,15 @@ jobs:
           # Guard against a vacuous/all-skipped green: require a real pass.
           grep -qE "Executed [1-9][0-9]* test" e2e.log \
             || { echo "::error::e2e produced no executed tests — refusing a vacuous pass"; exit 1; }
+          # ...and a SKIP inside those executions is just as vacuous. Counting
+          # executed tests cannot see one: this job reported "Executed 3 tests"
+          # on every run while the only test that proves the provisioning chain
+          # quietly skipped itself for want of an installed application.
+          if grep -q "skipped" e2e.log; then
+            echo "::error::a live-node test skipped itself — that is not a pass"
+            grep -n "skipped" e2e.log
+            exit 1
+          fi
 
       - name: Upload logs
         if: always()

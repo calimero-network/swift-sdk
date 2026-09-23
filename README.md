@@ -14,7 +14,7 @@ HTTP(S) call to a remote node's endpoints.
 - Swift 5.9+ (built and tested on Swift 6)
 - iOS 15+ / macOS 12+
 - Zero third-party dependencies (uses `URLSession`, `Foundation`, `Security`).
-- A Calimero node on **core `0.11.0-rc.32`**.
+- A Calimero node on **core `0.11.0-rc.41`**.
 
 ### Which core release?
 
@@ -23,9 +23,20 @@ truth: every CI job and local script that boots a node reads that file instead
 of resolving "the newest core release". That matters because the admin API is
 still moving — core rc.17 changed how a node is initialised, rc.23 deleted a
 route this SDK called, rc.26 changed a networking default, rc.27 changed how
-every id is encoded and rc.32 took the URL out of an application install — and a
+every id is encoded, rc.32 took the URL out of an application install and rc.38
+closed 37 request bodies that had been silently dropping extra keys — and a
 job that follows the newest release goes red on a commit of its own that changed
 nothing.
+
+rc.39–rc.41 were additive on the wire: no route this SDK calls was removed and
+no request body closed further. What they added is served here —
+`PUT /account/devices/{id}/label` and `PUT /account/devices/{id}/scope`, the
+`label` on a device listing, `identitiesOf` on a context-identity listing,
+`revokedFrom` on the node identity, and `X-Blob-Source` on a blob `HEAD`.
+
+⚠️ rc.39 also removed blob discovery from the DHT, which is a behaviour change
+rather than a wire one: `context_id` is now the only way to reach a blob a peer
+holds, so `getBlob` and `getBlobInfo` take one.
 
 Bumping to a newer core is a one-line change there, plus whatever wire changes
 it brings to `Sources/MeroKit/Admin`.

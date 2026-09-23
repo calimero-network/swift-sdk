@@ -126,12 +126,21 @@ public struct AccountDeviceEntry: Codable, Sendable {
     public let revoked: Bool
     public let applications: [String]
     public let namespaces: [String]
+    /// The replicated name the account gave this device, `nil` while it has
+    /// none. Every device of the account reads the same one.
+    ///
+    /// New in core 0.11.0-rc.41, and skipped rather than sent as null — so a
+    /// node predating it answers exactly as it did, and `nil` here means "no
+    /// name" and "this node does not have the field" alike. Set it with
+    /// ``AdminApi/labelDevice(_:request:)``.
+    public let label: String?
     public init(
         deviceId: String, signingKey: String, isSelf: Bool, revoked: Bool,
-        applications: [String], namespaces: [String]
+        applications: [String], namespaces: [String], label: String? = nil
     ) {
         self.deviceId = deviceId; self.signingKey = signingKey; self.isSelf = isSelf
         self.revoked = revoked; self.applications = applications; self.namespaces = namespaces
+        self.label = label
     }
 }
 
@@ -157,10 +166,22 @@ public struct AccountApplicationsResponse: Codable, Sendable {
 
 public struct AccountPairInitRequest: Codable, Sendable {
     public var accountRootPublicKey: String
-    /// The namespaces the new device should be linked into.
+    /// The namespaces the new device should be linked into. May be empty only
+    /// when ``accountNamespace`` is set — the node refuses a request that names
+    /// neither.
     public var namespaces: [String]
-    public init(accountRootPublicKey: String, namespaces: [String] = []) {
+    /// Hex-encoded id of the account namespace, as the holder's identity
+    /// reports it (``NodeIdentity/accountNamespaceId``). Recorded and followed
+    /// like one more namespace.
+    ///
+    /// Omitted from the body when `nil`, so this stays the same request it was.
+    public var accountNamespace: String?
+    public init(
+        accountRootPublicKey: String, namespaces: [String] = [],
+        accountNamespace: String? = nil
+    ) {
         self.accountRootPublicKey = accountRootPublicKey; self.namespaces = namespaces
+        self.accountNamespace = accountNamespace
     }
 }
 
@@ -251,6 +272,109 @@ public struct RelinkDeviceResponseData: Codable, Sendable {
     ) {
         self.accountId = accountId; self.deviceId = deviceId
         self.applications = applications; self.linkedIn = linkedIn; self.skipped = skipped
+    }
+}
+
+// MARK: - Device scope and label  (core 0.11.0-rc.41)
+
+/// What a device may reach, as ``AdminApi/rescopeDevice(_:request:)`` replaces
+/// it.
+///
+/// Tagged rather than a list whose emptiness means everything, deliberately: on
+/// the wire `"all"` and `{"only": [...]}` are different shapes, so the slip a
+/// caller can make is never silently the widest ask. An empty ``only`` is
+/// refused by the node with a `400`, not read as "everything".
+public enum DeviceScope: Codable, Sendable, Equatable {
+    /// Every application, now and later.
+    case all
+    /// Only these applications, hex-encoded. Must not be empty.
+    case only([String])
+
+    private enum CodingKeys: String, CodingKey { case only }
+
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .all:
+            var container = encoder.singleValueContainer()
+            try container.encode("all")
+        case .only(let applications):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(applications, forKey: .only)
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        if let single = try? decoder.singleValueContainer(), let tag = try? single.decode(String.self) {
+            guard tag == "all" else {
+                throw DecodingError.dataCorruptedError(
+                    in: single, debugDescription: "unknown device scope \(tag)")
+            }
+            self = .all
+            return
+        }
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self = .only(try container.decode([String].self, forKey: .only))
+    }
+}
+
+/// Replace a device's scope outright — the direction ``RelinkDeviceRequest``
+/// deliberately cannot go, since a relink is add-only.
+public struct RescopeDeviceRequest: Codable, Sendable {
+    public var scope: DeviceScope
+    public init(scope: DeviceScope) { self.scope = scope }
+}
+
+/// A namespace the new scope no longer reaches.
+public struct RescopeDescopeEntry: Codable, Sendable {
+    public let namespaceId: String
+    /// `false` means the device stopped writing there but still holds the key
+    /// it had, until an admin rotates.
+    public let keyRotated: Bool
+    public init(namespaceId: String, keyRotated: Bool) {
+        self.namespaceId = namespaceId; self.keyRotated = keyRotated
+    }
+}
+
+public struct RescopeDeviceResponseData: Codable, Sendable {
+    public let accountId: String
+    public let deviceId: String
+    /// The scope after the request. Empty means every application.
+    public let applications: [String]
+    /// Namespaces the new scope took away, and whether the key rotated.
+    public let descoped: [RescopeDescopeEntry]
+    /// Namespaces the device was linked into by this call.
+    public let linkedIn: [RelinkOutcomeEntry]
+    /// Namespaces nothing was published into, each with why.
+    public let skipped: [RelinkSkipEntry]
+    public init(
+        accountId: String, deviceId: String, applications: [String],
+        descoped: [RescopeDescopeEntry], linkedIn: [RelinkOutcomeEntry],
+        skipped: [RelinkSkipEntry]
+    ) {
+        self.accountId = accountId; self.deviceId = deviceId
+        self.applications = applications; self.descoped = descoped
+        self.linkedIn = linkedIn; self.skipped = skipped
+    }
+}
+
+/// Name a device of this account, for a listing to render.
+public struct LabelDeviceRequest: Codable, Sendable {
+    /// Trimmed, non-empty, bounded and free of control characters; the node
+    /// refuses anything else.
+    public var label: String
+    public init(label: String) { self.label = label }
+}
+
+public struct LabelDeviceResponseData: Codable, Sendable {
+    public let accountId: String
+    public let deviceId: String
+    public let label: String
+    /// Orders this rename against one another device of the account made at the
+    /// same time.
+    public let labelEpoch: Int
+    public init(accountId: String, deviceId: String, label: String, labelEpoch: Int) {
+        self.accountId = accountId; self.deviceId = deviceId
+        self.label = label; self.labelEpoch = labelEpoch
     }
 }
 
