@@ -63,6 +63,52 @@ public struct IntentResult: Sendable, Equatable {
     public let returns: JSONValue?
 }
 
+/// The relay's account and node key, as a founding warrant names them.
+///
+/// For a namespace that does not exist yet the relay cannot be asked
+/// (`describeGovernance` has nothing to answer about), so this comes from the
+/// cloud (the account) and the relay's **attested** node key — never from an
+/// unauthenticated discovery answer.
+public struct RelayExecutor: Sendable, Equatable {
+    public let executorAccount: String
+    public let executorKey: String
+
+    public init(executorAccount: String, executorKey: String) {
+        self.executorAccount = executorAccount
+        self.executorKey = executorKey
+    }
+}
+
+/// The application a founded namespace runs: `TargetApplicationSet`'s inputs.
+public struct FoundingApplication: Sendable, Equatable {
+    public let applicationId: String
+    public let package: String
+    public let version: String
+
+    public init(applicationId: String, package: String, version: String) {
+        self.applicationId = applicationId
+        self.package = package
+        self.version = version
+    }
+}
+
+/// A namespace founded through a relay (mero-js `FoundedNamespace`).
+public struct FoundedNamespace: Sendable, Equatable {
+    /// `foundedNamespaceId(author, salt)`.
+    public let namespaceId: String
+    /// Keep it to prove founding later (HA): `(founder, salt)` reproduces the id.
+    public let salt: String
+    /// Whether the relay admitted itself as the namespace's first TEE.
+    public let teeEnabled: Bool
+    public let teeError: String?
+    /// `nil` unless an application was asked for.
+    public var applicationSet: Bool?
+    public var applicationError: String?
+    /// `nil` unless a default capability mask was asked for.
+    public var defaultCapabilitiesSet: Bool?
+    public var defaultCapabilitiesError: String?
+}
+
 /// A context created through a creation warrant.
 public struct CreatedRelayContext: Codable, Sendable, Equatable {
     public let contextId: String
@@ -198,14 +244,14 @@ public struct RelayClient: Sendable {
 
     /// Where this device stands in `contextId`'s nonce sequence, asked as the
     /// author (`POST /admin-api/contexts/{ctx}/warrant-nonce {authorProof}`).
-    public func warrantNonce(contextId: String) async throws -> WarrantNonceState {
+    public func warrantNonce(contextId: String) async throws -> RelayWarrantNonceState {
         let url = try AccountHTTP.url(relayURL, "/admin-api/contexts/\(escape(contextId))/warrant-nonce")
         var headers: [String: String] = [:]
         if let token = await tokenProvider() { headers["Authorization"] = "Bearer \(token)" }
         let request = AccountHTTP.jsonRequest(
             url, method: "POST", body: ["authorProof": .string(authorProof)], headers: headers, timeout: timeout)
         let (raw, _) = try await AccountHTTP.sendRaw(request, session: session)
-        return try WarrantNonceState.parse(raw)
+        return try RelayWarrantNonceState.parse(raw)
     }
 
     /// Advance the local sequence to where the node says it stands.
@@ -279,15 +325,96 @@ public struct RelayClient: Sendable {
         let warrant = try Warrants.signGovernanceWarrant(
             Warrants.GovernanceInput(
                 scope: groupId, op: op, authorAccount: authorAccount, executor: executor.account,
-                executorKey: executor.key, nonce: nonces.next(relay: relayURL), notAfter: notAfter()),
+                executorKey: executor.key, nonce: governanceNonce(groupId), notAfter: notAfter()),
             keys: keys)
+        let data = try await postGovernance(groupId: groupId, op: op, warrant: warrant)
+        return data["groupId"]?.stringValue ?? groupId
+    }
+
+    /// Found a namespace through the relay, with the author as its founder,
+    /// owner and admin. Port of mero-js `RelayClient.foundNamespace`.
+    ///
+    /// The author signs the exact genesis (``GovernanceOps/namespaceCreated(founder:credential:salt:)``)
+    /// under a root-plane governance warrant scoped to the new id, which is
+    /// derived from the author's account and the salt — so the relay can
+    /// neither choose another id nor found it for anyone else. The relay is
+    /// seated as the founding relay, so later ``govern(groupId:op:)``,
+    /// ``createContext(groupId:applicationId:initArgs:serviceName:name:seed:)``
+    /// and ``execute(contextId:method:argsJson:)`` work through it straight away.
+    ///
+    /// `application` and `defaultCapabilities` are set right after, each under
+    /// its own warrant; a failure there is reported (`applicationSet: false`),
+    /// not thrown, since the namespace exists. Both are validated before
+    /// anything is signed.
+    public func foundNamespace(
+        executor: RelayExecutor, salt: String? = nil, defaultCapabilities: UInt32? = nil,
+        application: FoundingApplication? = nil
+    ) async throws -> FoundedNamespace {
+        let executor = try checkedExecutor(executor.executorAccount, executor.executorKey)
+        let salt =
+            try salt.map { Hex.encode(try Hex.decode($0, label: "salt", bytes: 32)) } ?? Hex.encode(randomBytes(32))
+        let namespaceId = try GovernanceOps.foundedNamespaceId(founder: authorAccount, salt: salt)
+        let op = try GovernanceOps.namespaceCreated(founder: authorAccount, credential: authorProof, salt: salt)
+        let capabilitiesOp = try defaultCapabilities.map { try GovernanceOps.defaultCapabilitiesSet($0) }
+        let applicationOp = try application.map {
+            try GovernanceOps.targetApplicationSet(
+                applicationId: $0.applicationId, package: $0.package, version: $0.version)
+        }
+
+        let warrant = try Warrants.signGovernanceWarrant(
+            Warrants.GovernanceInput(
+                scope: namespaceId, op: op, authorAccount: authorAccount, executor: executor.account,
+                executorKey: executor.key, nonce: governanceNonce(namespaceId), notAfter: notAfter()),
+            keys: keys)
+        let data = try await postGovernance(groupId: namespaceId, op: op, warrant: warrant)
+        let teeError = data["teeError"]?.stringValue
+        var founded = FoundedNamespace(
+            namespaceId: data["groupId"]?.stringValue ?? namespaceId, salt: salt,
+            teeEnabled: data["teeEnabled"]?.boolValue ?? false, teeError: teeError?.isEmpty == false ? teeError : nil)
+        // The application first: without it the namespace can hold no context.
+        if let applicationOp {
+            do {
+                try await govern(groupId: founded.namespaceId, op: applicationOp)
+                founded.applicationSet = true
+            } catch {
+                founded.applicationSet = false
+                founded.applicationError = Self.message(error)
+            }
+        }
+        if let capabilitiesOp {
+            do {
+                try await govern(groupId: founded.namespaceId, op: capabilitiesOp)
+                founded.defaultCapabilitiesSet = true
+            } catch {
+                founded.defaultCapabilitiesSet = false
+                founded.defaultCapabilitiesError = Self.message(error)
+            }
+        }
+        return founded
+    }
+
+    private func postGovernance(groupId: String, op: Warrants.GovernanceOp, warrant: String) async throws -> JSONValue {
         let body = try await json(
             "POST", "/admin-api/groups/\(escape(groupId))/governance-intents",
             body: [
                 "warrant": .string(warrant), "authorProof": .string(authorProof),
                 "op": .string(Hex.encode(op.bytes)),
             ])
-        return body["data"]?["groupId"]?.stringValue ?? groupId
+        return body["data"] ?? .null
+    }
+
+    /// A governance warrant's nonce for `(relay, group)`: spent in a sliding
+    /// per-(group, device) window, so it must never go backwards. Its own
+    /// counter, floored at the clock (ms) so cleared storage resumes above
+    /// anything spent before — as mero-js does.
+    private func governanceNonce(_ groupId: String) -> UInt64 {
+        let key = "\(relayURL)|governance|\(groupId.lowercased())"
+        nonces.advance(relay: key, to: UInt64(Date().timeIntervalSince1970 * 1000))
+        return nonces.next(relay: key)
+    }
+
+    static func message(_ error: Error) -> String {
+        (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 
     // MARK: - Helpers

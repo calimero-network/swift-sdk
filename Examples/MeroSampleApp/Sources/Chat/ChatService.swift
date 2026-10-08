@@ -203,14 +203,37 @@ final class ChatService: ObservableObject {
         } catch { say("Couldn't load spaces: \(short(error))", error: true) }
     }
 
-    var canCreateSpaces: Bool { !isRelay }
+    /// A node creates spaces; a Cloud account founds them through its relay.
+    var canCreateSpaces: Bool {
+        switch backend {
+        case .relay(let connection, _): return connection.relay != nil
+        case .node: return true
+        }
+    }
 
     func createSpace(_ name: String) async {
-        guard case .node(let mero) = backend, let appId else { return }
-        await run("Creating space \(name)…") {
-            let resp = try await mero.admin.createNamespace(CreateNamespaceRequest(applicationId: appId, name: name))
-            self.say("Space created: \(resp.namespaceId.prefix(8))")
-            await self.loadSpaces()
+        switch backend {
+        case .relay(let connection, let signIn):
+            await run("Creating space \(name)…") {
+                // Founds the namespace as the account: curb from the registry,
+                // mero-react's default capabilities, the name, then HA.
+                let founded = try await signIn.foundNamespace(connection, name: name, package: Self.packageName)
+                self.say(
+                    founded.haEnabled
+                        ? "Space created: \(founded.namespaceId.prefix(8))"
+                        : "Space created: \(founded.namespaceId.prefix(8)). Not hosted in the cloud yet: "
+                            + (founded.haError ?? "unknown reason"),
+                    error: false)
+                await self.loadSpaces()
+            }
+        case .node(let mero):
+            guard let appId else { return }
+            await run("Creating space \(name)…") {
+                let resp = try await mero.admin.createNamespace(
+                    CreateNamespaceRequest(applicationId: appId, name: name))
+                self.say("Space created: \(resp.namespaceId.prefix(8))")
+                await self.loadSpaces()
+            }
         }
     }
 
@@ -349,22 +372,33 @@ final class ChatService: ObservableObject {
 
     // MARK: invite / join
 
-    var canInvite: Bool { !isRelay }
+    /// Both backends invite: a node signs with its namespace key, an account
+    /// with its device key (needs the relay session to read the members).
+    var canInvite: Bool {
+        switch backend {
+        case .relay(let connection, _): return connection.mero != nil
+        case .node: return true
+        }
+    }
 
     func makeInvite(_ space: ChatSpace) async -> String? {
-        guard case .node(let mero) = backend else { return nil }
         do {
-            let result = try await mero.admin.createNamespaceInvitation(space.id)
             let signed: SignedGroupOpenInvitation
-            switch result {
-            case .single(let data):
-                signed = data.invitation
-            case .recursive(let data):
-                guard let first = data.invitations.first else {
-                    say("The node returned no invitations.", error: true)
-                    return nil
+            switch backend {
+            case .relay(let connection, let signIn):
+                signed = try await signIn.createNamespaceInvitation(connection, namespaceId: space.id)
+            case .node(let mero):
+                let result = try await mero.admin.createNamespaceInvitation(space.id)
+                switch result {
+                case .single(let data):
+                    signed = data.invitation
+                case .recursive(let data):
+                    guard let first = data.invitations.first else {
+                        say("The node returned no invitations.", error: true)
+                        return nil
+                    }
+                    signed = first.invitation
                 }
-                signed = first.invitation
             }
             let code = try ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: signed).encoded()
             print("[MeroKit] invite code for \(space.name):\n\(code)")

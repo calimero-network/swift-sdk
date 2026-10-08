@@ -1070,6 +1070,62 @@ private let cloudOps: [SDKOperation] = [
         return try await c.requireRelay().govern(groupId: i.v("groupId"), op: .init(kind: .group, bytes: bytes))
     },
     .cloud(
+        id: "relay.setGroupName", name: "govern(groupMetadataSet)", summary: "Name a group or namespace",
+        fields: [.line("groupId", "Group ID", "64 hex"), .line("name", "Name", "Team")]
+    ) { c, i in
+        try await c.requireRelay().govern(
+            groupId: i.v("groupId"), op: GovernanceOps.groupMetadataSet(name: i.v("name")))
+    },
+    .cloud(
+        id: "relay.addMember", name: "govern(memberAdded)", summary: "Add an account to a group as Member",
+        fields: [.line("groupId", "Group ID", "64 hex"), .line("member", "Member account", "64 hex")]
+    ) { c, i in
+        try await c.requireRelay().govern(
+            groupId: i.v("groupId"), op: GovernanceOps.memberAdded(i.v("member"), role: .member))
+    },
+    .cloud(
+        id: "relay.foundedNamespaceId", name: "foundedNamespaceId",
+        summary: "The id a founder + salt derive (calimero.namespace.id.v1)",
+        fields: [.line("founder", "Founder account", "64 hex"), .line("salt", "Salt", "64 hex")]
+    ) { _, i in try GovernanceOps.foundedNamespaceId(founder: i.v("founder"), salt: i.v("salt")) },
+    .cloud(
+        id: "registry.resolve", name: "ApplicationRegistry.resolve",
+        summary: "Application id + latest version an account founds on",
+        fields: [.line("package", "Package", "com.calimero.curb")]
+    ) { _, i in
+        let r = try await ApplicationRegistry.resolve(package: i.opt("package") ?? "com.calimero.curb")
+        return "applicationId: \(r.applicationId)\nversion: \(r.version)\nsigner: \(r.signerId)"
+    },
+    .cloud(
+        id: "account.foundNamespace", name: "foundNamespace",
+        summary: "Found a namespace as the account (app, caps, name, HA)",
+        fields: [.line("name", "Name", "Team"), .line("package", "Package", "com.calimero.curb")]
+    ) { c, i in
+        let f = try await c.signIn.foundNamespace(
+            try c.requireConnection(), name: i.opt("name"), package: i.opt("package") ?? "com.calimero.curb")
+        return "namespaceId: \(f.namespaceId)\nsalt: \(f.salt)\nteeEnabled: \(f.teeEnabled)\n"
+            + "haEnabled: \(f.haEnabled)\(f.haError.map { "\nhaError: \($0)" } ?? "")"
+    },
+    .cloud(
+        id: "account.invite", name: "createNamespaceInvitation",
+        summary: "Mint an invitation signed with this device's key",
+        fields: [.line("namespaceId", "Namespace ID", "64 hex")]
+    ) { c, i in
+        Fmt.json(
+            try await c.signIn.createNamespaceInvitation(try c.requireConnection(), namespaceId: i.v("namespaceId")))
+    },
+    .cloud(
+        id: "cloud.enableHa", name: "enableHaAsAccount", summary: "Ask the cloud to host a namespace you founded",
+        fields: [.line("namespaceId", "Namespace ID", "64 hex"), .line("salt", "Founding salt", "64 hex")]
+    ) { c, i in
+        let conn = try c.requireConnection()
+        let keys = await c.signIn.deviceKeys()
+        return Fmt.json(
+            try await c.signIn.cloudClient().enableHaAsAccount(
+                namespaceId: i.v("namespaceId"), salt: i.v("salt"), accountId: conn.session.account,
+                credential: conn.session.credential, keys: keys, relayURL: conn.session.relayUrl))
+    },
+    .cloud(
         id: "account.join", name: "join", summary: "Redeem a namespace invitation as the account",
         fields: [.line("namespaceId", "Namespace ID", "64 hex"), .json("invitation", "SignedGroupOpenInvitation JSON")]
     ) { c, i in

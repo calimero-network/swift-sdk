@@ -19,6 +19,9 @@ public enum Capabilities {
     /// grant a relay node needs. Implied by neither membership nor admin, and
     /// not propagated to subgroups. See ``AdminApi/openToDelegatedExecution(_:)``
     /// and ``AdminApi/grantAuthorship(_:account:)``.
+    ///
+    /// Never changed through a relay: the governance op builders refuse a mask
+    /// that sets it.
     public static let canAuthorOnBehalf: UInt32 = 1 << 9
 
     /// True if `mask` has every bit of `cap` set. (== mero-js `hasCap`.)

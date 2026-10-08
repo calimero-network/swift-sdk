@@ -453,7 +453,8 @@ struct OperationRunnerView: View {
         let captured = inputs
         let mero = session.mero
         let context = CloudOpContext(
-            signIn: session.signIn, relay: session.relay, session: session.connection?.session)
+            signIn: session.signIn, relay: session.relay, session: session.connection?.session,
+            connection: session.connection)
         Task {
             do {
                 let result: String

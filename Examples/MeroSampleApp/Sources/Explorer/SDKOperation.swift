@@ -23,6 +23,15 @@ struct CloudOpContext: Sendable {
     /// `nil` when the account has no relay yet.
     let relay: RelayClient?
     let session: CloudSession?
+    /// The whole connection (relay, Bearer reads, attested node key).
+    var connection: CloudConnection?
+
+    func requireConnection() throws -> CloudConnection {
+        guard let connection, connection.relay != nil else {
+            throw AccountError.notSignedIn("No relay serves this account yet.")
+        }
+        return connection
+    }
 
     func requireRelay() throws -> RelayClient {
         guard let relay else { throw AccountError.notSignedIn("No relay serves this account yet.") }

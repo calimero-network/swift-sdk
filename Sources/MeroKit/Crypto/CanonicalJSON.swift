@@ -56,6 +56,13 @@ public enum CanonicalJSON {
         return "\(n)"
     }
 
+    /// `s` as a JSON string literal, spelled as `JSON.stringify` spells it.
+    static func quote(_ s: String) -> String {
+        var out = ""
+        writeString(s, into: &out)
+        return out
+    }
+
     private static func writeString(_ s: String, into out: inout String) {
         out += "\""
         for scalar in s.unicodeScalars {
