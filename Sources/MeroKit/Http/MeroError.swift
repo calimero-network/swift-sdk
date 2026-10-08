@@ -95,3 +95,91 @@ public struct RpcError: Error, Sendable, Equatable {
         self.data = data
     }
 }
+
+// MARK: - Typed refusals (core rc.83)
+
+/// The JSON body core sends with a refusal: `{"error": "...", "type": "...", "data": ...}`.
+///
+/// Since core 0.11.0-rc.83 most refusals carry a precise status (400, 403,
+/// 404, 409, 503) instead of a blanket 500, and method errors from
+/// `/contexts/{id}/query` and `/contexts/{id}/intents` add `type` (e.g.
+/// `"FunctionCallError"`) and `data`, the same pair JSON-RPC errors carry.
+public struct ErrorRefusal: Sendable, Equatable {
+    /// The `error` string, when the body had one.
+    public let message: String?
+    /// The `type` tag, when the body had one.
+    public let type: String?
+    /// The `data` payload, when the body had one.
+    public let data: JSONValue?
+
+    public init(message: String? = nil, type: String? = nil, data: JSONValue? = nil) {
+        self.message = message
+        self.type = type
+        self.data = data
+    }
+}
+
+extension HTTPError {
+    /// The refusal parsed from ``bodyText``, or `nil` when the body is not a
+    /// JSON object with any of `error`, `type` or `data`.
+    public var refusal: ErrorRefusal? {
+        guard let bodyText, let bytes = bodyText.data(using: .utf8),
+            case .object(let obj)? = try? JSONDecoder().decode(JSONValue.self, from: bytes)
+        else { return nil }
+        var message: String?
+        if case .string(let m)? = obj["error"] { message = m }
+        var type: String?
+        if case .string(let t)? = obj["type"] { type = t }
+        let data = obj["data"]
+        if message == nil, type == nil, data == nil { return nil }
+        return ErrorRefusal(message: message, type: type, data: data)
+    }
+}
+
+extension MeroError {
+    /// The HTTP status, for the cases that carry one.
+    public var httpStatus: Int? {
+        switch self {
+        case .http(let e): return e.status
+        case .authRevoked(_, let e): return e.status
+        default: return nil
+        }
+    }
+
+    /// The typed refusal body, for an HTTP failure that carried one.
+    public var refusal: ErrorRefusal? {
+        switch self {
+        case .http(let e): return e.refusal
+        case .authRevoked(_, let e): return e.refusal
+        default: return nil
+        }
+    }
+
+    /// The JSON-RPC error's `type` tag (`"ReadOnlyWriteRefused"`,
+    /// `"FunctionCallError"`, ...), or the HTTP refusal's `type`.
+    public var errorType: String? {
+        switch self {
+        case .rpc(let e): return e.type
+        default: return refusal?.type
+        }
+    }
+}
+
+extension RpcError {
+    /// The `type` core uses when this node's role (`ReadOnly`, `ReadOnlyTee`
+    /// or `RelayTee`) means a write it ran would be discarded. New in rc.83.
+    public static let readOnlyWriteRefusedType = "ReadOnlyWriteRefused"
+
+    /// Whether the node refused a write because it only holds a read-only
+    /// replica of the context. Retrying here never helps: send the write to a
+    /// node with a writing role, or as an intent through a relay.
+    public var isReadOnlyWriteRefused: Bool { type == Self.readOnlyWriteRefusedType }
+
+    /// The context a ``isReadOnlyWriteRefused`` refusal names, from
+    /// `data.context_id`.
+    public var refusedContextId: String? {
+        guard isReadOnlyWriteRefused, case .object(let obj)? = data, case .string(let id)? = obj["context_id"]
+        else { return nil }
+        return id
+    }
+}

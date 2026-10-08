@@ -56,11 +56,18 @@ public actor Mero {
     /// Cancel the consuming task to close the stream. Powers push updates
     /// (new messages, etc.) without polling. `nonisolated` — reads only the
     /// immutable config and defers the token read to the async provider.
-    public nonisolated func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error> {
+    ///
+    /// `groupIds` (core rc.83) also subscribes to group-keyed events — membership
+    /// changes and migration progress — which arrive with
+    /// ``ContextEvent/groupId`` set.
+    public nonisolated func events(
+        contextIds: [String], groupIds: [String] = []
+    ) -> AsyncThrowingStream<ContextEvent, Error> {
         let provider: @Sendable () async -> String? = { [weak self] in
             await self?.currentTokenData()?.accessToken
         }
-        return SseClient(baseURL: config.baseURL, token: provider).events(contextIds: contextIds)
+        return SseClient(baseURL: config.baseURL, token: provider, session: session)
+            .events(contextIds: contextIds, groupIds: groupIds)
     }
 
     /// The transport in use (for advanced/custom callers).
@@ -228,9 +235,22 @@ public actor Mero {
         tokenStore.clear()
     }
 
-    /// Log out: clear tokens locally and release resources. Mirrors mero-react's
-    /// `logout` (clear the store even when never connected, so tokens don't linger).
-    public func logout() {
+    /// Log out: retire the refresh token on the node, then clear tokens locally
+    /// and release resources.
+    ///
+    /// The server half (`POST /auth/logout`, new in core rc.83) is best-effort:
+    /// an unreachable node, an older node without the route, or a token the
+    /// node already refuses never stops the local clear, so a caller is always
+    /// logged out on this device. Mirrors mero-react's `logout` (clear the
+    /// store even when never connected, so tokens don't linger).
+    public func logout() async {
+        if let refreshToken = (tokenData ?? tokenStore.getTokens())?.refreshToken, !refreshToken.isEmpty {
+            // A bare transport: no bearer, no 401-refresh, no revoke hook. A
+            // refresh triggered from inside logout would consume the very token
+            // being retired.
+            let bare = URLSessionHttpClient(baseURL: config.baseURL, timeout: config.timeout, session: session)
+            _ = try? await AuthApi(http: bare).logout(LogoutRequest(refreshToken: refreshToken))
+        }
         clearToken()
         close()
     }

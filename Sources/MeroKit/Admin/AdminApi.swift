@@ -785,15 +785,21 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "labelDevice")
     }
 
+    /// Create a subgroup in a namespace.
+    ///
+    /// ⚠️ The visibility is always sent. core rc.83 flipped what an absent
+    /// `visibility` means, from `restricted` to `open` (fdcdfb08f), so the same
+    /// body would now create a subgroup every namespace member can join. This
+    /// SDK keeps the old default by sending
+    /// ``CreateGroupInNamespaceRequest/defaultVisibility`` (`"restricted"`)
+    /// whenever the caller names none. Pass `visibility: "open"` for an open one.
     public func createGroupInNamespace(
         _ namespaceId: String, request: CreateGroupInNamespaceRequest? = nil
     ) async throws -> CreateGroupInNamespaceResponseData {
-        let resp: ApiResponse<CreateGroupInNamespaceResponseData>
-        if let request {
-            resp = try await http.post("/admin-api/namespaces/\(namespaceId)/groups", json: request)
-        } else {
-            resp = try await http.post("/admin-api/namespaces/\(namespaceId)/groups", json: EmptyObject())
-        }
+        var body = request ?? CreateGroupInNamespaceRequest()
+        if body.visibility == nil { body.visibility = CreateGroupInNamespaceRequest.defaultVisibility }
+        let resp: ApiResponse<CreateGroupInNamespaceResponseData> = try await http.post(
+            "/admin-api/namespaces/\(namespaceId)/groups", json: body)
         return try unwrap(resp, "createGroupInNamespace")
     }
 
@@ -1111,10 +1117,19 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "teeAttest")
     }
 
-    public func teeVerifyQuote(_ request: TeeVerifyQuoteRequest) async throws -> TeeVerifyQuoteResponseData {
-        let resp: ApiResponse<TeeVerifyQuoteResponseData> = try await http.post(
-            "/admin-api/tee/verify-quote", json: request)
-        return try unwrap(resp, "teeVerifyQuote")
+    // `teeVerifyQuote` (`POST /tee/verify-quote`) is gone: core removed the
+    // route before rc.41 (cd581cab8), so the method could only ever fail. A
+    // quote is verified client-side against the collateral `teeAttest` returns
+    // with `includeCollateral: true`.
+
+    /// A fresh attestation for device registration: a quote binding `nonce`,
+    /// in the same shape ``teeAttest(_:)`` answers. New in core rc.83.
+    public func teeRegistrationAttest(
+        _ request: TeeRegistrationAttestRequest
+    ) async throws -> TeeAttestResponseData {
+        let resp: ApiResponse<TeeAttestResponseData> = try await http.post(
+            "/admin-api/tee/registration-attest", json: request)
+        return try unwrap(resp, "teeRegistrationAttest")
     }
 
     // MARK: - Network
@@ -1133,16 +1148,23 @@ public struct AdminApi: Sendable {
         return try await rawJSON(HttpRequest(path: "/admin-api/usage"))
     }
 
-    /// Node TLS certificate, PEM text (GET /admin-api/certificate).
-    public func getCertificate() async throws -> String {
-        let (data, _) = try await http.sendRaw(HttpRequest(path: "/admin-api/certificate"))
-        return String(decoding: data, as: UTF8.self)
-    }
+    // `getCertificate` (`GET /certificate`) is gone: core rc.83 deleted the
+    // route along with the node's self-signed TLS storage (a928b5ed4).
 
     // MARK: - Group / context / namespace membership
 
     /// Create a standalone group (POST /admin-api/groups).
+    ///
+    /// ⚠️ Do not put a `groupId` in the body. Since core rc.83 a group id is
+    /// derived by the node, and the body is `deny_unknown_fields`, so a chosen
+    /// id is a `400`. The typed overload cannot carry one.
     public func createGroup(_ request: [String: JSONValue]) async throws -> CreateGroupResponseData {
+        let resp: ApiResponse<CreateGroupResponseData> = try await http.post("/admin-api/groups", json: request)
+        return try unwrap(resp, "createGroup")
+    }
+
+    /// Create a standalone group from the typed body.
+    public func createGroup(_ request: CreateGroupRequest) async throws -> CreateGroupResponseData {
         let resp: ApiResponse<CreateGroupResponseData> = try await http.post("/admin-api/groups", json: request)
         return try unwrap(resp, "createGroup")
     }
@@ -1189,5 +1211,265 @@ public struct AdminApi: Sendable {
     public func abortMigration(_ namespaceId: String, request: [String: JSONValue]? = nil) async throws -> JSONValue {
         return try await rawJSON(
             jsonRequest("/admin-api/groups/\(namespaceId)/migration/abort", method: .post, body: request ?? [:]))
+    }
+
+    // MARK: - Ownership proofs (typed; core rc.83)
+
+    /// Issue a group ownership proof, typed. Core answers this flat, with no
+    /// `{ data }` envelope; an enveloped body is tolerated too.
+    public func issueOwnershipProof(
+        _ groupId: String, request: IssueOwnershipProofRequest
+    ) async throws -> IssueOwnershipProofResponseData {
+        try await flatOrEnveloped(
+            jsonRequest("/admin-api/groups/\(groupId)/issue-ownership-proof", method: .post, body: request))
+    }
+
+    /// Issue a namespace ownership proof, typed. Since core rc.83 the answer can
+    /// carry `founding` and `credential`, which let a verifier check that the
+    /// signer belongs to the account that founded the namespace.
+    public func issueNamespaceOwnershipProof(
+        _ groupId: String, request: IssueNamespaceOwnershipProofRequest
+    ) async throws -> IssueOwnershipProofResponseData {
+        try await flatOrEnveloped(
+            jsonRequest(
+                "/admin-api/groups/\(groupId)/issue-namespace-ownership-proof", method: .post, body: request))
+    }
+
+    private func flatOrEnveloped<T: Codable & Sendable>(_ req: HttpRequest) async throws -> T {
+        let (data, _) = try await http.sendRaw(req)
+        if let env = try? Self.decoder.decode(ApiResponse<T>.self, from: data), let inner = env.data {
+            return inner
+        }
+        do {
+            return try Self.decoder.decode(T.self, from: data)
+        } catch {
+            throw MeroError.decoding("\(req.path): \(error)")
+        }
+    }
+
+    // MARK: - Context reads and intents (core rc.83)
+
+    /// Read a context as the session's ACCOUNT, with no warrant.
+    ///
+    /// Needs an account-authenticated session (an `account_proof` token), not
+    /// the admin password login. The account must be a member of the group that
+    /// owns the context (`403` otherwise), and the method must be read-only in
+    /// the app's ABI (`409` otherwise; a write goes through
+    /// ``performIntent(_:request:)``). A method error is a `400` whose body
+    /// carries `type: "FunctionCallError"`; read it with ``HTTPError/refusal``.
+    public func queryContext(
+        _ contextId: String, request: QueryContextRequest
+    ) async throws -> QueryContextResponseData {
+        let resp: ApiResponse<QueryContextResponseData> = try await http.post(
+            "/admin-api/contexts/\(contextId)/query", json: request)
+        return try unwrap(resp, "queryContext")
+    }
+
+    /// What this node can do for a member in `contextId`, before they sign
+    /// anything: the `executor`, `executorKey` and release a warrant must name,
+    /// and whether the node holds `CAN_AUTHOR_ON_BEHALF` on the owning group.
+    ///
+    /// `canAuthorOnBehalf: false` is an answer, not an error. `404` means the
+    /// node holds no identity in the context, or its group names no release yet.
+    public func getIntentRelay(_ contextId: String) async throws -> IntentRelayInfo {
+        let resp: ApiResponse<IntentRelayInfo> = try await http.get("/admin-api/contexts/\(contextId)/intents")
+        return try unwrap(resp, "getIntentRelay")
+    }
+
+    /// Where `authorDeviceKey` stands in its warrant-nonce sequence in `contextId`.
+    ///
+    /// ⚠️ Core rc.83 does not serve this route, so it answers `404` there
+    /// (see ``HTTPError/status``). mero-js ships it ahead of core; this method
+    /// exists so a client can try it and fall back to its own counter on a 404.
+    /// The nonces are read as `UInt64`, exactly.
+    public func getWarrantNonce(
+        _ contextId: String, authorDeviceKey: String
+    ) async throws -> WarrantNonceState {
+        let (data, _) = try await http.sendRaw(
+            HttpRequest(
+                path:
+                    "/admin-api/contexts/\(contextId.percentEncoded())/warrant-nonce/\(authorDeviceKey.percentEncoded())"
+            ))
+        return try WarrantNonceState.parse(data)
+    }
+
+    /// The same answer as ``getWarrantNonce(_:authorDeviceKey:)``, asked with the
+    /// author's own credential instead of an admin token. `authorProof` is hex
+    /// borsh `AccountProof<DeviceCert>`. Same rc.83 caveat: expect `404`.
+    public func getWarrantNonceAsAuthor(
+        _ contextId: String, authorProof: String
+    ) async throws -> WarrantNonceState {
+        let req = try jsonRequest(
+            "/admin-api/contexts/\(contextId.percentEncoded())/warrant-nonce", method: .post,
+            body: WarrantNonceAsAuthorRequest(authorProof: authorProof))
+        let (data, _) = try await http.sendRaw(req)
+        return try WarrantNonceState.parse(data)
+    }
+
+    /// Post a signed presence update for a context on a relay. The body is
+    /// signed by the caller (see the Cloud/relay layer); this sends it as given.
+    /// Core answers `204` with no body.
+    public func postPresenceIntent(_ contextId: String, request: PresenceIntentRequest) async throws {
+        try await http.sendVoid(
+            jsonRequest("/admin-api/contexts/\(contextId)/presence-intents", method: .post, body: request))
+    }
+
+    /// What this node can do to create a context in `groupId` on a member's
+    /// behalf. Pass `author` (an account id) to also learn `authorMayCreate`.
+    public func getContextIntentRelay(
+        _ groupId: String, author: String? = nil
+    ) async throws -> ContextIntentRelayInfo {
+        var path = "/admin-api/groups/\(groupId)/context-intents"
+        if let author { path += "?author=\(author.percentEncoded())" }
+        let resp: ApiResponse<ContextIntentRelayInfo> = try await http.get(path)
+        return try unwrap(resp, "getContextIntentRelay")
+    }
+
+    /// Create a context in `groupId` under a signed creation warrant.
+    public func createContextIntent(
+        _ groupId: String, request: CreateContextIntentRequest
+    ) async throws -> CreateContextIntentResponseData {
+        let resp: ApiResponse<CreateContextIntentResponseData> = try await http.post(
+            "/admin-api/groups/\(groupId)/context-intents", json: request)
+        return try unwrap(resp, "createContextIntent")
+    }
+
+    /// What this node can do to govern `groupId` on a member's behalf.
+    public func getGovernanceIntentRelay(_ groupId: String) async throws -> GovernanceIntentRelayInfo {
+        let resp: ApiResponse<GovernanceIntentRelayInfo> = try await http.get(
+            "/admin-api/groups/\(groupId)/governance-intents")
+        return try unwrap(resp, "getGovernanceIntentRelay")
+    }
+
+    /// Apply a signed governance op to `groupId` under a governance warrant.
+    public func governanceIntent(
+        _ groupId: String, request: GovernanceIntentRequest
+    ) async throws -> GovernanceIntentResponseData {
+        let resp: ApiResponse<GovernanceIntentResponseData> = try await http.post(
+            "/admin-api/groups/\(groupId)/governance-intents", json: request)
+        return try unwrap(resp, "governanceIntent")
+    }
+
+    // MARK: - Account root and devices (core rc.83)
+
+    /// Have this node's account root sign a payload an outside verifier chose
+    /// (the cloud's login or link challenge, say). The signature is base64.
+    public func signWithAccountRoot(
+        _ request: AccountSignWithRootRequest
+    ) async throws -> AccountSignWithRootResponseData {
+        let resp: ApiResponse<AccountSignWithRootResponseData> = try await http.post(
+            "/admin-api/account/sign-with-root", json: request)
+        return try unwrap(resp, "signWithAccountRoot")
+    }
+
+    /// Bind a device this account already certified into one namespace.
+    /// `alreadyBound: true` means nothing was published; a repeat is harmless.
+    public func linkAccountDevice(
+        _ namespaceId: String, request: LinkAccountDeviceRequest
+    ) async throws -> LinkAccountDeviceResponseData {
+        let resp: ApiResponse<LinkAccountDeviceResponseData> = try await http.post(
+            "/admin-api/namespaces/\(namespaceId)/account/link-device", json: request)
+        return try unwrap(resp, "linkAccountDevice")
+    }
+
+    /// Seal a small hex payload to a member account's root key. Only that
+    /// account's root can open it, not this node.
+    public func sealToAccount(
+        _ groupId: String, account: String, request: SealToAccountRequest
+    ) async throws -> SealedEnvelope {
+        let resp: ApiResponse<SealedEnvelope> = try await http.post(
+            "/admin-api/groups/\(groupId)/accounts/\(account)/seal", json: request)
+        return try unwrap(resp, "sealToAccount")
+    }
+
+    /// The mero-js name for ``listMemberDevices(_:offset:limit:)``.
+    public func listGroupMemberDevices(
+        _ groupId: String, offset: Int? = nil, limit: Int? = nil
+    ) async throws -> [MemberDevicesEntry] {
+        try await listMemberDevices(groupId, offset: offset, limit: limit)
+    }
+
+    // MARK: - Delegated execution grants
+
+    /// Make every new member of `groupId` able to author intents on others'
+    /// behalf, by adding ``Capabilities/canAuthorOnBehalf`` to the group's
+    /// default capabilities. Read-modify-write, so the other default bits stay.
+    /// A no-op (`changed: false`) when the bit is already set.
+    @discardableResult
+    public func openToDelegatedExecution(_ groupId: String) async throws -> DelegatedExecutionChange {
+        let current = UInt32(truncatingIfNeeded: try await getDefaultCapabilities(groupId))
+        if Capabilities.hasCap(current, Capabilities.canAuthorOnBehalf) {
+            return DelegatedExecutionChange(changed: false, capabilities: Int(current))
+        }
+        let next = Capabilities.withCap(current, Capabilities.canAuthorOnBehalf)
+        try await setDefaultCapabilities(
+            groupId, request: SetDefaultCapabilitiesRequest(defaultCapabilities: Int(next)))
+        return DelegatedExecutionChange(changed: true, capabilities: Int(next))
+    }
+
+    /// Grant one member ACCOUNT ``Capabilities/canAuthorOnBehalf`` on `groupId`,
+    /// leaving its other bits alone. Covers what
+    /// ``openToDelegatedExecution(_:)`` cannot: a relay admitted before the
+    /// default was set, and an admin's own node.
+    @discardableResult
+    public func grantAuthorship(_ groupId: String, account: String) async throws -> DelegatedExecutionChange {
+        let current = UInt32(
+            truncatingIfNeeded: try await getMemberCapabilities(groupId, identity: account).capabilities)
+        if Capabilities.hasCap(current, Capabilities.canAuthorOnBehalf) {
+            return DelegatedExecutionChange(changed: false, capabilities: Int(current))
+        }
+        let next = Capabilities.withCap(current, Capabilities.canAuthorOnBehalf)
+        try await setMemberCapabilities(
+            groupId, identity: account, request: SetMemberCapabilitiesRequest(capabilities: Int(next)))
+        return DelegatedExecutionChange(changed: true, capabilities: Int(next))
+    }
+
+    // MARK: - Root-guarded owner ops (core rc.83)
+    //
+    // Each takes an optional `rootProof`: hex borsh of an
+    // `AccountProof<OwnerOpAuthorization>` naming the group's `namespaceId` and
+    // `ownerOpCounter` from ``getGroupInfo(_:)``. Omit it on a node that holds
+    // the owner's account root. Refusals: `403` (proof required or wrong
+    // account), `409` (stale counter; re-read it and re-sign), `400` (bad proof).
+
+    /// Hand `groupId` to `newOwner`, who must already be one of its admins.
+    public func transferOwnership(_ groupId: String, request: TransferOwnershipRequest) async throws {
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId)/transfer-ownership", method: .post, body: request))
+    }
+
+    /// Point the namespace's admin at `newAdmin`, a member of its root group.
+    public func changeNamespaceAdmin(_ namespaceId: String, request: ChangeNamespaceAdminRequest) async throws {
+        try await http.sendVoid(
+            jsonRequest("/admin-api/namespaces/\(namespaceId)/admin", method: .post, body: request))
+    }
+
+    /// Delete a group through the owner-only path. The group must hold no
+    /// contexts. ``deleteGroup(_:request:)`` is the admin-level cascading delete.
+    public func ownerDeleteGroup(
+        _ groupId: String, request: RootGuardedOpRequest = RootGuardedOpRequest()
+    ) async throws {
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId)/owner-delete", method: .post, body: request))
+    }
+
+    /// Set which admitted TEEs may author as the namespace's TEE authority.
+    /// `groupId` must be a namespace root. An empty `allowedMrtd` turns TEE
+    /// authorship off. The node has no read-back route for this policy.
+    public func setTeeAuthoringPolicy(_ groupId: String, request: SetTeeAuthoringPolicyRequest) async throws {
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId)/settings/tee-authoring-policy", method: .put, body: request))
+    }
+
+    /// Turn TEE authorship off in the namespace. Admitted TEEs stay members.
+    public func disableTeeAuthoringPolicy(
+        _ groupId: String, request: RootGuardedOpRequest = RootGuardedOpRequest()
+    ) async throws {
+        let path = "/admin-api/groups/\(groupId)/settings/tee-authoring-policy"
+        if request.rootProof == nil {
+            try await http.sendVoid(HttpRequest(path: path, method: .delete))
+        } else {
+            try await http.sendVoid(jsonRequest(path, method: .delete, body: request))
+        }
     }
 }

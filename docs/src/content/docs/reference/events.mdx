@@ -11,13 +11,16 @@ MeroKit streams a node's real-time context events over Server-Sent Events. The
 task-oriented walkthrough is the [live events guide](/guides/events/); this page
 is the API surface.
 
-## `mero.events(contextIds:)`
+## `mero.events(contextIds:groupIds:)`
 
 ```swift
-nonisolated func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error>
+nonisolated func events(
+    contextIds: [String], groupIds: [String] = []
+) -> AsyncThrowingStream<ContextEvent, Error>
 ```
 
-Opens `GET /sse` and subscribes to the given context ids via
+Opens `GET /sse` (bearer token in the `Authorization` header) and subscribes to
+the given context and group ids via
 `POST /sse/subscription`, then yields a `ContextEvent` per emission. It is
 `nonisolated` — callable without `await` — and reconnects automatically ~3s
 after a drop (the node persists session subscriptions). Consume it with
@@ -43,11 +46,26 @@ task.cancel()   // closes the SSE stream
 
 ```swift
 public struct ContextEvent: Sendable {
-    public let contextId: String
-    public let kind: String        // "StateMutation" or "SyncStatus"
+    public let contextId: String   // "" for a group-keyed event
+    public let kind: String        // "StateMutation", "SyncStatus", "Ephemeral", "MemberJoined", ...
     public let payload: JSONValue  // raw event JSON
+    public let groupId: String?    // set for a group-keyed event (core rc.83)
+
+    public var presenceAccount: String? { get }  // Ephemeral: the relayed account (rc.83)
+    public var presenceAuthor: String? { get }   // Ephemeral: the author's signing key
 }
 ```
+
+**Group events (core rc.83).** Pass `groupIds` to also receive group-keyed
+events: membership (`MemberJoined`, `MemberAdded`, `MemberRemoved`, carrying
+`memberAccount` and maybe `role`) and migration (`MigrationStarted`,
+`MigrationProgress`, `CascadeProgress`, `MigrationCompleted`). They arrive with
+`groupId` set. `groupIds` is sent only when non-empty, so a context-only
+subscription is the same body an older node accepts. A client key can only
+subscribe to the contexts and groups it is bound to.
+
+**Presence.** An `Ephemeral` event's `data.account` names the account behind a
+presence update a relay carried; `presenceAccount` reads it.
 
 For a state change (`kind == "StateMutation"`) the encoded contract events
 live under `payload`'s `data.events[].data`.
@@ -64,7 +82,9 @@ public final class SseClient: @unchecked Sendable {
         token: @escaping @Sendable () async -> String?,
         session: URLSession = .shared
     )
-    public func events(contextIds: [String]) -> AsyncThrowingStream<ContextEvent, Error>
+    public func events(
+        contextIds: [String], groupIds: [String] = []
+    ) -> AsyncThrowingStream<ContextEvent, Error>
 }
 ```
 

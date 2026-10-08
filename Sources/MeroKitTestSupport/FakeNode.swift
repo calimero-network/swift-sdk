@@ -26,6 +26,9 @@ public final class FakeNode: @unchecked Sendable {
     public private(set) var refreshCalls = 0
     public private(set) var rpcCalls = 0
     public private(set) var protectedCalls = 0
+    public private(set) var logoutCalls = 0
+    /// The refresh token the last `/auth/logout` presented.
+    public private(set) var lastLoggedOutRefreshToken: String?
 
     /// Canned contract output for `/jsonrpc`, keyed by method.
     public var rpcOutputs: [String: Any] = ["get": 42]
@@ -84,6 +87,8 @@ public final class FakeNode: @unchecked Sendable {
             return issueTokens(req)
         case ("POST", "/auth/refresh"):
             return refresh(req)
+        case ("POST", "/auth/logout"):
+            return logout(req)
         case ("HEAD", "/auth/validate"):
             return validate(req)
         case ("GET", "/auth/health"):
@@ -130,6 +135,19 @@ public final class FakeNode: @unchecked Sendable {
         let refresh = refreshToken
         lock.unlock()
         return ok(["data": ["access_token": access, "refresh_token": refresh]])
+    }
+
+    /// `POST /auth/logout` (core rc.83): retire the presented refresh token, so
+    /// a later refresh with it is a replay.
+    private func logout(_ req: URLRequest) -> MockURLProtocol.Stub {
+        bump(\.logoutCalls)
+        let body = (try? JSONSerialization.jsonObject(with: FakeNode.body(req))) as? [String: Any]
+        let presented = body?["refresh_token"] as? String ?? ""
+        lock.lock()
+        lastLoggedOutRefreshToken = presented
+        consumedRefreshTokens.insert(presented)
+        lock.unlock()
+        return ok(["data": ["success": true]])
     }
 
     private func refresh(_ req: URLRequest) -> MockURLProtocol.Stub {

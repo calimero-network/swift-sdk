@@ -158,20 +158,30 @@ Environment:
 try await mero.admin.setTeeAdmissionPolicy(groupId,
   request: SetTeeAdmissionPolicyRequest(
     allowedMrtd: ["<mrtd-hex>"],
-    allowedRtmr0: [], allowedRtmr1: [], allowedRtmr2: [], allowedRtmr3: [],
+    // core rc.83 requires RTMR1, RTMR2 and RTMR3 as well as MRTD.
+    allowedRtmr0: [], allowedRtmr1: ["<rtmr1>"], allowedRtmr2: ["<rtmr2>"], allowedRtmr3: ["<rtmr3>"],
     allowedTcbStatuses: ["UpToDate"],
     acceptMock: false))              // true only for local/dev
+
+// Or admit nodes by signed release rather than by measurement (rc.83):
+try await mero.admin.setTeeAdmissionPolicy(groupId, request: .signedRelease(
+    SignedReleaseTeePolicy(allowedProfiles: ["locked-read-only"]),
+    allowedTcbStatuses: ["UpToDate"], mode: .relay))
 
 let policy = try await mero.admin.getTeeAdmissionPolicy(groupId)
 ```
 
-Nodes can attest and verify quotes directly:
+Changing the policy is a root-guarded owner op since rc.83: pass `rootProof`, or
+call it on a node that holds the owner's account root (see the
+[Admin API reference](/reference/admin-api/#root-guarded-owner-ops-core-rc83)).
+
+Nodes attest directly. The node no longer verifies quotes for you
+(`teeVerifyQuote` is gone); ask for the collateral and verify client-side:
 
 ```swift
-let teeInfo = try await mero.admin.getTeeInfo()                              // cloudProvider, osImage, mrtd
-let attest  = try await mero.admin.teeAttest(TeeAttestRequest(nonce: nonce)) // quoteB64, quote
-let verdict = try await mero.admin.teeVerifyQuote(
-  TeeVerifyQuoteRequest(quoteB64: attest.quoteB64, nonce: nonce))
+let teeInfo = try await mero.admin.getTeeInfo()                 // cloudProvider, osImage, mrtd
+let attest  = try await mero.admin.teeAttest(
+  TeeAttestRequest(nonce: nonce, includeCollateral: true))      // quoteB64, quote, collateral
 ```
 
 ## Upgrades & migration

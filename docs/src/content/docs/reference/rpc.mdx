@@ -62,6 +62,25 @@ public struct MigrateMyEntriesSummary: Codable, Sendable, Equatable {
 let summary = try await mero.rpc.migrateMyEntries(contextId)
 ```
 
+## `executeWithMetadata<T>(...) -> RpcExecuteResult<T>`
+
+The same call as `execute`, returning `{ returns, transport }` with `transport`
+always `.node`. It mirrors mero-js's transport-agnostic shape.
+
+```swift
+let result: RpcExecuteResult<Int> = try await mero.rpc.executeWithMetadata(
+    contextId: contextId, method: "get")
+```
+
+## Refusals since core rc.83
+
+- An execute needs `context:execute` in a scoped token (or `admin`).
+- An account-authenticated session cannot execute; it writes through a warranted
+  intent (`mero.admin.performIntent`).
+- A node whose role in the context is read-only answers
+  `{"type":"ReadOnlyWriteRefused","data":{"context_id":...}}`. Check
+  `rpcError.isReadOnlyWriteRefused` and send the write elsewhere.
+
 ## `countMyPending(_ contextId:) -> Int`
 
 Read-only count of the caller's entries still below the target schema — decide

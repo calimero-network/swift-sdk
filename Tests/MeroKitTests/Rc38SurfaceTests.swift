@@ -113,7 +113,9 @@ final class Rc38SurfaceTests: XCTestCase {
         XCTAssertEqual(req.path, "/admin-api/namespaces/ns-1/groups")
         let body = jsonBody(req) ?? [:]
         XCTAssertEqual(body["groupName"] as? String, "room")
-        XCTAssertEqual(Set(body.keys), ["groupName"])
+        // rc.83 flipped the absent-visibility default to `open`, so the SDK
+        // now always names one; see Rc83SurfaceTests.
+        XCTAssertEqual(Set(body.keys), ["groupName", "visibility"])
     }
 
     func testCreateGroupInNamespaceCarriesVisibility() async {
@@ -129,11 +131,11 @@ final class Rc38SurfaceTests: XCTestCase {
             "lowercase — the node rejects other spellings")
     }
 
-    /// Passing no request at all stays an empty object. This was the one shape
-    /// that worked before, and it must keep working.
-    func testCreateGroupInNamespaceWithoutRequestSendsEmptyObject() async {
+    /// Passing no request at all still works. Since rc.83 it carries the
+    /// explicit default visibility and nothing else (see Rc83SurfaceTests).
+    func testCreateGroupInNamespaceWithoutRequestSendsOnlyTheDefaultVisibility() async {
         let req = await capture { _ = try await self.admin.createGroupInNamespace("ns-1") }
-        XCTAssertEqual(Set((self.jsonBody(req) ?? [:]).keys), [])
+        XCTAssertEqual(Set((self.jsonBody(req) ?? [:]).keys), ["visibility"])
     }
 
     // MARK: - Bodies that were already right, pinned so they stay right

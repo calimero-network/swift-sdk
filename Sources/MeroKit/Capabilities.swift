@@ -2,7 +2,7 @@ import Foundation
 
 /// Member capability bitmask constants — mirrors core's `MemberCapabilities`
 /// (crates/context/config/src/lib.rs). The per-member value is a `UInt32`
-/// bitmask. Core currently assigns bits 0...8 (below); bits 9 and above are
+/// bitmask. Core currently assigns bits 0...9 (below); bits 10 and above are
 /// unassigned and may be claimed by future core versions — an application MUST
 /// NOT repurpose them.
 public enum Capabilities {
@@ -15,6 +15,11 @@ public enum Capabilities {
     public static let canDeleteSubgroup: UInt32 = 1 << 6
     public static let canManageVisibility: UInt32 = 1 << 7
     public static let canManageMetadata: UInt32 = 1 << 8
+    /// May execute intents (warranted writes) on another member's behalf — the
+    /// grant a relay node needs. Implied by neither membership nor admin, and
+    /// not propagated to subgroups. See ``AdminApi/openToDelegatedExecution(_:)``
+    /// and ``AdminApi/grantAuthorship(_:account:)``.
+    public static let canAuthorOnBehalf: UInt32 = 1 << 9
 
     /// True if `mask` has every bit of `cap` set. (== mero-js `hasCap`.)
     public static func hasCap(_ mask: UInt32, _ cap: UInt32) -> Bool {
