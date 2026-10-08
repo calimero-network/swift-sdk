@@ -27,9 +27,9 @@ the merobox workflows pin). This is a breaking release.
 
 ### Changed
 
-- `createGroupInNamespace` always sends `visibility`, `"restricted"` when the
-  caller names none (`CreateGroupInNamespaceRequest.defaultVisibility`). rc.83
-  made an absent visibility mean `open`.
+- `createGroupInNamespace` always sends `visibility`, `"open"` when the caller
+  names none (`CreateGroupInNamespaceRequest.defaultVisibility`), matching
+  rc.83's new default and mero-js. Pass `"restricted"` to keep a subgroup closed.
 - `SetTeeAdmissionPolicyRequest` gained the signed-release form (`signedRelease`),
   `mode` (`replica` / `relay`) and `rootProof`, with `.measurement(...)` and
   `.signedRelease(...)` factories. In the measurement form rc.83 requires

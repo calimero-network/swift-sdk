@@ -241,8 +241,8 @@ answers all four with 404.
 ⚠️ **Subgroup visibility.** core rc.83 changed what an absent `visibility` means
 on `POST /namespaces/{id}/groups`: it now creates an **open** subgroup (it used to
 be restricted). `createGroupInNamespace` therefore always sends one, and sends
-`"restricted"` (`CreateGroupInNamespaceRequest.defaultVisibility`) when you name
-none. Pass `visibility: "open"` for an open subgroup.
+`"open"` (`CreateGroupInNamespaceRequest.defaultVisibility`) when you name none,
+matching core and mero-js. Pass `visibility: "restricted"` to keep a subgroup closed.
 
 rc.83 also added `Namespace.founding` (the founder account and salt the id was
 derived from) and `Namespace.heldOps` (group ops this node holds unapplied for

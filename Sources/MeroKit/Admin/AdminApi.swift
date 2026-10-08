@@ -788,11 +788,11 @@ public struct AdminApi: Sendable {
     /// Create a subgroup in a namespace.
     ///
     /// ⚠️ The visibility is always sent. core rc.83 flipped what an absent
-    /// `visibility` means, from `restricted` to `open` (fdcdfb08f), so the same
-    /// body would now create a subgroup every namespace member can join. This
-    /// SDK keeps the old default by sending
-    /// ``CreateGroupInNamespaceRequest/defaultVisibility`` (`"restricted"`)
-    /// whenever the caller names none. Pass `visibility: "open"` for an open one.
+    /// `visibility` means, from `restricted` to `open` (fdcdfb08f). This SDK
+    /// follows core and mero-js and sends
+    /// ``CreateGroupInNamespaceRequest/defaultVisibility`` (`"open"`) whenever
+    /// the caller names none, so the request says what it means on any node.
+    /// Pass `visibility: "restricted"` for a subgroup members cannot join freely.
     public func createGroupInNamespace(
         _ namespaceId: String, request: CreateGroupInNamespaceRequest? = nil
     ) async throws -> CreateGroupInNamespaceResponseData {

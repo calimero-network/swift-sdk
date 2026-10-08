@@ -1163,7 +1163,7 @@ public struct CreateGroupInNamespaceRequest: Codable, Sendable {
     /// core rc.83 made an absent `visibility` mean `open`; before, it meant
     /// `restricted`. This SDK sends `restricted` explicitly so a subgroup does
     /// not quietly become joinable by every namespace member after a node upgrade.
-    public static let defaultVisibility = "restricted"
+    public static let defaultVisibility = "open"
     /// The subgroup's name. Sent as `groupName`, which is what the route reads.
     public var groupName: String?
     /// `"open"` or `"restricted"` — lowercase; the node rejects other spellings.

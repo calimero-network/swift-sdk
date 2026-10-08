@@ -48,7 +48,7 @@ rc.42–rc.83 took things away, and this SDK follows:
 - `CreateGroupRequest.groupId` is gone: group ids are derived, and a body naming
   one is a `400`.
 - An absent subgroup `visibility` now means `open`. `createGroupInNamespace`
-  always sends one, `"restricted"` unless you say otherwise.
+  always sends one, `"open"` unless you say otherwise.
 - `setTeeAdmissionPolicy` needs RTMR1–3 as well as MRTD (or the new signed-release
   form), and is a root-guarded owner op.
 

@@ -81,27 +81,27 @@ final class Rc83SurfaceTests: XCTestCase {
         XCTAssertEqual(Set((jsonBody(req) ?? [:]).keys), ["applicationId", "name"])
     }
 
-    /// rc.83 made an absent `visibility` create an OPEN subgroup. The SDK keeps
-    /// the old meaning by always naming one.
-    func testCreateGroupInNamespaceSendsRestrictedWhenNoneIsNamed() async {
+    /// rc.83 made an absent `visibility` create an OPEN subgroup. The SDK names
+    /// that default explicitly, matching core and mero-js.
+    func testCreateGroupInNamespaceSendsOpenWhenNoneIsNamed() async {
         var req = await capture { _ = try await self.admin.createGroupInNamespace("ns-1") }
         XCTAssertEqual(req.path, "/admin-api/namespaces/ns-1/groups")
-        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "restricted")
+        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "open")
 
         req = await capture {
             _ = try await self.admin.createGroupInNamespace(
                 "ns-1", request: CreateGroupInNamespaceRequest(groupName: "room"))
         }
-        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "restricted")
+        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "open")
         XCTAssertEqual(jsonBody(req)?["groupName"] as? String, "room")
     }
 
-    func testCreateGroupInNamespaceKeepsAnExplicitOpen() async {
+    func testCreateGroupInNamespaceKeepsAnExplicitRestricted() async {
         let req = await capture {
             _ = try await self.admin.createGroupInNamespace(
-                "ns-1", request: CreateGroupInNamespaceRequest(groupName: "lobby", visibility: "open"))
+                "ns-1", request: CreateGroupInNamespaceRequest(groupName: "lobby", visibility: "restricted"))
         }
-        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "open")
+        XCTAssertEqual(jsonBody(req)?["visibility"] as? String, "restricted")
     }
 
     /// The new flags are sent only when set, so a plain attest is the exact
