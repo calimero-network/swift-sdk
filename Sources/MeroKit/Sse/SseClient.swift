@@ -62,6 +62,13 @@ public struct ContextEvent: Sendable {
 /// automatically after a drop (the node persists session subscriptions), so a
 /// chat view can react to new messages without polling.
 ///
+/// A `403` is terminal. The node refuses a stream to a token that never
+/// carried the right to watch those contexts, and to one whose refresh family
+/// was revoked; reconnecting would only be refused again, every 3 s, forever,
+/// with no event and no error. The stream finishes with that ``MeroError``
+/// instead (``MeroError/authRevoked(reason:http:)`` when `x-auth-error` names a
+/// dead family). Every other failure still reconnects.
+///
 /// Usage:
 /// ```swift
 /// let task = Task {
@@ -95,6 +102,9 @@ public final class SseClient: @unchecked Sendable {
                 while !Task.isCancelled {
                     do {
                         try await runOnce(contextIds: contextIds, groupIds: groupIds, continuation: continuation)
+                    } catch let error as MeroError where error.httpStatus == Self.forbidden {
+                        continuation.finish(throwing: error)
+                        return
                     } catch {
                         if Task.isCancelled { break }
                     }
@@ -125,6 +135,9 @@ public final class SseClient: @unchecked Sendable {
 
         let (bytes, response) = try await session.bytes(for: request)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            if let http = response as? HTTPURLResponse, http.statusCode == Self.forbidden {
+                throw Self.forbiddenError(http, url: request.url)
+            }
             throw MeroError.network("SSE connect failed")
         }
 
@@ -171,7 +184,27 @@ public final class SseClient: @unchecked Sendable {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONSerialization.data(
             withJSONObject: Self.subscriptionBody(sessionId: sessionId, contextIds: contextIds, groupIds: groupIds))
-        _ = try await session.data(for: request)
+        let (_, response) = try await session.data(for: request)
+        // A failed POST is normally harmless: the next `connect` re-subscribes.
+        // A 403 is not; it ends the stream like a refused connect does.
+        if let http = response as? HTTPURLResponse, http.statusCode == Self.forbidden {
+            throw Self.forbiddenError(http, url: request.url)
+        }
+    }
+
+    static let forbidden = 403
+
+    /// The error a `403` deserves: ``MeroError/authRevoked(reason:http:)`` when
+    /// `x-auth-error` names a dead token family, ``MeroError/http(_:)`` otherwise.
+    static func forbiddenError(_ response: HTTPURLResponse, url: URL?) -> MeroError {
+        var headers: [String: String] = [:]
+        for (key, value) in response.allHeaderFields {
+            if let k = key as? String, let v = value as? String { headers[k.lowercased()] = v }
+        }
+        let error = HTTPError(
+            status: response.statusCode, statusText: "Forbidden", url: url?.absoluteString ?? "", headers: headers)
+        if let reason = headers["x-auth-error"] { return .authRevoked(reason: reason, http: error) }
+        return .http(error)
     }
 
     /// The subscribe body. `groupIds` is sent only when non-empty, so a

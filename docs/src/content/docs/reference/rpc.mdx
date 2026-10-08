@@ -21,8 +21,7 @@ examples.
 func execute<T: Decodable>(
     contextId: String,
     method: String,
-    argsJson: [String: JSONValue] = [:],
-    executorPublicKey: String? = nil
+    argsJson: [String: JSONValue] = [:]
 ) async throws -> T
 ```
 
@@ -42,10 +41,9 @@ let post: Post = try await mero.rpc.execute(
 ```
 
 <Aside type="note">
-  `executorPublicKey` names the context identity executing the call. Leave it
-  `nil` to use the context's default/owning identity; set it for apps that key
-  state on the caller identity. (Unlike mero-js, where the field is deprecated,
-  it is honored here.)
+  There is no `executorPublicKey`. Core's execute request accepts only
+  `contextId`, `method` and `argsJson` and refuses any other field, so the
+  identity a call runs as is the one the token is bound to.
 </Aside>
 
 ## `migrateMyEntries(_ contextId:) -> MigrateMyEntriesSummary`

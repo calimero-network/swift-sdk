@@ -27,6 +27,13 @@ the merobox workflows pin). This is a breaking release.
 
 ### Changed
 
+- `RpcClient.execute` / `executeWithMetadata` no longer take `executorPublicKey`.
+  Core's execute request is `deny_unknown_fields` with only `contextId`,
+  `method` and `argsJson`, so a call that named one was refused.
+- SSE: a `403` on connect or subscribe now finishes the stream with the
+  `MeroError` (`.authRevoked` when `x-auth-error` names a dead token family)
+  instead of reconnecting every 3 s forever.
+
 - `createGroupInNamespace` always sends `visibility`, `"open"` when the caller
   names none (`CreateGroupInNamespaceRequest.defaultVisibility`), matching
   rc.83's new default and mero-js. Pass `"restricted"` to keep a subgroup closed.

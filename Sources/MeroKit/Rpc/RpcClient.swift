@@ -12,7 +12,7 @@ public enum RpcTransportKind: String, Sendable, Equatable {
     case node
 }
 
-/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:executorPublicKey:)``.
+/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:)``.
 public struct RpcExecuteResult<T: Sendable>: Sendable {
     public let returns: T
     public let transport: RpcTransportKind
@@ -44,10 +44,6 @@ public struct RpcClient: Sendable {
             let contextId: String
             let method: String
             let argsJson: [String: JSONValue]
-            /// The context identity executing the call. Omitted when nil (the node
-            /// then uses the context's default/owning identity). Required by apps
-            /// like curb that key state on the caller identity.
-            let executorPublicKey: String?
         }
     }
 
@@ -68,12 +64,11 @@ public struct RpcClient: Sendable {
     public func execute<T: Decodable>(
         contextId: String,
         method: String,
-        argsJson: [String: JSONValue] = [:],
-        executorPublicKey: String? = nil
+        argsJson: [String: JSONValue] = [:]
     ) async throws -> T {
-        let body = Request(
-            params: .init(
-                contextId: contextId, method: method, argsJson: argsJson, executorPublicKey: executorPublicKey))
+        // No `executorPublicKey`: core's `ExecutionRequest` is
+        // `deny_unknown_fields` with only these three, so naming one was a refusal.
+        let body = Request(params: .init(contextId: contextId, method: method, argsJson: argsJson))
         let bodyData = try MeroJSON.encode(body)
         let (data, _) = try await http.sendRaw(HttpRequest(path: "/jsonrpc", method: .post, body: .json(bodyData)))
 
@@ -108,11 +103,9 @@ public struct RpcClient: Sendable {
     public func executeWithMetadata<T: Decodable & Sendable>(
         contextId: String,
         method: String,
-        argsJson: [String: JSONValue] = [:],
-        executorPublicKey: String? = nil
+        argsJson: [String: JSONValue] = [:]
     ) async throws -> RpcExecuteResult<T> {
-        let returns: T = try await execute(
-            contextId: contextId, method: method, argsJson: argsJson, executorPublicKey: executorPublicKey)
+        let returns: T = try await execute(contextId: contextId, method: method, argsJson: argsJson)
         return RpcExecuteResult(returns: returns, transport: .node)
     }
 
