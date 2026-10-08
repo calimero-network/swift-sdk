@@ -48,12 +48,16 @@ struct ChatContextInfo: Decodable {
 struct ChatSpace: Identifiable, Equatable {
     let id: String  // namespaceId
     let name: String
+    /// The namespace's target application (what a new channel runs).
+    var applicationId: String = ""
 }
 
 struct ChatChannel: Identifiable, Equatable {
     let id: String  // contextId
     let groupId: String
     let contextId: String
+    /// The member identity to execute as — node backend only; a relay writes
+    /// as the account, through a warrant.
     let executorId: String
     let name: String
     let kind: String
@@ -66,29 +70,19 @@ struct ChatInvite: Codable {
     let spaceName: String
     let invitation: SignedGroupOpenInvitation
 
-    /// A compact, single-line invite code, in the format the rest of the fleet
-    /// uses: `base58(deflate(JSON))` via `InviteCodec`.
-    ///
-    /// This used to be deflate + **base64**, with a comment claiming it matched
-    /// mero-chat's codes. It did not — mero-chat, mero-blocks, merraria,
-    /// mero-stream and the web apps all use base58 — so a code from here could
-    /// not be redeemed there or vice versa, which is the one thing an example
-    /// showing "invite and join" should get right.
+    /// A compact, single-line invite code: `base58(deflate(JSON))` via
+    /// `InviteCodec`, the format the rest of the fleet uses.
     func encoded() throws -> String {
         try InviteCodec.encode(self)
     }
 
-    /// The shareable link for this invite. What you actually send someone: it
-    /// opens the desktop app where installed and the web build otherwise.
+    /// The shareable link for this invite.
     func shareableLink() throws -> String {
         InviteLink.invitation(token: try encoded(), slug: ChatService.packageName)
     }
 
-    /// Decode an invite code, or a link containing one.
-    ///
-    /// Accepts the shared format, the legacy base64 form this example emitted
-    /// before, and raw JSON — so codes already copied out of a running build
-    /// keep working.
+    /// Decode an invite code, or a link containing one. Accepts the shared
+    /// format, the legacy base64 form, and raw JSON.
     static func decode(_ code: String) -> ChatInvite? {
         guard let token = InviteLink.token(fromPasted: code) else { return nil }
 
@@ -98,7 +92,6 @@ struct ChatInvite: Codable {
             return invite
         }
 
-        // Legacy: deflate + base64, as this example used to produce.
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         if let data = Data(base64Encoded: trimmed),
             let json = try? (data as NSData).decompressed(using: .zlib) as Data,
@@ -112,95 +105,111 @@ struct ChatInvite: Codable {
 
 // MARK: - ChatService
 
-/// A native curb (mero-chat) frontend over the authenticated `Mero` client:
-/// install the app, create/list spaces (namespaces), channels (subgroup+context),
-/// send/read messages (contract RPC), invite, and join. Same logic as mero-chat,
-/// in Swift, on the same WASM contract.
+/// A native curb (mero-chat) frontend: spaces (namespaces), channels
+/// (contexts), messages (contract calls), invite and join — on the same WASM
+/// contract as mero-chat.
+///
+/// Two backends:
+/// - `.relay`: the Cloud session. Reads go through the relay's query route,
+///   writes through warrants; admin listings use the relay's Bearer session;
+///   joining redeems an invitation as the account.
+/// - `.node`: a development node (e2e harnesses only), over JSON-RPC and admin.
 @MainActor
 final class ChatService: ObservableObject {
-    static let registryURL = "https://apps.calimero.network"
-    static let packageName = "com.calimero.curb"
+    enum Backend {
+        case relay(CloudConnection, CloudSignIn)
+        case node(Mero)
+    }
+
+    nonisolated static let registryURL = "https://apps.calimero.network"
+    nonisolated static let packageName = "com.calimero.curb"
 
     @Published var appId: String?
     @Published var spaces: [ChatSpace] = []
     @Published var channels: [ChatChannel] = []
     @Published var messages: [ChatMessage] = []
     @Published var status = ""
+    /// Whether the last status is a failure (drives its colour).
+    @Published var statusIsError = false
     @Published var busy = false
     @Published var username: String
 
-    private let mero: Mero
+    private var backend: Backend
 
-    init(mero: Mero, username: String) {
-        self.mero = mero
-        // E2E_USERNAME overrides the chat display name (the login user is always
-        // the admin "dev"); run-app-2.sh sets it to dev1/dev2 so the two sims are
-        // distinguishable in the room. Falls back to the login username.
-        let envName = ProcessInfo.processInfo.environment["E2E_USERNAME"]
-        if let envName, !envName.isEmpty {
-            self.username = envName
-        } else {
-            self.username = username.isEmpty ? "dev" : username
+    /// The `Mero` admin calls use: the relay's Bearer session, or the node.
+    private var mero: Mero? {
+        switch backend {
+        case .relay(let connection, _): return connection.mero
+        case .node(let mero): return mero
         }
     }
 
-    // MARK: setup / install
+    var isRelay: Bool {
+        if case .relay = backend { return true }
+        return false
+    }
+
+    init(backend: Backend, username: String) {
+        self.backend = backend
+        self.username = username.isEmpty ? "dev" : username
+        // A relay needs no install: the application is the namespace's own.
+        if case .relay = backend { appId = "relay" }
+    }
+
+    // MARK: setup / install (node backend)
 
     func setup() async {
-        await run("installing \(Self.packageName)…") {
-            let versions = try await self.mero.admin.getRegistryVersions(
+        guard case .node(let mero) = backend else { return }
+        await run("Installing \(Self.packageName)…") {
+            let versions = try await mero.admin.getRegistryVersions(
                 registryUrl: Self.registryURL, packageName: Self.packageName)
-            guard let version = versions.first else { self.status = "no registry versions found"; return }
-            // The version comes from the registry's own listing; the install
-            // itself names only coordinates, and the node fetches them from the
-            // registry *it* is configured with (core 0.11.0-rc.32). Those are
-            // the same public registry here — if they were not, the node would
-            // answer 502 for a version this listing offered.
-            let resp = try await self.mero.admin.installFromRegistry(
-                packageName: Self.packageName, version: version)
+            guard let version = versions.first else { self.say("No registry versions found", error: true); return }
+            let resp = try await mero.admin.installFromRegistry(packageName: Self.packageName, version: version)
             self.appId = resp.applicationId
-            self.status = "installed \(Self.packageName)@\(version)"
+            self.say("Installed \(Self.packageName)@\(version)")
             await self.loadSpaces()
         }
     }
 
-    /// If curb is already installed on the node, adopt its app id so we skip the
-    /// install gate (fixes re-opening chat asking to install again).
+    /// Adopt curb's app id if it is already installed on the node.
     func detectInstalled() async {
-        guard appId == nil else { return }
+        guard appId == nil, case .node(let mero) = backend else { return }
         if let apps = try? await mero.admin.listApplications(),
             let curb = apps.apps.first(where: { $0.package == Self.packageName })
         {
             appId = curb.id
-            status = "\(Self.packageName) already installed"
             await loadSpaces()
         }
     }
 
-    /// Live SSE event stream for a channel's context (new messages, etc.).
+    /// Live events for a channel's context, or an empty stream when reads are off.
     func eventStream(_ channel: ChatChannel) -> AsyncThrowingStream<ContextEvent, Error> {
-        mero.events(contextIds: [channel.contextId])
+        guard let mero else { return AsyncThrowingStream { $0.finish() } }
+        return mero.events(contextIds: [channel.contextId])
     }
 
     // MARK: spaces
 
     func loadSpaces() async {
+        guard let mero else {
+            say("Reads are off until the relay session is established. Writes still work.", error: true)
+            return
+        }
         do {
             let all = try await mero.admin.listNamespaces()
-            // Show every namespace this node belongs to (created OR joined). We
-            // used to filter to our own curb app id — but an *invited* space
-            // targets the inviter's app id, which can differ, so that hid joined
-            // spaces entirely (they showed on the admin dashboard but not here).
-            spaces = all.map { ChatSpace(id: $0.namespaceId, name: $0.name ?? "space") }
-        } catch { status = "load spaces failed: \(short(error))" }
+            spaces = all.map {
+                ChatSpace(id: $0.namespaceId, name: $0.name ?? "Space", applicationId: $0.targetApplicationId)
+            }
+        } catch { say("Couldn't load spaces: \(short(error))", error: true) }
     }
 
+    var canCreateSpaces: Bool { !isRelay }
+
     func createSpace(_ name: String) async {
-        guard let appId else { status = "install the app first"; return }
-        await run("creating space “\(name)”…") {
-            let resp = try await self.mero.admin.createNamespace(
-                CreateNamespaceRequest(applicationId: appId, name: name))
-            self.status = "space created: \(resp.namespaceId)"
+        guard case .node(let mero) = backend, let appId else { return }
+        await run("Creating space \(name)…") {
+            let resp = try await mero.admin.createNamespace(CreateNamespaceRequest(applicationId: appId, name: name))
+            self.say("Space created: \(resp.namespaceId.prefix(8))")
             await self.loadSpaces()
         }
     }
@@ -208,99 +217,121 @@ final class ChatService: ObservableObject {
     // MARK: channels
 
     func loadChannels(_ space: ChatSpace) async {
+        guard let mero else { return }
+        channels = []
+        var out: [ChatChannel] = []
         do {
-            channels = []
             let subgroups = try await mero.admin.listNamespaceGroups(space.id)
-            var out: [ChatChannel] = []
             for sg in subgroups {
                 let ctxs = try await mero.admin.listGroupContexts(sg.groupId)
                 guard let ctx = ctxs.first else { continue }
-                var executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
-                if executor.isEmpty {
-                    // Joined space whose context we haven't joined yet — join it so
-                    // we get a member identity (otherwise it looks uninitialized),
-                    // and trigger a state pull so the store root actually syncs.
-                    _ = try? await mero.admin.joinContext(ctx.contextId)
-                    _ = try? await mero.admin.syncContext(ctx.contextId)
-                    executor = (try? await mero.admin.getContextIdentitiesOwned(ctx.contextId))?.identities.first ?? ""
-                }
-                var name = sg.name ?? ctx.name ?? "channel"
-                var kind = "Channel"
-                if !executor.isEmpty,
-                    let info: ChatContextInfo = try? await rpc(ctx.contextId, "get_info", executor: executor)
+                if let channel = await channel(
+                    contextId: ctx.contextId, groupId: sg.groupId, fallback: sg.name ?? ctx.name)
                 {
-                    name = info.name
-                    kind = info.contextType
+                    out.append(channel)
                 }
-                if kind == "Dm" { continue }
-                out.append(
-                    ChatChannel(
-                        id: ctx.contextId, groupId: sg.groupId, contextId: ctx.contextId,
-                        executorId: executor, name: name, kind: kind))
             }
-            channels = out
-            if out.isEmpty { await diagnoseEmptySpace(space) }
-        } catch { status = "load channels failed: \(short(error))" }
+        } catch  where isRelay {
+            // An account session lists its own contexts; take the ones in this space.
+            let contexts = (try? await mero.admin.getContexts().contexts) ?? []
+            for ctx in contexts
+            where ctx.groupId == nil || ctx.groupId == space.id || ctx.applicationId == space.applicationId {
+                if let channel = await channel(contextId: ctx.id, groupId: ctx.groupId ?? space.id, fallback: nil) {
+                    out.append(channel)
+                }
+            }
+        } catch {
+            say("Couldn't load channels: \(short(error))", error: true)
+        }
+        channels = out.filter { $0.kind != "Dm" }
+        if channels.isEmpty, !isRelay { await diagnoseEmptySpace(space) }
     }
 
-    /// When a joined space shows no channels, say WHY. A context executes against
-    /// the group's bytecode-derived app_key, so what matters is (a) that curb is
-    /// installed here at all and (b) that this node has a peer to sync the context
-    /// state from — a joined-but-uninitialized context (hash 1111…) is almost
-    /// always "0 peers", not an app-id mismatch.
+    private func channel(contextId: String, groupId: String, fallback: String?) async -> ChatChannel? {
+        var executor = ""
+        if case .node(let mero) = backend {
+            executor = (try? await mero.admin.getContextIdentitiesOwned(contextId))?.identities.first ?? ""
+            if executor.isEmpty {
+                _ = try? await mero.admin.joinContext(contextId)
+                _ = try? await mero.admin.syncContext(contextId)
+                executor = (try? await mero.admin.getContextIdentitiesOwned(contextId))?.identities.first ?? ""
+            }
+        }
+        var name = fallback ?? "channel"
+        var kind = "Channel"
+        let info: ChatContextInfo? = try? await read(contextId, "get_info", executor: executor)
+        if let info {
+            name = info.name
+            kind = info.contextType
+        }
+        return ChatChannel(
+            id: contextId, groupId: groupId, contextId: contextId, executorId: executor, name: name, kind: kind)
+    }
+
+    /// Why a joined space shows no channels (node backend).
     private func diagnoseEmptySpace(_ space: ChatSpace) async {
-        let hasCurb = ((try? await mero.admin.listApplications())?.apps ?? [])
-            .contains { $0.package == Self.packageName }
+        guard case .node(let mero) = backend else { return }
         let peers = (try? await mero.admin.getPeersCount())?.count
-        if !hasCurb {
-            status = "curb isn't installed on this node — install it, then rejoin."
-        } else if peers == 0 {
-            status =
-                "Joined, but this node has 0 peers — it can't sync the channel from the inviter. "
-                + "Make sure this node is networked to the inviter's node (swarm/bootstrap peers)."
+        if peers == 0 {
+            say("Joined, but this node has no peers, so it can't sync the channel from the inviter.", error: true)
         } else {
-            let n = peers.map { "\($0)" } ?? "?"
-            status = "No channels yet — still syncing from the inviter (\(n) peer(s)). Pull to refresh."
+            say("No channels yet. They may still be syncing; pull to refresh.")
         }
     }
 
     func createChannel(in space: ChatSpace, name: String, open: Bool) async {
-        guard let appId else { status = "install the app first"; return }
-        await run("creating channel #\(name)…") {
-            let sg = try await self.mero.admin.createGroupInNamespace(
-                space.id, request: CreateGroupInNamespaceRequest(groupName: name))
-            try await self.mero.admin.setSubgroupVisibility(
-                sg.groupId, request: SetSubgroupVisibilityRequest(subgroupVisibility: open ? "open" : "restricted"))
-            let ctx = try await self.mero.admin.createContext(
-                CreateContextRequest(
-                    applicationId: appId, groupId: sg.groupId,
-                    initializationParams: self.initParams(name: name), name: name))
-            // Register our display name in the new context.
-            let _: String? = try? await self.rpc(
-                ctx.contextId, "set_profile", executor: ctx.memberPublicKey,
-                args: ["username": .string(self.username), "avatar": .null])
-            self.status = "channel #\(name) created"
-            await self.loadChannels(space)
+        switch backend {
+        case .relay(let connection, _):
+            guard let relay = connection.relay else { return say("No relay serves this account yet.", error: true) }
+            await run("Creating #\(name)…") {
+                let created = try await relay.createContext(
+                    groupId: space.id, applicationId: space.applicationId, initArgs: self.initArgs(name: name),
+                    name: name)
+                _ = try? await relay.execute(
+                    contextId: created.contextId, method: "set_profile",
+                    argsJson: ["username": .string(self.username), "avatar": .null])
+                self.say("Channel #\(name) created")
+                await self.loadChannels(space)
+            }
+        case .node(let mero):
+            guard let appId else { return say("Install the app first.", error: true) }
+            await run("Creating #\(name)…") {
+                let sg = try await mero.admin.createGroupInNamespace(
+                    space.id, request: CreateGroupInNamespaceRequest(groupName: name))
+                try await mero.admin.setSubgroupVisibility(
+                    sg.groupId,
+                    request: SetSubgroupVisibilityRequest(subgroupVisibility: open ? "open" : "restricted"))
+                let bytes = (try? JSONSerialization.data(withJSONObject: self.initObject(name: name))) ?? Data()
+                let ctx = try await mero.admin.createContext(
+                    CreateContextRequest(
+                        applicationId: appId, groupId: sg.groupId, initializationParams: bytes.map { Int($0) },
+                        name: name))
+                let _: String? = try? await self.write(
+                    ctx.contextId, "set_profile", executor: ctx.memberPublicKey,
+                    args: ["username": .string(self.username), "avatar": .null])
+                self.say("Channel #\(name) created")
+                await self.loadChannels(space)
+            }
         }
     }
 
     // MARK: messages
 
     func loadMessages(_ channel: ChatChannel) async {
-        guard !channel.executorId.isEmpty else { return }
+        guard isRelay || !channel.executorId.isEmpty else { return }
         do {
-            let page: ChatMessagePage = try await rpc(
+            let page: ChatMessagePage = try await read(
                 channel.contextId, "get_messages", executor: channel.executorId,
                 args: ["parent_message": .null, "limit": .number(50), "offset": .number(0), "search_term": .null])
             messages = page.messages.filter { $0.deleted != true }
-        } catch { status = "load messages failed: \(short(error))" }
+        } catch { say("Couldn't load messages: \(short(error))", error: true) }
     }
 
     func sendMessage(_ channel: ChatChannel, _ text: String) async {
-        guard !text.isEmpty, !channel.executorId.isEmpty else { return }
+        guard !text.isEmpty, isRelay || !channel.executorId.isEmpty else { return }
         let ts = Int(Date().timeIntervalSince1970 * 1000)
         do {
-            let _: ChatMessage = try await rpc(
+            let _: ChatMessage = try await write(
                 channel.contextId, "send_message", executor: channel.executorId,
                 args: [
                     "message": .string(text),
@@ -313,12 +344,15 @@ final class ChatService: ObservableObject {
                     "images": .null,
                 ])
             await loadMessages(channel)
-        } catch { status = "send failed: \(short(error))" }
+        } catch { say("Couldn't send: \(short(error))", error: true) }
     }
 
     // MARK: invite / join
 
+    var canInvite: Bool { !isRelay }
+
     func makeInvite(_ space: ChatSpace) async -> String? {
+        guard case .node(let mero) = backend else { return nil }
         do {
             let result = try await mero.admin.createNamespaceInvitation(space.id)
             let signed: SignedGroupOpenInvitation
@@ -327,51 +361,66 @@ final class ChatService: ObservableObject {
                 signed = data.invitation
             case .recursive(let data):
                 guard let first = data.invitations.first else {
-                    status = "invite: node returned no invitations"
+                    say("The node returned no invitations.", error: true)
                     return nil
                 }
                 signed = first.invitation
             }
-            let invite = ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: signed)
-            let code = try invite.encoded()
-            print("[MeroKit] invite code for “\(space.name)”:\n\(code)")  // also grabbable via console
-            status = "invite ready — Copy or Share it"
+            let code = try ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: signed).encoded()
+            print("[MeroKit] invite code for \(space.name):\n\(code)")
+            say("Invite ready. Copy or share it.")
             return code
         } catch {
-            status = "invite failed: \(short(error))"
-            print("[MeroKit] invite failed: \(String(reflecting: error))")
+            say("Couldn't create an invite: \(short(error))", error: true)
             return nil
         }
     }
 
-    func joinSpace(_ inviteCode: String) async {
+    /// Join a space from an invite code. Returns whether it joined.
+    @discardableResult
+    func joinSpace(_ inviteCode: String) async -> Bool {
         busy = true
         defer { busy = false }
-        status = "Reading invite…"
+        say("Reading invite…")
         guard let invite = ChatInvite.decode(inviteCode) else {
-            status = "✗ Invalid invite code"
-            return
+            say("That isn't a valid invite code.", error: true)
+            return false
         }
+        switch backend {
+        case .relay(_, let signIn):
+            do {
+                say("Joining \(invite.spaceName)…")
+                let (_, outcome) = try await signIn.join(namespaceId: invite.namespaceId, invitation: invite.invitation)
+                say(
+                    outcome.published
+                        ? "Joined \(invite.spaceName). Channels appear as the relay syncs."
+                        : "The join was sent, but not yet published. Try again shortly.",
+                    error: !outcome.published)
+                await loadSpaces()
+                return outcome.published
+            } catch {
+                say("Couldn't join: \(short(error))", error: true)
+                return false
+            }
+        case .node(let mero):
+            return await joinOnNode(mero, invite)
+        }
+    }
+
+    private func joinOnNode(_ mero: Mero, _ invite: ChatInvite) async -> Bool {
         do {
-            status = "Joining “\(invite.spaceName)”…"
+            say("Joining \(invite.spaceName)…")
             let joined = try await mero.admin.joinNamespace(
                 invite.namespaceId,
                 request: JoinNamespaceRequest(invitation: invite.invitation, groupName: invite.spaceName))
-            // Cross-node sync is async — pull the group, then JOIN each channel's
-            // context so it's initialized on this node (the step mero-chat does and
-            // the reason a joined space looked "uninitialized" before). Retry until
-            // the contexts arrive + join, showing progress the whole way.
             var synced = false
             for attempt in 1...6 {
-                status = "Syncing “\(invite.spaceName)” from the inviter… (\(attempt)/6)"
-                // SDK convenience: join + state-pull every context in the group so
-                // it initializes instead of staying uninitialized (1111…).
+                say("Syncing \(invite.spaceName) from the inviter (\(attempt)/6)…")
                 let contexts = (try? await mero.admin.syncGroupContexts(joined.namespaceId)) ?? []
                 for ctx in contexts {
-                    // Register our display name in each initialized context.
                     let owned = try? await mero.admin.getContextIdentitiesOwned(ctx.contextId)
                     if let executor = owned?.identities.first {
-                        let _: String? = try? await rpc(
+                        let _: String? = try? await write(
                             ctx.contextId, "set_profile", executor: executor,
                             args: ["username": .string(username), "avatar": .null])
                     }
@@ -384,55 +433,85 @@ final class ChatService: ObservableObject {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
             await loadSpaces()
-            status =
+            say(
                 synced
-                ? "✓ Joined “\(invite.spaceName)” — \(channels.count) channel(s)"
-                : "Joined “\(invite.spaceName)”. Channels still syncing — open it and pull to refresh."
+                    ? "Joined \(invite.spaceName): \(channels.count) channel(s)"
+                    : "Joined \(invite.spaceName). Channels are still syncing; pull to refresh.")
+            return true
         } catch {
-            status = "✗ Join failed: \(short(error))"
+            say("Couldn't join: \(short(error))", error: true)
+            return false
         }
     }
 
-    /// Manually re-sync a space's channels (for when cross-node sync lags).
+    /// Re-sync a space's channels.
     func resync(_ space: ChatSpace) async {
-        await run("Syncing “\(space.name)”…") {
-            // SDK convenience: join + state-pull every context in the group.
-            _ = try? await self.mero.admin.syncGroupContexts(space.id)
+        await run("Syncing \(space.name)…") {
+            if case .node(let mero) = self.backend { _ = try? await mero.admin.syncGroupContexts(space.id) }
             await self.loadChannels(space)
-            self.status =
-                self.channels.isEmpty ? "No channels yet — still syncing" : "✓ \(self.channels.count) channel(s)"
+            self.say(self.channels.isEmpty ? "No channels yet." : "\(self.channels.count) channel(s)")
         }
     }
 
     // MARK: helpers
 
-    private func initParams(name: String) -> [Int] {
-        let obj: [String: Any] = [
+    private func initObject(name: String) -> [String: Any] {
+        [
             "name": name, "context_type": "Channel", "description": "",
             "created_at": Int(Date().timeIntervalSince1970), "creator_username": username,
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return [] }
-        return data.map { Int($0) }
     }
 
-    @discardableResult
-    private func rpc<T: Decodable>(
+    private func initArgs(name: String) -> JSONValue {
+        [
+            "name": .string(name), "context_type": "Channel", "description": "",
+            "created_at": .number(Double(Int(Date().timeIntervalSince1970))),
+            "creator_username": .string(username),
+        ]
+    }
+
+    /// A read: the relay's query (warrant fallback), or JSON-RPC on a node.
+    private func read<T: Decodable>(
         _ contextId: String, _ method: String, executor: String, args: [String: JSONValue] = [:]
     ) async throws -> T {
-        try await mero.rpc.execute(contextId: contextId, method: method, argsJson: args)
+        switch backend {
+        case .relay(let connection, _):
+            guard let relay = connection.relay else { throw AccountError.notSignedIn("no relay") }
+            return try await relay.query(T.self, contextId: contextId, method: method, argsJson: .object(args))
+        case .node(let mero):
+            return try await mero.rpc.execute(contextId: contextId, method: method, argsJson: args)
+        }
+    }
+
+    /// A write: a warrant through the relay, or JSON-RPC on a node.
+    private func write<T: Decodable>(
+        _ contextId: String, _ method: String, executor: String, args: [String: JSONValue] = [:]
+    ) async throws -> T {
+        switch backend {
+        case .relay(let connection, _):
+            guard let relay = connection.relay else { throw AccountError.notSignedIn("no relay") }
+            return try await relay.execute(T.self, contextId: contextId, method: method, argsJson: .object(args))
+        case .node(let mero):
+            return try await mero.rpc.execute(contextId: contextId, method: method, argsJson: args)
+        }
+    }
+
+    private func say(_ message: String, error: Bool = false) {
+        status = message
+        statusIsError = error
     }
 
     private func run(_ message: String, _ body: @escaping () async throws -> Void) async {
         busy = true
-        status = message
+        say(message)
         defer { busy = false }
         do { try await body() } catch {
-            status = "\(message.replacingOccurrences(of: "…", with: "")) failed: \(short(error))"
+            say("\(message.replacingOccurrences(of: "…", with: "")) failed: \(short(error))", error: true)
         }
     }
 
     private func short(_ error: Error) -> String {
         if let u = error as? URLError { return "network \(u.code)" }
-        return "\(error)"
+        return (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 }

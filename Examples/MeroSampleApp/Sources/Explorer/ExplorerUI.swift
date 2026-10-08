@@ -1,8 +1,9 @@
 import MeroKit
+import MeroKitUI
 import SwiftUI
 import UIKit
 
-// MARK: - Root: routes Login ⇄ Explorer on auth state
+// MARK: - Root: routes Sign-in ⇄ Explorer on auth state
 
 struct ExplorerRootView: View {
     @EnvironmentObject private var session: MeroSession
@@ -15,118 +16,102 @@ struct ExplorerRootView: View {
                 CalimeroLoginView()
             }
         }
-        .preferredColorScheme(.dark)
-        .tint(Cal.lime)
+        .tint(Cal.accentInk)
+        .task { await session.start() }
+        .onOpenURL { url in Task { await session.handleCallback(url) } }
     }
 }
 
-// MARK: - Login (Calimero-branded)
+// MARK: - Sign in (Cloud only)
 
+/// One "Continue with Calimero" button: the wallet opens in the system sheet,
+/// the person approves this device with their passkey, and the app connects to
+/// the relay that serves their account. No node URL, no password.
 struct CalimeroLoginView: View {
     @EnvironmentObject private var session: MeroSession
-    @State private var nodeURL = "http://localhost:4001"
-    @State private var username = ""
-    @State private var password = ""
     @State private var showLogs = false
 
     var body: some View {
         GeometryReader { geo in
             ScrollView {
-                VStack(spacing: 0) {
-                    Spacer(minLength: max(48, geo.size.height * 0.16))
-                    header
-                    Spacer(minLength: 34)
-                    form
+                VStack(spacing: 24) {
+                    Spacer(minLength: max(32, geo.size.height * 0.12))
+                    CalLogo(size: 36)
+                    card
                     Button {
                         showLogs = true
                     } label: {
-                        Label("Connection logs", systemImage: "terminal")
+                        Label("Diagnostics", systemImage: "list.bullet.rectangle")
                             .font(.footnote)
-                            .foregroundColor(Cal.textDim)
+                            .foregroundColor(Cal.textFaint)
                     }
-                    .padding(.top, 18)
-                    Spacer(minLength: 40)
+                    Spacer(minLength: 24)
                 }
                 .frame(minHeight: geo.size.height)
-                .frame(maxWidth: 430)
+                .frame(maxWidth: 480)
                 .frame(maxWidth: .infinity)
-                .padding(.horizontal, 26)
+                .padding(.horizontal, Cal.screenPad)
             }
         }
-        .background(
-            ZStack {
-                Cal.bg
-                RadialGradient(
-                    colors: [Cal.lime.opacity(0.16), .clear],
-                    center: .init(x: 0.5, y: 0.12), startRadius: 0, endRadius: 320)
-            }
-            .ignoresSafeArea()
-        )
+        .background(Cal.bg.ignoresSafeArea())
         .sheet(isPresented: $showLogs) { LogsView() }
-        .onAppear {
-            // e2e hook: point at a specific node (used by the multi-node harness
-            // so the guest simulator connects to node B, not the default :4001).
-            if let n = ProcessInfo.processInfo.environment["E2E_NODE"], !n.isEmpty {
-                nodeURL = n
-            } else if let n = Bundle.main.object(forInfoDictionaryKey: "DefaultNodeURL") as? String, !n.isEmpty {
-                // On-device builds bake in the Mac's LAN node URL (set by generate-ios.sh),
-                // since "localhost" on a physical phone is the phone itself, not the Mac.
-                nodeURL = n
-            }
-        }
     }
 
-    private var header: some View {
-        VStack(spacing: 18) {
-            Image("CalimeroIcon")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 62, height: 62)
-                .shadow(color: Cal.lime.opacity(0.25), radius: 18, y: 4)
-            VStack(spacing: 7) {
-                Text("SDK Explorer")
-                    .font(.system(.title, design: .default).weight(.bold))
-                    .foregroundColor(Cal.text)
-                    .accessibilityIdentifier("loginTitle")
-                Text("Sign in to a Calimero node to explore the full MeroKit SDK.")
+    private var card: some View {
+        CalCard(padding: 24) {
+            VStack(spacing: 18) {
+                IconTile(systemName: "person.badge.key", accent: true, size: 44)
+                VStack(spacing: 8) {
+                    Text("Sign in to Calimero")
+                        .font(.title3.weight(.bold))
+                        .foregroundColor(Cal.text)
+                        .accessibilityIdentifier("loginTitle")
+                    Text(
+                        "You'll approve this device with your passkey on the Calimero wallet, then come straight "
+                            + "back. Your account key never leaves the wallet."
+                    )
                     .font(.subheadline)
                     .foregroundColor(Cal.textDim)
                     .multilineTextAlignment(.center)
-            }
-        }
-    }
-
-    private var form: some View {
-        VStack(spacing: 11) {
-            MinimalField(icon: "globe", placeholder: "Node URL", text: $nodeURL)
-                .accessibilityIdentifier("nodeURLField")
-            MinimalField(icon: "person", placeholder: "Username", text: $username)
-                .accessibilityIdentifier("usernameField")
-            MinimalField(icon: "lock", placeholder: "Password", text: $password, secure: true)
-                .accessibilityIdentifier("passwordField")
-
-            if let error = session.errorMessage {
-                Text(error)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Text(
+                        "That one device certificate finds the relay serving your account, writes through it, "
+                            + "and reads your spaces and live events. Nothing to paste in."
+                    )
                     .font(.footnote)
-                    .foregroundColor(Cal.error)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("loginError")
-            }
+                    .foregroundColor(Cal.textFaint)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
 
-            Button {
-                Task { await session.login(nodeURL: nodeURL, username: username, password: password) }
-            } label: {
-                if session.isLoading { ProgressView().tint(Cal.bg) } else { Text("Connect") }
+                if let error = session.errorMessage {
+                    Callout(tone: .danger, text: error)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("loginError")
+                }
+
+                Button {
+                    Task { await session.signInWithCloud() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if session.isLoading {
+                            ProgressView().tint(Cal.text)
+                        } else {
+                            Image(systemName: "key.fill").font(.footnote.weight(.semibold))
+                        }
+                        Text("Continue with Calimero")
+                    }
+                }
+                .buttonStyle(CalPrimaryButtonStyle(enabled: !session.isLoading))
+                .disabled(session.isLoading)
+                .accessibilityIdentifier("cloudSignInButton")
             }
-            .buttonStyle(CalPrimaryButtonStyle())
-            .disabled(session.isLoading)
-            .accessibilityIdentifier("loginButton")
-            .padding(.top, 5)
+            .frame(maxWidth: .infinity)
         }
     }
 }
 
-// MARK: - Explorer landing (clean: Open Chat + Explore SDK)
+// MARK: - Explorer landing (Chat + Explore SDK)
 
 struct ExplorerView: View {
     @EnvironmentObject private var session: MeroSession
@@ -136,30 +121,37 @@ struct ExplorerView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    header
+                VStack(alignment: .leading, spacing: 16) {
+                    accountCard
+                    if let note = session.note {
+                        Callout(tone: session.relayURL == nil ? .info : .warning, text: note)
+                            .accessibilityIdentifier("sessionNote")
+                    }
+                    Eyebrow(text: "Examples")
                     chatCard
                     exploreCard
                 }
                 .padding(.horizontal, Cal.screenPad)
-                .padding(.vertical, 14)
+                .padding(.vertical, 16)
             }
             .background(Cal.bg)
-            .navigationTitle("MeroKit")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Cal.surface, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) { CalLogo(size: 22) }
+                ToolbarItem(placement: .principal) { CalLogo(size: 26) }
                 ToolbarItem(placement: .topBarLeading) {
                     Button {
                         showLogs = true
                     } label: {
-                        Image(systemName: "terminal")
+                        Image(systemName: "list.bullet.rectangle")
                     }
-                    .foregroundColor(Cal.lime)
+                    .accessibilityLabel("Diagnostics")
+                    .foregroundColor(Cal.textDim)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Log Out") { Task { await session.logout() } }
-                        .foregroundColor(Cal.lime)
+                    Button("Sign out") { Task { await session.logout() } }
+                        .foregroundColor(Cal.textDim)
+                        .accessibilityIdentifier("logoutButton")
                 }
             }
         }
@@ -171,67 +163,90 @@ struct ExplorerView: View {
         }
     }
 
-    /// Big lime-accented entry: open the chat example.
+    private var accountCard: some View {
+        CalCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 12) {
+                    ChatAvatar(name: session.displayName.isEmpty ? "?" : session.displayName, size: 36)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(session.displayName)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(Cal.text)
+                            .accessibilityIdentifier("homeUser")
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(session.relayURL != nil || session.devNodeURL != nil ? Cal.lime : Cal.warning)
+                                .frame(width: 8, height: 8)
+                            Text(statusText).font(.footnote).foregroundColor(Cal.textFaint)
+                        }
+                    }
+                    Spacer()
+                }
+                TechnicalDetails(rows: technicalRows)
+            }
+        }
+        .accessibilityIdentifier("accountCard")
+    }
+
+    private var statusText: String {
+        if session.devNodeURL != nil { return "Development node" }
+        guard let relay = session.relayURL else { return "Signed in, no relay yet" }
+        return URL(string: relay)?.host ?? relay
+    }
+
+    private var technicalRows: [(String, String)] {
+        var rows: [(String, String)] = []
+        if let account = session.account { rows.append(("Account", account)) }
+        if let device = session.connection?.session.device { rows.append(("Device", device)) }
+        if let relay = session.relayURL { rows.append(("Relay", relay)) }
+        if let key = session.connection?.nodeKey { rows.append(("Node key", key)) }
+        if let node = session.devNodeURL { rows.append(("Node", node)) }
+        return rows
+    }
+
     private var chatCard: some View {
         Button {
             showChat = true
         } label: {
-            bigEntry(
-                icon: "bubble.left.and.bubble.right.fill",
-                title: "Open Chat Example",
-                subtitle: "Spaces, channels & messaging on curb",
+            entry(
+                icon: "bubble.left.and.bubble.right",
+                title: "Chat",
+                subtitle: "Spaces, channels and messages on curb",
                 accent: true)
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("openChat")
     }
 
-    /// Big entry: dive into the full categorized SDK surface.
     private var exploreCard: some View {
         NavigationLink {
             SDKListView()
         } label: {
-            bigEntry(
-                icon: "square.grid.2x2.fill",
+            entry(
+                icon: "square.grid.2x2",
                 title: "Explore SDK",
                 subtitle: "\(sdkOperations.count) methods across \(sdkCategories.count) categories",
                 accent: false)
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("exploreSDK")
     }
 
-    private func bigEntry(icon: String, title: String, subtitle: String, accent: Bool) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.title2)
-                .foregroundColor(accent ? Cal.bg : Cal.lime)
-                .frame(width: 46, height: 46)
-                .background(accent ? Cal.lime : Cal.surface2)
-                .cornerRadius(12)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline).foregroundColor(Cal.text)
-                Text(subtitle).font(.caption).foregroundColor(Cal.textDim)
+    private func entry(icon: String, title: String, subtitle: String, accent: Bool) -> some View {
+        HStack(spacing: 12) {
+            IconTile(systemName: icon, accent: accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+                Text(subtitle).font(.footnote).foregroundColor(Cal.textFaint)
             }
             Spacer()
-            Image(systemName: "chevron.right").font(.footnote).foregroundColor(Cal.textDim)
+            Image(systemName: "chevron.right").font(.footnote).foregroundColor(Cal.textFaint)
         }
-        .padding(16)
-        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 16)
+        .frame(minHeight: 64)
         .background(Cal.surface)
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Cal.border, lineWidth: 1))
-        .cornerRadius(14)
-    }
-
-    private var header: some View {
-        CalCard {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(session.username.isEmpty ? "connected" : session.username)
-                    .font(.headline).foregroundColor(Cal.text)
-                Text(session.nodeURL).font(.caption).foregroundColor(Cal.textDim)
-                if !session.nodeSummary.isEmpty {
-                    Text(session.nodeSummary).font(.caption2).foregroundColor(Cal.lime)
-                }
-            }
-        }
+        .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
     }
 }
 
@@ -291,15 +306,15 @@ struct SDKListView: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(Cal.surface2)
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1))
-        .cornerRadius(10)
+        .overlay(RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Cal.borderStrong, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Cal.controlRadius))
     }
 
     private func sectionLabel(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.caption.weight(.bold))
-            .tracking(0.8)
-            .foregroundColor(Cal.textDim)
+            .font(.caption.weight(.medium))
+            .tracking(0.5)
+            .foregroundColor(Cal.textFaint)
     }
 
     private var matchCount: Int { filtered.reduce(0) { $0 + $1.ops.count } }
@@ -334,9 +349,9 @@ struct SDKListView: View {
         }
         .padding(12)
         .background(Cal.surface)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1))
-        .cornerRadius(12)
-        .tint(Cal.lime)
+        .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
+        .tint(Cal.accentInk)
     }
 
     private func row(_ op: SDKOperation) -> some View {
@@ -369,7 +384,7 @@ struct OperationRunnerView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(op.name).font(.title3.bold()).foregroundColor(Cal.text)
                     Text(op.summary).font(.subheadline).foregroundColor(Cal.textDim)
-                    Text(op.category).font(.caption2.weight(.semibold)).foregroundColor(Cal.lime)
+                    Text(op.category).font(.caption.weight(.medium)).foregroundColor(Cal.accentInk)
                 }
 
                 ForEach(op.fields) { field in
@@ -379,16 +394,14 @@ struct OperationRunnerView: View {
                 Button {
                     run()
                 } label: {
-                    if running { ProgressView().tint(Cal.bg) } else { Text("Run") }
+                    if running { ProgressView().tint(Cal.text) } else { Text("Run") }
                 }
                 .buttonStyle(CalPrimaryButtonStyle())
                 .disabled(running)
 
                 if !output.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(failed ? "ERROR" : "RESPONSE")
-                            .font(.caption2.weight(.bold))
-                            .foregroundColor(failed ? Cal.error : Cal.lime)
+                        Eyebrow(text: failed ? "Error" : "Response")
                         ScrollView(.horizontal, showsIndicators: true) {
                             Text(output)
                                 .font(Cal.mono)
@@ -398,8 +411,10 @@ struct OperationRunnerView: View {
                         }
                         .padding(12)
                         .background(Cal.surface2)
-                        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1))
-                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Cal.borderStrong, lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: Cal.controlRadius))
                     }
                 }
             }
@@ -419,7 +434,7 @@ struct OperationRunnerView: View {
             CalField(title: field.label, text: binding, placeholder: field.placeholder)
         case .multiline:
             VStack(alignment: .leading, spacing: 6) {
-                Text(field.label.uppercased()).font(.caption2.weight(.semibold)).foregroundColor(Cal.textDim)
+                Text(field.label).font(.footnote.weight(.medium)).foregroundColor(Cal.text)
                 TextEditor(text: binding)
                     .font(Cal.mono)
                     .foregroundColor(Cal.text)
@@ -427,27 +442,35 @@ struct OperationRunnerView: View {
                     .frame(minHeight: 120)
                     .padding(8)
                     .background(Cal.surface2)
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Cal.border, lineWidth: 1))
-                    .cornerRadius(10)
+                    .overlay(RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Cal.borderStrong, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: Cal.controlRadius))
             }
         }
     }
 
     private func run() {
-        guard let mero = session.mero else {
-            output = "Not connected."; failed = true; return
-        }
         running = true
         let captured = inputs
+        let mero = session.mero
+        let context = CloudOpContext(
+            signIn: session.signIn, relay: session.relay, session: session.connection?.session)
         Task {
             do {
-                let result = try await op.run(mero, captured)
+                let result: String
+                if let cloudRun = op.cloudRun {
+                    result = try await cloudRun(context, captured)
+                } else if let mero {
+                    result = try await op.run(mero, captured)
+                } else {
+                    result = "Admin reads need the relay session, which is not established yet."
+                }
                 await MainActor.run {
                     output = result; failed = false; running = false
                 }
             } catch {
                 await MainActor.run {
-                    output = "\(error)"; failed = true; running = false
+                    output = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    failed = true; running = false
                 }
             }
         }
@@ -466,14 +489,15 @@ struct LogsView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 5) {
                         if session.logs.isEmpty {
-                            Text("No activity yet. Try connecting.")
+                            Text("No activity yet.")
                                 .font(.footnote).foregroundColor(Cal.textDim)
                         }
                         ForEach(session.logs) { line in
                             HStack(alignment: .top, spacing: 8) {
-                                Text(line.level.rawValue)
+                                Image(systemName: line.level.symbol)
+                                    .font(.caption2)
                                     .foregroundColor(color(line.level))
-                                    .frame(width: 12, alignment: .leading)
+                                    .frame(width: 14, alignment: .leading)
                                 Text(line.text)
                                     .foregroundColor(Cal.text)
                                     .textSelection(.enabled)
@@ -495,7 +519,7 @@ struct LogsView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Clear") { session.clearLogs() }.foregroundColor(Cal.lime)
+                    Button("Clear") { session.clearLogs() }.foregroundColor(Cal.accentInk)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     HStack(spacing: 16) {
@@ -507,19 +531,18 @@ struct LogsView: View {
                         ShareLink(item: session.logText()) { Image(systemName: "square.and.arrow.up") }
                         Button("Done") { dismiss() }
                     }
-                    .foregroundColor(Cal.lime)
+                    .foregroundColor(Cal.accentInk)
                 }
             }
         }
-        .preferredColorScheme(.dark)
-        .tint(Cal.lime)
+        .tint(Cal.accentInk)
     }
 
     private func color(_ level: MeroSession.LogLine.Level) -> Color {
         switch level {
         case .err: return Cal.error
-        case .ok: return Cal.lime
-        case .warn: return Cal.orange
+        case .ok: return Cal.success
+        case .warn: return Cal.warning
         case .req: return Cal.text
         case .info: return Cal.textDim
         }

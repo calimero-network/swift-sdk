@@ -22,62 +22,29 @@ final class AppE2ETests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["E2E_NODE"] = Self.nodeURL
+        // The app's login is Cloud only; this suite signs in to its node
+        // through the development hook instead (no fields in the UI).
+        app.launchEnvironment["E2E_NODE_USER"] = "dev"
+        app.launchEnvironment["E2E_NODE_PASS"] = "dev-password"
         app.launch()
     }
 
     // MARK: helpers
-
-    private func type(_ id: String, _ text: String) {
-        let field = app.textFields[id].exists ? app.textFields[id] : app.secureTextFields[id]
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "\(id) not found")
-        for _ in 0..<6 {
-            field.tap()
-            let focused = XCTNSPredicateExpectation(
-                predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: field)
-            if XCTWaiter().wait(for: [focused], timeout: 2) == .completed { break }
-        }
-        field.typeText(text)
-    }
 
     private func tap(_ button: XCUIElement, _ message: String, timeout: TimeInterval = 10) {
         XCTAssertTrue(button.waitForExistence(timeout: timeout), message)
         button.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
     }
 
+    /// Signed in by the `E2E_NODE` development hook at launch.
     private func login() {
-        XCTAssertTrue(app.staticTexts["loginTitle"].waitForExistence(timeout: 5))
-        type("usernameField", "dev")
-        type("passwordField", "dev-password")
-        tap(app.buttons["loginButton"], "login button")
-        dismissSavePasswordPrompt()
-        // On failure, quote the app's own error line. "did not reach explorer"
-        // alone is the same message whether the node is down, the credentials
-        // are wrong, or the app is pointed at the wrong host — and it cost five
-        // weeks of red iOS E2E runs to tell those apart.
+        // On failure, quote the app's own error line, so "node down" and
+        // "wrong credentials" don't look alike.
         XCTAssertTrue(
             app.buttons["openChat"].waitForExistence(timeout: 20),
             "did not reach explorer (node \(Self.nodeURL)) — app error: "
-                + (app.staticTexts["loginError"].exists
-                    ? app.staticTexts["loginError"].label : "<none shown>"))
-    }
-
-    /// After submitting the password field, iOS pops a SpringBoard "Save
-    /// Password?" sheet that overlaps the lower half of the screen and eats taps
-    /// (it's why the Explore SDK entry never navigated). Dismiss it with "Not Now".
-    private func dismissSavePasswordPrompt() {
-        // The AutoFill "Save Password?" sheet renders inside the app's own window
-        // tree (as a cross-process remote view), so query `app` — not springboard.
-        // Its button exposes only a *label* ("Not Now"), no identifier, so match
-        // on the label rather than the subscript (which keys off identifier).
-        let predicate = NSPredicate(format: "label ==[c] %@", "Not Now")
-        let sources: [XCUIApplication] = [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")]
-        for source in sources {
-            let notNow = source.buttons.matching(predicate).firstMatch
-            if notNow.waitForExistence(timeout: 4) {
-                notNow.tap()
-                return
-            }
-        }
+                + (app.otherElements["loginError"].exists
+                    ? app.otherElements["loginError"].label : "<none shown>"))
     }
 
     // MARK: tests

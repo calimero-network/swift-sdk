@@ -2,6 +2,58 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: Calimero Cloud sign-in
+
+### Breaking
+
+- **Mobile sign-in is Calimero Cloud only.** `LoginView` is now a single
+  "Continue with Calimero" button: the wallet opens in the system auth sheet,
+  the person approves the device with their passkey, and the app connects to
+  the relay that serves their account. The node URL, username and password
+  fields are gone.
+  - `LoginView(callbackScheme:)` / `LoginView(callback:)` replace
+    `LoginView(defaultNodeURL:)`; likewise `MeroRootView`.
+  - Accessibility ids: `cloudSignInButton` is the button; `loginButton` now
+    identifies the sign-in panel; `loginTitle` and `loginError` are unchanged.
+  - `MeroClient.login(nodeURL:username:password:)` remains for development
+    nodes, but no shipped view offers it.
+
+### Added
+
+- **Account layer** (`MeroKit`, ported from mero-js 24.5.0, byte-identical with
+  core's wire fixtures):
+  - `Crypto/`: `domainHash`, a little-endian borsh writer, Ed25519 / X25519 over
+    CryptoKit (no new dependencies), canonical JSON for warrant commitments.
+  - `Account/`: `DeviceKeys` (Keychain via `AnyValueStore.keychain`),
+    `DeviceCertificates` (`parse`/`verify`, port of `verifyDeviceCredential`),
+    `DeviceEnrolment` (wallet URL, callback parsing, `completeEnrolment`),
+    `NamespaceOps.signMemberJoinOp` (namespace-op schema 24) and `AccountJoin`
+    (`bootstrapFromInvitation`).
+  - `Cloud/`: `CloudClient` (`getAccountRelays` with routing-proof headers,
+    `chooseRelay`, `getNamespaceRouting`, `findAdmitter`) and `CloudSignIn`,
+    the end-to-end orchestrator.
+  - `Relay/`: `RelayClient` (`describe`/`execute` with warrant v2 and a
+    persisted per-relay nonce sequence recovered from `warrant-nonce` on a nonce
+    refusal; `query` with 409 → warrant fallback;
+    `describeCreation`/`createContext`; `describeGovernance`/`govern`),
+    `RelayLogin` (`account_proof` login with a signed login statement, and
+    `POST /auth/logout`), `RelayNodeKey` + the pluggable `RelayKeyVerifier`.
+- `MeroKitUI`: `SystemWebAuthenticator` (ASWebAuthenticationSession; app scheme
+  or iOS 17.4+ https callback), `MeroClient.signInWithCloud(callbackScheme:)`,
+  `handleEnrolmentCallback(_:)`, `restoreCloudSession()`, and session state
+  (`account`, `relayURL`, `isSignedInWithoutRelay`, `cloudNote`, `connection`).
+- Sample app: Calimero light design (system font, SF Symbols, ids behind
+  "Show technical details"), Cloud-only sign-in on `mero-sample://enrol`, chat
+  over the relay session, and a "Cloud & Relay" explorer category.
+
+### Known gaps
+
+- The relay's node key is taken from its TEE attestation over TLS (report data
+  bound to the request nonce and the named key); **DCAP quote signature and
+  measurement verification is a follow-up**. Writes do not depend on it.
+- The hosted wallet returns only to `https://` callbacks; accepting app schemes
+  is a pending wallet change.
+
 ## Unreleased: core 0.11.0-rc.83
 
 The SDK now targets core `0.11.0-rc.83` (`ci/core-version`, and the merod image

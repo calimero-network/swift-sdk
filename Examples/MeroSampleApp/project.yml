@@ -22,6 +22,16 @@ targets:
       path: Sources/Generated-Info.plist
       properties:
         UILaunchScreen: {}
+        # The scheme the Calimero wallet returns to after Cloud sign-in
+        # (`mero-sample://enrol#credential=…`). ASWebAuthenticationSession
+        # intercepts it itself; registering it also lets `onOpenURL` finish a
+        # sign-in that arrives outside the sheet.
+        CFBundleURLTypes:
+          - CFBundleURLName: network.calimero.merokit.sample.enrol
+            CFBundleURLSchemes: [mero-sample]
+        # Development tooling only: the app signs in with Calimero Cloud and no
+        # longer reads this. generate-ios.sh still patches it for --duo setups,
+        # and the real-node e2e harnesses pass E2E_NODE instead.
         # The node a fresh launch points at. It MUST stay a loopback URL: the
         # simulator shares the host's network, so this is the node the e2e
         # harnesses boot, and `ExplorerUI` adopts this value over the field's

@@ -1,15 +1,21 @@
 #if canImport(SwiftUI)
 import SwiftUI
 
-/// Routes between login and home based on ``MeroClient`` auth state. Drop this in
-/// as your root view and inject a `MeroClient` via `.environmentObject`.
+/// Routes between Cloud sign-in and home based on ``MeroClient`` auth state.
+/// Drop this in as your root view and inject a `MeroClient` via
+/// `.environmentObject`. A session from a previous launch is restored first.
 public struct MeroRootView: View {
     @EnvironmentObject private var client: MeroClient
 
-    private let defaultNodeURL: String
+    private let callback: CloudCallback
 
-    public init(defaultNodeURL: String = "http://localhost:4001") {
-        self.defaultNodeURL = defaultNodeURL
+    /// - Parameter callbackScheme: the app's URL scheme the wallet returns to.
+    public init(callbackScheme: String) {
+        self.callback = .scheme(callbackScheme)
+    }
+
+    public init(callback: CloudCallback) {
+        self.callback = callback
     }
 
     public var body: some View {
@@ -17,8 +23,12 @@ public struct MeroRootView: View {
             if client.isAuthenticated {
                 HomeView()
             } else {
-                LoginView(defaultNodeURL: defaultNodeURL)
+                LoginView(callback: callback)
             }
+        }
+        .task { await client.restoreCloudSession() }
+        .onOpenURL { url in
+            Task { await client.handleEnrolmentCallback(url) }
         }
     }
 }

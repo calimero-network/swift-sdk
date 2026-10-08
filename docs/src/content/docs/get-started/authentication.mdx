@@ -1,6 +1,6 @@
 ---
 title: Authentication
-description: Direct credential login and hosted SSO deep-link login, plus the actor-serialised token lifecycle that refreshes access tokens transparently.
+description: Cloud sign-in (wallet passkey → device certificate → hosted relay) for mobile apps, development-node logins, and the actor-serialised token lifecycle.
 sidebar:
   order: 2
 ---
@@ -8,12 +8,140 @@ sidebar:
 import { Aside } from '@astrojs/starlight/components';
 import SeqDiagram from '../../../components/SeqDiagram.astro';
 
-Every call MeroKit makes carries a JWT access token. There are two ways to obtain
-one — direct credentials and hosted SSO — and the SDK keeps it fresh for you.
+**Mobile apps sign in with Calimero Cloud.** The person approves this device on
+the Calimero wallet with their passkey, the wallet returns a certificate for a
+key that never leaves the device, and the app talks to the hosted relay that
+serves their account. There is no node URL and no password in the app.
 
-## Direct credentials
+Logging in to a node directly (credentials or the node's hosted SSO) is still
+available for **development nodes you run yourself**; see
+[Development nodes](#development-nodes) below.
 
-For first-party apps, exchange a username and password for a token bundle.
+## Cloud sign-in
+
+The shortest path is MeroKitUI: one "Continue with Calimero" button.
+
+```swift
+import MeroKitUI
+
+@main
+struct MyApp: App {
+  @StateObject private var client = MeroClient()   // Keychain-backed by default
+  var body: some Scene {
+    WindowGroup {
+      // Restores a stored session, shows LoginView otherwise, handles onOpenURL.
+      MeroRootView(callbackScheme: "myapp").environmentObject(client)
+    }
+  }
+}
+```
+
+`client.signInWithCloud(callbackScheme:)` opens the wallet in
+`ASWebAuthenticationSession` (the system sheet, like "Sign in with Google"),
+verifies the answer, finds the account's relay and logs in there. Afterwards
+`client.account`, `client.relayURL`, `client.isSignedInWithoutRelay` and
+`client.connection` (a relay `Mero` + `RelayClient`) describe the session. If the
+callback reaches the app some other way (a Universal Link, `onOpenURL`), pass it
+to `client.handleEnrolmentCallback(_:)`.
+
+<SeqDiagram
+  id="d-cloud"
+  title="Cloud sign-in"
+  lanes={[
+    { label: 'Your app', color: '#3fb950' },
+    { label: 'Wallet (system sheet)', color: '#a371f7' },
+    { label: 'Cloud manager', color: '#f0883e' },
+    { label: 'Hosted relay', color: '#58a6ff' },
+  ]}
+  steps={[
+    { from: 0, to: 0, label: 'device keys (Ed25519 + X25519) in the Keychain' },
+    { from: 0, to: 1, label: 'account-enroll?enrol-device&enrol-kem&callback-url&state' },
+    { from: 1, to: 1, label: 'passkey: approve this device' },
+    { from: 1, to: 0, label: 'myapp://enrol#credential=…&account=…&device=…&state=…', dashed: true },
+    { from: 0, to: 0, label: 'verify certificate, keys, account, state' },
+    { from: 0, to: 2, label: 'GET /accounts/{a}/relays (routing proof)' },
+    { from: 2, to: 0, label: 'relay URL + executor account', dashed: true },
+    { from: 0, to: 3, label: 'POST /admin-api/tee/attest → node key' },
+    { from: 0, to: 3, label: '/auth/challenge → /auth/token (account_proof)' },
+    { from: 3, to: 0, label: 'Bearer session: admin reads + SSE', dashed: true, color: '#a5ff11' },
+    { type: 'divider', label: 'writes go through warrants; no token needed for them' },
+  ]}
+/>
+
+What the app checks before storing anything (`DeviceEnrolment.completeEnrolment`):
+the `state` it sent came back; the certificate verifies (its root signed it, the
+account is the one that root derives, the device id was minted for it); it
+certifies **this** device's signing and delivery keys; and the account and
+device reported beside it are the ones it names. Any failure throws an
+`AccountError` and nothing is saved.
+
+### Without MeroKitUI
+
+`CloudSignIn` is the UI-free core, usable from any UI framework:
+
+```swift
+import MeroKit
+
+let cloud = CloudSignIn.keychain()   // device keys, session, tokens in the Keychain
+
+let walletURL = try await cloud.beginEnrolment(callbackURL: "myapp://enrol")
+// … present walletURL in ASWebAuthenticationSession (callbackURLScheme: "myapp") …
+let session = try await cloud.completeEnrolment(callbackURL: returnedURL)
+let connection = await cloud.connect(session)
+
+// Writes: warranted intents through the relay, as the account.
+let result = try await connection.relay?.execute(
+  contextId: contextId, method: "send_message", argsJson: ["message": "hi"])
+// Reads: the relay's query route (falls back to a warrant for non-views).
+let page = try await connection.relay?.query(contextId: contextId, method: "get_messages")
+// Admin reads and events: an ordinary Mero holding the relay's Bearer session.
+let spaces = try await connection.mero?.admin.listNamespaces()
+```
+
+`await cloud.restoreSession()` returns the stored session on the next launch;
+`await cloud.signOut()` retires the relay session (`POST /auth/logout`) and
+forgets the account.
+
+### The callback URL
+
+The SDK accepts **any** callback: an app scheme (`.scheme("myapp")`, any iOS
+version) or a verified https Universal Link (`.https(host:path:)`, iOS 17.4+,
+needs Associated Domains and an AASA file). The wallet shows the callback's
+origin as the app's identity.
+
+<Aside type="caution">
+  The hosted wallet currently returns only to `https://` callbacks. Accepting app
+  schemes is a pending wallet change; until it ships, use an https callback in
+  production. The certificate only covers a key that never leaves the app, so a
+  scheme callback cannot hand someone else your account.
+</Aside>
+
+### Signed in, no relay
+
+A brand-new account is a member of nothing, so no relay serves it yet.
+`CloudSession.relayUrl` is then `nil` and `MeroClient.isSignedInWithoutRelay` is
+`true`: still signed in. Redeeming an invitation admits the account and gives it
+a relay:
+
+```swift
+let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
+```
+
+### The relay's node key
+
+The relay session is bound to the relay's node key, learned from
+`POST {relay}/admin-api/tee/attest`. The default `TLSRelayKeyVerifier` checks the
+quote is bound to this request's nonce and to the key the relay named, and
+refuses mock quotes from hosted relays, but **does not yet verify the TDX DCAP
+quote signature**; it trusts the TLS connection to the relay URL the Cloud
+manager returned. Supply your own `RelayKeyVerifier` (or a
+`PinnedRelayKeyVerifier`) in `CloudConfig` to tighten it. Warranted writes do not
+depend on the node key; only Bearer reads and events do.
+
+## Development nodes
+
+For a node you run yourself, exchange its admin username and password for a
+token bundle.
 These are the admin credentials the node was initialised with — core
 0.11.0-rc.17 creates the admin at `merod init`, so there is no first-login
 setup code.
@@ -102,7 +230,7 @@ family).
 
 ## Hosted SSO (deep link)
 
-For hosted login, build the node's login URL, present it in
+For a development node's own hosted login page, build the node's login URL, present it in
 `ASWebAuthenticationSession`, and feed the callback URL back in — the native
 analog of the web redirect flow.
 

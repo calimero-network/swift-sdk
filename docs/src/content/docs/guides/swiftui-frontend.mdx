@@ -36,7 +36,7 @@ struct MyApp: App {
 
   var body: some Scene {
     WindowGroup {
-      MeroRootView()               // routes Login ⇄ Home on auth state
+      MeroRootView(callbackScheme: "myapp")  // Cloud sign-in ⇄ Home
         .environmentObject(client)
     }
   }
@@ -67,7 +67,7 @@ struct MyApp: App {
       <rect x="70" y="200" width="220" height="60" rx="8" fill="#58a6ff14" stroke="#58a6ff50" />
       <text x="180" y="224" text-anchor="middle" fill="#58a6ff" font-size="11.5" font-weight="600">LoginView</text>
       <text x="180" y="241" text-anchor="middle" fill="#9aa4b2" font-size="9">node URL · username · password</text>
-      <text x="180" y="253" text-anchor="middle" fill="#9aa4b2" font-size="9">→ client.login(...)</text>
+      <text x="180" y="253" text-anchor="middle" fill="#9aa4b2" font-size="9">→ signInWithCloud(...)</text>
     </g>
 
     <g class="seq-step" style="--step-i:3">
@@ -95,15 +95,27 @@ Bind its published state directly in your own views.
 @Published public private(set) var username: String
 @Published public private(set) var errorMessage: String?
 @Published public private(set) var lastRpcResult: String?
+// Cloud session
+@Published public private(set) var account: String?
+@Published public private(set) var relayURL: String?
+@Published public private(set) var isSignedInWithoutRelay: Bool
+@Published public private(set) var cloudNote: String?
+public private(set) var connection: CloudConnection?
 ```
 
 **Methods** (errors surface via `errorMessage`, so these don't `throw`):
 
 ```swift
 public init(session: URLSession? = nil,
-            tokenStore: @escaping @Sendable () -> any TokenStore = { MemoryTokenStore() })
+            tokenStore: @escaping @Sendable () -> any TokenStore = { MemoryTokenStore() },
+            cloud: CloudSignIn? = nil,                       // Keychain-backed by default
+            webAuthenticator: (any WebAuthenticating)? = nil) // the system auth sheet by default
 
-func login(nodeURL: String, username: String, password: String) async
+func signInWithCloud(callbackScheme: String) async    // e.g. "myapp" → myapp://enrol
+func signInWithCloud(callback: CloudCallback) async   // .https(host:path:) for a Universal Link
+func handleEnrolmentCallback(_ url: URL) async -> Bool
+func restoreCloudSession() async -> Bool
+func login(nodeURL: String, username: String, password: String) async  // development nodes only
 func runSampleRpc(contextId: String, method: String) async
 func logout() async
 ```
@@ -113,15 +125,11 @@ Use it in your own SwiftUI view without the bundled screens:
 ```swift
 struct SignInView: View {
   @EnvironmentObject private var client: MeroClient
-  @State private var user = ""; @State private var pass = ""
 
   var body: some View {
     VStack {
-      TextField("Username", text: $user)
-      SecureField("Password", text: $pass)
-      Button("Sign in") {
-        Task { await client.login(nodeURL: "https://your-node.example",
-                                   username: user, password: pass) }
+      Button("Continue with Calimero") {
+        Task { await client.signInWithCloud(callbackScheme: "myapp") }
       }
       if let error = client.errorMessage { Text(error).foregroundStyle(.red) }
     }
@@ -137,12 +145,13 @@ All three are `public` `View`s that read the `MeroClient` from
 
 | View | Purpose |
 | --- | --- |
-| `MeroRootView(defaultNodeURL:)` | routes `LoginView` ⇄ `HomeView` on auth state |
-| `LoginView(defaultNodeURL:)` | credential form → `client.login(...)` |
+| `MeroRootView(callbackScheme:)` | restores a stored session; routes `LoginView` ⇄ `HomeView`; handles `onOpenURL` |
+| `LoginView(callbackScheme:)` | one "Continue with Calimero" button → `client.signInWithCloud(...)` |
 | `HomeView(demoContextId:demoMethod:)` | signed-in screen: session info, demo RPC, logout |
 
 <Aside type="note">
-  For custom transports (tests, mock backends), construct `MeroClient(session:)`
-  with your own `URLSession`. A full SwiftUI sample — plus XCUITest UI tests
+  For tests and mock backends, construct `MeroClient(session:cloud:webAuthenticator:)`
+  with your own `URLSession`, in-memory `CloudSignIn` stores, and a
+  `WebAuthenticating` that answers without a browser. A full SwiftUI sample — plus XCUITest UI tests
   against an in-app mock backend — lives in `Examples/MeroSampleApp`.
 </Aside>

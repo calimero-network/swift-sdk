@@ -982,9 +982,106 @@ private let rpcOps: [SDKOperation] = [
     },
 ]
 
+// MARK: Cloud & Relay (the account layer)
+
+private let ctxField = OpField.line("contextId", "Context ID", "64 hex")
+private let methodField = OpField.line("method", "Method", "get_messages")
+private let argsField = OpField.json("args", "Args JSON", "{}")
+
+private let cloudOps: [SDKOperation] = [
+    .cloud(id: "cloud.session", name: "restoreSession", summary: "The stored Cloud session") { c, _ in
+        guard let s = await c.signIn.restoreSession() else { return "not signed in" }
+        return Fmt.json(s)
+    },
+    .cloud(
+        id: "cloud.relays", name: "getAccountRelays", summary: "Relays serving this account (device-proven)"
+    ) { c, _ in
+        guard let s = c.session else { return "not signed in" }
+        let relays = try await c.signIn.cloudClient().getAccountRelays(s.account)
+        return Fmt.json(relays) + "\n\nchooseRelay → " + Fmt.json(CloudClient.chooseRelay(relays).relayUrl)
+    },
+    .cloud(
+        id: "cloud.routing", name: "getNamespaceRouting", summary: "Nodes serving a namespace",
+        fields: [.line("namespaceId", "Namespace ID", "64 hex")]
+    ) { c, i in
+        let r = try await c.signIn.cloudClient().getNamespaceRouting(i.v("namespaceId"))
+        return r.nodes.map { "\($0.peerId)  admit=\($0.canAdmit) exec=\($0.canExecute) \($0.relayUrl ?? "-")" }
+            .joined(separator: "\n") + "\nservable=\(r.servable) writable=\(r.writable)"
+    },
+    .cloud(id: "cloud.refresh", name: "refreshRelay", summary: "Ask the Cloud manager for the relay again") { c, _ in
+        Fmt.json(try await c.signIn.refreshRelay())
+    },
+    .cloud(
+        id: "relay.describe", name: "describe", summary: "Executor + release a warrant must name", fields: [ctxField]
+    ) { c, i in
+        Fmt.json(try await c.requireRelay().describe(i.v("contextId")))
+    },
+    .cloud(
+        id: "relay.query", name: "query", summary: "Read (query, 409 → warrant)",
+        fields: [ctxField, methodField, argsField]
+    ) { c, i in
+        let out = try await c.requireRelay().query(
+            contextId: i.v("contextId"), method: i.v("method"), argsJson: try Fmt.value(i.v("args")))
+        return Fmt.json(out ?? .null)
+    },
+    .cloud(
+        id: "relay.execute", name: "execute", summary: "Warranted write as the account",
+        fields: [ctxField, methodField, argsField]
+    ) { c, i in
+        let out = try await c.requireRelay().execute(
+            contextId: i.v("contextId"), method: i.v("method"), argsJson: try Fmt.value(i.v("args")))
+        return "rootHash: \(out.rootHash ?? "-")\nreturns: \(Fmt.json(out.returns ?? .null))"
+    },
+    .cloud(
+        id: "relay.nonce", name: "warrantNonce", summary: "Where this device's nonce sequence stands",
+        fields: [ctxField]
+    ) { c, i in
+        let s = try await c.requireRelay().warrantNonce(contextId: i.v("contextId"))
+        return "nextNonce: \(s.nextNonce.map(String.init) ?? "exhausted")\nseen: \(s.seen)"
+    },
+    .cloud(
+        id: "relay.describeCreation", name: "describeCreation", summary: "May this account create contexts here?",
+        fields: [.line("groupId", "Group ID", "64 hex")]
+    ) { c, i in
+        let r = try c.requireRelay()
+        return Fmt.json(try await r.describeCreation(groupId: i.v("groupId"), author: r.authorAccount))
+    },
+    .cloud(
+        id: "relay.createContext", name: "createContext", summary: "Create a context through a creation warrant",
+        fields: [
+            .line("groupId", "Group ID", "64 hex"), .line("applicationId", "Application ID", "64 hex"),
+            .line("name", "Name", "general"), .json("initArgs", "Init args JSON", "{}"),
+        ]
+    ) { c, i in
+        Fmt.json(
+            try await c.requireRelay().createContext(
+                groupId: i.v("groupId"), applicationId: i.v("applicationId"),
+                initArgs: try Fmt.value(i.v("initArgs")), name: i.opt("name")))
+    },
+    .cloud(
+        id: "relay.describeGovernance", name: "describeGovernance", summary: "May the relay govern for you here?",
+        fields: [.line("groupId", "Group ID", "64 hex")]
+    ) { c, i in Fmt.json(try await c.requireRelay().describeGovernance(groupId: i.v("groupId"))) },
+    .cloud(
+        id: "relay.govern", name: "govern", summary: "Apply a borsh group op (hex) via a governance warrant",
+        fields: [.line("groupId", "Group ID", "64 hex"), .line("op", "GroupOp bytes (hex)", "")]
+    ) { c, i in
+        let bytes = try Hex.decodeUnsized(i.v("op"), label: "op")
+        return try await c.requireRelay().govern(groupId: i.v("groupId"), op: .init(kind: .group, bytes: bytes))
+    },
+    .cloud(
+        id: "account.join", name: "join", summary: "Redeem a namespace invitation as the account",
+        fields: [.line("namespaceId", "Namespace ID", "64 hex"), .json("invitation", "SignedGroupOpenInvitation JSON")]
+    ) { c, i in
+        let invitation = try Fmt.decode(i.v("invitation"), SignedGroupOpenInvitation.self)
+        let (_, outcome) = try await c.signIn.join(namespaceId: i.v("namespaceId"), invitation: invitation)
+        return "published: \(outcome.published)\nrelay: \(outcome.relayUrl)"
+    },
+]
+
 /// The full registry, in display order.
 let sdkOperations: [SDKOperation] =
-    healthOps + authOps + keyOps + appOps + pkgOps + ctxOps + ctxIdOps + accountOps
+    cloudOps + healthOps + authOps + keyOps + appOps + pkgOps + ctxOps + ctxIdOps + accountOps
     + aliasOps + blobOps + nsOps + groupOps + memberOps + settingsOps + upgradeOps + teeOps + rpcOps
 
 /// Categories in display order (as first seen in `sdkOperations`).
