@@ -323,7 +323,9 @@ final class GovernanceOpsTests: XCTestCase {
         let payload = try XCTUnwrap(Data(base64Encoded: proof.signedPayload))
         XCTAssertEqual(
             String(decoding: payload, as: UTF8.self),
-            #"{"v":1,"audience":"mdma:enable-ha-namespace-as-account","group_id":"\#(rep("ab"))","account_id":"\#(rep("cd"))","salt":"\#(rep("5c"))","nonce":"\#(rep("01", 16))","issued_at_ms":1000,"expires_at_ms":61000,"relay_url":"https://relay.example/x"}"#
+            #"{"v":1,"audience":"mdma:enable-ha-namespace-as-account","group_id":"\#(rep("ab"))","#
+                + #""account_id":"\#(rep("cd"))","salt":"\#(rep("5c"))","nonce":"\#(rep("01", 16))","#
+                + #""issued_at_ms":1000,"expires_at_ms":61000,"relay_url":"https://relay.example/x"}"#
         )
         let signature = try XCTUnwrap(Data(base64Encoded: proof.signature))
         XCTAssertTrue(
@@ -498,7 +500,9 @@ final class GovernanceOpsTests: XCTestCase {
                 if req.httpMethod == "GET" {
                     return CloudRig.stub(
                         200,
-                        #"{"data":{"executorAccount":"\#(String(repeating: "33", count: 32))","executorKey":"\#(String(repeating: "77", count: 32))","groupId":"\#(group)","canActOnBehalf":true}}"#
+                        #"{"data":{"executorAccount":"\#(String(repeating: "33", count: 32))","#
+                            + #""executorKey":"\#(String(repeating: "77", count: 32))","#
+                            + #""groupId":"\#(group)","canActOnBehalf":true}}"#
                     )
                 }
                 return CloudRig.stub(200, #"{"data":{"groupId":"\#(group)","teeEnabled":true}}"#)

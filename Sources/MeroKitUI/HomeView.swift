@@ -22,13 +22,17 @@ public struct HomeView: View {
                 .accessibilityIdentifier("homeTitle")
 
             VStack(alignment: .leading, spacing: 6) {
+                // A `Label` is an icon + a text: without `.combine` the identifier
+                // lands on both, and a UI-test lookup by id finds two elements.
                 Label(client.username, systemImage: "person.crop.circle")
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("homeUser")
                 Label(
                     client.nodeURL.isEmpty ? "No relay yet" : client.nodeURL,
                     systemImage: client.nodeURL.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "network"
                 )
                 .foregroundColor(.secondary)
+                .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("homeNodeURL")
             }
             .font(.callout)
@@ -37,6 +41,7 @@ public struct HomeView: View {
                 Label(note, systemImage: "info.circle")
                     .font(.footnote)
                     .foregroundColor(.secondary)
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("homeNote")
             }
 
