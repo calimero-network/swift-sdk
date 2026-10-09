@@ -28,49 +28,22 @@ final class ChatMultiUserTests: XCTestCase {
     private func launch(node: String, env: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["E2E_NODE"] = node
+        // The app's login is Cloud only; the e2e harness signs in to its node
+        // through the development hook instead (no fields in the UI).
+        app.launchEnvironment["E2E_NODE_USER"] = "dev"
+        app.launchEnvironment["E2E_NODE_PASS"] = "dev-password"
         for (k, v) in env { app.launchEnvironment[k] = v }
         app.launch()
         return app
     }
 
-    private func type(_ app: XCUIApplication, _ id: String, _ text: String) {
-        let f = app.textFields[id].exists ? app.textFields[id] : app.secureTextFields[id]
-        XCTAssertTrue(f.waitForExistence(timeout: 5), "\(id) missing")
-        for _ in 0..<6 {
-            f.tap()
-            let e = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hasKeyboardFocus == true"), object: f)
-            if XCTWaiter().wait(for: [e], timeout: 2) == .completed { break }
-        }
-        f.typeText(text)
-    }
-
+    /// Signed in by the `E2E_NODE` development hook at launch.
     private func login(_ app: XCUIApplication) {
-        XCTAssertTrue(app.staticTexts["loginTitle"].waitForExistence(timeout: 5))
-        type(app, "usernameField", "dev")
-        type(app, "passwordField", "dev-password")
-        app.buttons["loginButton"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        dismissSavePasswordPrompt(app)
         XCTAssertTrue(
             app.buttons["openChat"].waitForExistence(timeout: 20),
             "no explorer — app error: "
-                + (app.staticTexts["loginError"].exists
-                    ? app.staticTexts["loginError"].label : "<none shown>"))
-    }
-
-    /// Dismiss the SpringBoard "Save Password?" sheet iOS pops after the password
-    /// field is submitted — it overlaps the lower screen and eats taps otherwise.
-    private func dismissSavePasswordPrompt(_ app: XCUIApplication) {
-        // The AutoFill "Save Password?" sheet renders inside the app's own window
-        // tree (a cross-process remote view), and its button exposes only a label
-        // ("Not Now") with no identifier — so query `app` and match on the label.
-        let predicate = NSPredicate(format: "label ==[c] %@", "Not Now")
-        for source in [app, XCUIApplication(bundleIdentifier: "com.apple.springboard")] {
-            let notNow = source.buttons.matching(predicate).firstMatch
-            if notNow.waitForExistence(timeout: 4) {
-                notNow.tap()
-                return
-            }
-        }
+                + (app.otherElements["loginError"].exists
+                    ? app.otherElements["loginError"].label : "<none shown>"))
     }
 
     private func openChannel(_ app: XCUIApplication, space: String, channel: String, timeout: TimeInterval) {

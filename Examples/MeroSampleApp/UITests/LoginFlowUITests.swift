@@ -1,8 +1,13 @@
 import XCTest
 
 /// XCUITest — the Swift analog of a Playwright browser test. Launches the app in
-/// the simulator with a mocked backend and drives the real UI: type into the
-/// login form, tap through to the home screen, run an RPC, and log out.
+/// the simulator with a mocked Cloud + relay and drives the real UI: Cloud
+/// sign-in, the home screen, a read through the relay, and sign out.
+///
+/// The wallet's web sheet is replaced in `-uitest-mock` by an in-app wallet
+/// that certifies the device key the app names, so the app's own credential
+/// verification still runs. `-uitest-enrol-callback <url>` injects a canned
+/// callback instead (used here for a declined sign-in).
 final class LoginFlowUITests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -10,6 +15,10 @@ final class LoginFlowUITests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchArguments = ["-uitest-mock"]
+    }
+
+    private func launch(_ extra: [String] = []) {
+        app.launchArguments += extra
         app.launch()
     }
 
@@ -42,65 +51,40 @@ final class LoginFlowUITests: XCTestCase {
         XCTFail("expected element never appeared after tapping. \(message)", file: file, line: line)
     }
 
-    /// Types into a text field. The focusing tap on a SwiftUI field intermittently
-    /// fails to give it keyboard focus (a well-known XCUITest + simulator flake) —
-    /// and `typeText` then hard-fails with "no keyboard focus", which can't be
-    /// caught. So retry the tap until the field actually reports `hasKeyboardFocus`,
-    /// then type. Checking focus on *this* field (not just "a keyboard exists")
-    /// avoids typing into the wrong field when a keyboard is already up.
-    private func type(
-        _ field: XCUIElement, _ text: String,
-        file: StaticString = #filePath, line: UInt = #line
-    ) {
-        XCTAssertTrue(field.waitForExistence(timeout: 5), "field not found", file: file, line: line)
-        let focused = NSPredicate(format: "hasKeyboardFocus == true")
-        var gotFocus = false
-        for _ in 0..<5 {
-            // Coordinate tap (see tap(untilExists:)): avoids the flaky AX
-            // scroll-to-visible that `field.tap()` triggers on the CI simulator.
-            field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-            let exp = XCTNSPredicateExpectation(predicate: focused, object: field)
-            if XCTWaiter().wait(for: [exp], timeout: 2) == .completed {
-                gotFocus = true
-                break
-            }
-        }
-        XCTAssertTrue(gotFocus, "field never took keyboard focus", file: file, line: line)
-        field.typeText(text)
-    }
-
-    func testLoginRunRpcAndLogout() throws {
-        // Login screen is shown.
+    func testCloudSignInReadAndSignOut() throws {
+        launch()
+        // The Cloud sign-in screen: one button, no node URL, no password.
         XCTAssertTrue(app.staticTexts["loginTitle"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["nodeURLField"].exists)
+        XCTAssertFalse(app.secureTextFields["passwordField"].exists)
 
-        // Fill the form (node URL is prefilled).
-        type(app.textFields["usernameField"], "dev")
-        type(app.secureTextFields["passwordField"], "dev-password")
-
-        // Log in → home screen appears.
+        // Continue with Calimero → the (mock) wallet certifies this device → home.
         tap(
-            app.buttons["loginButton"], untilExists: app.staticTexts["homeTitle"],
-            message: "should navigate to Home after login")
-        XCTAssertTrue(app.staticTexts["homeUser"].label.contains("dev"))
+            app.buttons["cloudSignInButton"], untilExists: app.staticTexts["homeTitle"],
+            message: "should reach Home after Cloud sign-in")
+        let relay = app.descendants(matching: .any)["homeNodeURL"]
+        XCTAssertTrue(relay.waitForExistence(timeout: 5))
+        XCTAssertTrue(relay.label.contains("relay.mock"), relay.label)
 
-        // Run the sample RPC → result appears.
+        // A read through the relay → result appears.
         tap(
             app.buttons["runRpcButton"], untilExists: app.staticTexts["rpcResult"],
-            message: "RPC result should appear")
+            message: "relay read result should appear")
 
-        // Log out → back to the login screen.
+        // Sign out → back to the sign-in screen.
         tap(
             app.buttons["logoutButton"], untilExists: app.staticTexts["loginTitle"],
-            message: "should return to Login after logout")
+            message: "should return to sign-in after sign out")
     }
 
-    func testValidationErrorOnEmptyCredentials() throws {
+    func testDeclinedEnrolmentShowsAnInlineError() throws {
+        launch(["-uitest-enrol-callback", "mero-sample://enrol#error=cancelled"])
         XCTAssertTrue(app.staticTexts["loginTitle"].waitForExistence(timeout: 5))
 
-        // Tap Log In with empty username/password → inline error, still on login.
         tap(
-            app.buttons["loginButton"], untilExists: app.staticTexts["loginError"],
-            message: "empty credentials should surface an inline error")
+            app.buttons["cloudSignInButton"], untilExists: app.descendants(matching: .any)["loginError"],
+            message: "a declined enrolment should surface an inline error")
         XCTAssertTrue(app.staticTexts["loginTitle"].exists)
+        XCTAssertFalse(app.staticTexts["homeTitle"].exists)
     }
 }

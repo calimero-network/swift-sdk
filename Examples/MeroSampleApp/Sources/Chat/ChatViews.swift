@@ -1,5 +1,6 @@
 import MeroKit
 import SwiftUI
+import UIKit
 
 // MARK: - Chat home (spaces)
 
@@ -24,25 +25,26 @@ struct ChatHomeView: View {
             .navigationTitle("Chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() }.foregroundColor(Cal.lime) }
+                ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() }.foregroundColor(Cal.accentInk) }
                 if service.appId != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            Button("New space") { showNewSpace = true }
-                            Button("Join existing space") { showJoin = true }
+                            if service.canCreateSpaces {
+                                Button("New space") { showNewSpace = true }
+                            }
+                            Button("Join with an invite") { showJoin = true }
                             Divider()
                             Button("Refresh") { Task { await service.loadSpaces() } }
                         } label: {
                             Image(systemName: "plus")
                         }
-                        .foregroundColor(Cal.lime)
+                        .foregroundColor(Cal.accentInk)
                         .accessibilityIdentifier("chatAdd")
                     }
                 }
             }
-            .tint(Cal.lime)
+            .tint(Cal.accentInk)
         }
-        .preferredColorScheme(.dark)
         .task {
             let env = ProcessInfo.processInfo.environment
             // e2e hook: with E2E_JOIN=<invite json> set, auto-install then join —
@@ -69,9 +71,9 @@ struct ChatHomeView: View {
 
     private var busyOverlay: some View {
         ZStack {
-            Color.black.opacity(0.55).ignoresSafeArea()
+            Color(red: 19 / 255, green: 18 / 255, blue: 21 / 255).opacity(0.32).ignoresSafeArea()
             VStack(spacing: 12) {
-                ProgressView().tint(Cal.lime).scaleEffect(1.3)
+                ProgressView().tint(Cal.accentInk).scaleEffect(1.3)
                 Text(service.status.isEmpty ? "Working…" : service.status)
                     .font(.footnote).foregroundColor(Cal.text)
                     .multilineTextAlignment(.center)
@@ -79,22 +81,22 @@ struct ChatHomeView: View {
             .padding(22)
             .frame(maxWidth: 280)
             .background(Cal.surface)
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Cal.border, lineWidth: 1))
-            .cornerRadius(16)
+            .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
+            .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
         }
         .transition(.opacity)
     }
 
     private var installGate: some View {
         VStack(spacing: 16) {
-            Image(systemName: "bubble.left.and.bubble.right.fill").font(.system(size: 44)).foregroundColor(Cal.lime)
-            Text("mero-chat").font(.title2.bold()).foregroundColor(Cal.text)
+            IconTile(systemName: "bubble.left.and.bubble.right", accent: true, size: 44)
+            Text("Chat").font(.title2.bold()).foregroundColor(Cal.text)
             Text("Install the curb chat app (com.calimero.curb) from the registry to start.")
                 .font(.footnote).foregroundColor(Cal.textDim).multilineTextAlignment(.center)
             Button {
                 Task { await service.setup() }
             } label: {
-                if service.busy { ProgressView().tint(Cal.bg) } else { Text("Install mero-chat") }
+                if service.busy { ProgressView().tint(Cal.text) } else { Text("Install mero-chat") }
             }
             .buttonStyle(CalPrimaryButtonStyle()).disabled(service.busy).frame(maxWidth: 280)
             .accessibilityIdentifier("installChat")
@@ -108,20 +110,25 @@ struct ChatHomeView: View {
             VStack(alignment: .leading, spacing: 10) {
                 statusLine
                 if service.spaces.isEmpty {
-                    Text("No spaces yet. Tap + to create one.").font(.footnote).foregroundColor(Cal.textDim)
+                    EmptyState(
+                        icon: "bubble.left.and.bubble.right", title: "No spaces yet",
+                        message: service.canCreateSpaces
+                            ? "Create a space with +, or join one with an invite."
+                            : "Join a space with an invite from its admin. Tap + to paste one.")
                 }
                 ForEach(service.spaces) { space in
                     NavigationLink {
                         ChannelsView(service: service, space: space)
                     } label: {
                         HStack {
-                            Image(systemName: "number.square.fill").foregroundColor(Cal.lime)
-                            Text(space.name).font(.headline).foregroundColor(Cal.text)
+                            IconTile(systemName: "number", accent: true)
+                            Text(space.name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption).foregroundColor(Cal.textDim)
                         }
-                        .padding(14).background(Cal.surface)
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Cal.border, lineWidth: 1)).cornerRadius(12)
+                        .padding(12).background(Cal.surface)
+                        .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
+                        .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
                     }
                 }
             }
@@ -134,8 +141,10 @@ struct ChatHomeView: View {
 
     @ViewBuilder private var statusLine: some View {
         if !service.status.isEmpty {
-            Text(service.status).font(.caption2).foregroundColor(Cal.textDim)
+            Text(service.status).font(.footnote)
+                .foregroundColor(service.statusIsError ? Cal.error : Cal.textFaint)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("chatStatus")
         }
     }
 }
@@ -156,8 +165,9 @@ struct ChannelsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 if !service.status.isEmpty {
                     HStack(spacing: 8) {
-                        if service.busy { ProgressView().tint(Cal.lime) }
-                        Text(service.status).font(.caption2).foregroundColor(Cal.textDim)
+                        if service.busy { ProgressView().tint(Cal.accentInk) }
+                        Text(service.status).font(.footnote)
+                            .foregroundColor(service.statusIsError ? Cal.error : Cal.textFaint)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -181,7 +191,7 @@ struct ChannelsView: View {
                         ChannelView(service: service, channel: ch)
                     } label: {
                         HStack {
-                            Image(systemName: ch.kind == "Dm" ? "person.fill" : "number").foregroundColor(Cal.lime)
+                            IconTile(systemName: ch.kind == "Dm" ? "person" : "number")
                             Text(ch.name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption).foregroundColor(Cal.textDim)
@@ -201,17 +211,19 @@ struct ChannelsView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("New channel") { showNew = true }
-                    Button("Invite people") {
-                        Task {
-                            let code = await service.makeInvite(space)
-                            if let code { invite = code } else { inviteError = true }
+                    if service.canInvite {
+                        Button("Invite people") {
+                            Task {
+                                let code = await service.makeInvite(space)
+                                if let code { invite = code } else { inviteError = true }
+                            }
                         }
                     }
                     Button("Sync now") { Task { await service.resync(space) } }
                 } label: {
                     Image(systemName: "plus")
                 }
-                .foregroundColor(Cal.lime)
+                .foregroundColor(Cal.accentInk)
                 .accessibilityIdentifier("channelAdd")
             }
         }
@@ -290,12 +302,19 @@ struct ChannelView: View {
                 let t = draft; draft = ""
                 Task { await service.sendMessage(channel, t) }
             } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.system(size: 30)).foregroundColor(Cal.lime)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundColor(Cal.text)
+                    .frame(width: 36, height: 36)
+                    .background(Circle().fill(Cal.lime))
+                    .overlay(Circle().stroke(Color.black.opacity(0.06), lineWidth: 1))
             }
             .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
             .accessibilityIdentifier("sendMessage")
         }
-        .padding(10).background(Cal.bg)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(Cal.surface)
+        .overlay(alignment: .top) { Divider().overlay(Cal.border) }
     }
 }
 
@@ -338,11 +357,10 @@ struct InviteSheet: View {
             .navigationTitle("Invite")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.foregroundColor(Cal.lime) }
+                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() }.foregroundColor(Cal.accentInk) }
             }
         }
-        .preferredColorScheme(.dark)
-        .tint(Cal.lime)
+        .tint(Cal.accentInk)
     }
 }
 
@@ -374,19 +392,20 @@ struct JoinSheet: View {
                     } label: {
                         Image(systemName: "doc.on.clipboard").font(.body)
                     }
-                    .foregroundColor(Cal.lime)
+                    .foregroundColor(Cal.accentInk)
                     .disabled(service.busy)
                 }
                 Button {
                     Task {
                         // Strip any whitespace/newlines a paste may have introduced.
-                        await service.joinSpace(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                        if service.status.hasPrefix("✓") { dismiss() }
+                        if await service.joinSpace(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                            dismiss()
+                        }
                     }
                 } label: {
                     if service.busy {
                         HStack(spacing: 8) {
-                            ProgressView().tint(Cal.bg); Text("Joining…")
+                            ProgressView().tint(Cal.text); Text("Joining…")
                         }
                     } else {
                         Text("Join space")
@@ -397,10 +416,10 @@ struct JoinSheet: View {
 
                 if !service.status.isEmpty {
                     HStack(spacing: 8) {
-                        if service.busy { ProgressView().tint(Cal.lime) }
+                        if service.busy { ProgressView().tint(Cal.accentInk) }
                         Text(service.status)
                             .font(.caption)
-                            .foregroundColor(service.status.hasPrefix("✗") ? Cal.error : Cal.textDim)
+                            .foregroundColor(service.statusIsError ? Cal.error : Cal.textDim)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -410,12 +429,11 @@ struct JoinSheet: View {
             .navigationTitle("Join a space").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close") { dismiss() }.foregroundColor(Cal.lime).disabled(service.busy)
+                    Button("Close") { dismiss() }.foregroundColor(Cal.accentInk).disabled(service.busy)
                 }
             }
         }
-        .preferredColorScheme(.dark)
-        .tint(Cal.lime)
+        .tint(Cal.accentInk)
     }
 }
 
@@ -434,11 +452,11 @@ struct MessageRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
-                    Text(ChatTime.short(message.timestamp)).font(.caption2).foregroundColor(Cal.textDim)
+                    Text(ChatTime.short(message.timestamp)).font(.caption).foregroundColor(Cal.textFaint)
                 }
                 Text(message.text)
                     .font(.subheadline)
-                    .foregroundColor(Cal.text.opacity(0.92))
+                    .foregroundColor(Cal.text)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
@@ -450,7 +468,7 @@ struct MessageRow: View {
 /// A colored initials avatar (deterministic color per name).
 struct ChatAvatar: View {
     let name: String
-    var size: CGFloat = 34
+    var size: CGFloat = 32
 
     private var initials: String {
         let parts = name.split(separator: " ")
@@ -458,20 +476,24 @@ struct ChatAvatar: View {
         return (joined.isEmpty ? String(name.prefix(1)) : joined).uppercased()
     }
 
-    private var color: Color {
-        let palette: [UInt] = [0xA5FF11, 0xFF7A00, 0x38BD_F8, 0xF472_B6, 0xA78B_FA, 0x34D3_99, 0xFBBF_24]
+    /// Calimero avatar tones (background, foreground), chosen by name hash.
+    private var tone: (Color, Color) {
+        let tones: [(UInt, UInt)] = [
+            (0xF0FFD6, 0x4A7300), (0xE6EEFB, 0x1D4F9F), (0xFBE9E4, 0x9A3412),
+            (0xEFE8FB, 0x5B3AA8), (0xFDF3DC, 0x8A5300), (0xE2F4F1, 0x116A5C),
+        ]
         var hash = 5381
         for byte in name.utf8 { hash = ((hash << 5) &+ hash) &+ Int(byte) }
-        let index = ((hash % palette.count) + palette.count) % palette.count
-        return Color(hex: palette[index])
+        let pick = tones[((hash % tones.count) + tones.count) % tones.count]
+        return (Color(hex: pick.0), Color(hex: pick.1))
     }
 
     var body: some View {
         Text(initials)
             .font(.system(size: size * 0.4, weight: .bold))
-            .foregroundColor(Cal.bg)
+            .foregroundColor(tone.1)
             .frame(width: size, height: size)
-            .background(color)
+            .background(tone.0)
             .clipShape(Circle())
     }
 }
@@ -484,5 +506,24 @@ enum ChatTime {
     }()
     static func short(_ milliseconds: Int) -> String {
         formatter.string(from: Date(timeIntervalSince1970: Double(milliseconds) / 1000))
+    }
+}
+
+/// Dashed empty state: icon tile, title, body.
+struct EmptyState: View {
+    let icon: String
+    let title: String
+    let message: String
+    var body: some View {
+        VStack(spacing: 10) {
+            IconTile(systemName: icon, size: 40)
+            Text(title).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+            Text(message).font(.footnote).foregroundColor(Cal.textDim).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28).padding(.horizontal, 20)
+        .overlay(
+            RoundedRectangle(cornerRadius: Cal.cardRadius)
+                .stroke(Cal.borderStrong, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
     }
 }

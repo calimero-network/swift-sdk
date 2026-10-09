@@ -17,8 +17,34 @@ struct OpField: Identifiable, Sendable {
     }
 }
 
+/// What a Cloud / relay operation runs against.
+struct CloudOpContext: Sendable {
+    let signIn: CloudSignIn
+    /// `nil` when the account has no relay yet.
+    let relay: RelayClient?
+    let session: CloudSession?
+    /// The whole connection (relay, Bearer reads, attested node key).
+    var connection: CloudConnection?
+
+    func requireConnection() throws -> CloudConnection {
+        guard let connection, connection.relay != nil else {
+            throw AccountError.notSignedIn("No relay serves this account yet.")
+        }
+        return connection
+    }
+
+    func requireRelay() throws -> RelayClient {
+        guard let relay else { throw AccountError.notSignedIn("No relay serves this account yet.") }
+        return relay
+    }
+}
+
 /// A single invokable SDK method: metadata + input fields + an async runner that
 /// returns a rendered (pretty-printed) result string.
+///
+/// Node-admin operations run against the session's `Mero` (on a Cloud session,
+/// the relay's Bearer session). Cloud / relay operations run against the
+/// account layer instead (`cloudRun`).
 struct SDKOperation: Identifiable, Sendable {
     let id: String
     let category: String
@@ -26,11 +52,44 @@ struct SDKOperation: Identifiable, Sendable {
     let summary: String
     let fields: [OpField]
     let run: @Sendable (Mero, [String: String]) async throws -> String
+    let cloudRun: (@Sendable (CloudOpContext, [String: String]) async throws -> String)?
+
+    init(
+        id: String, category: String, name: String, summary: String, fields: [OpField],
+        run: @escaping @Sendable (Mero, [String: String]) async throws -> String
+    ) {
+        self.id = id; self.category = category; self.name = name; self.summary = summary
+        self.fields = fields; self.run = run; self.cloudRun = nil
+    }
+
+    private init(
+        id: String, category: String, name: String, summary: String, fields: [OpField],
+        cloudRun: @escaping @Sendable (CloudOpContext, [String: String]) async throws -> String
+    ) {
+        self.id = id; self.category = category; self.name = name; self.summary = summary
+        self.fields = fields
+        self.run = { _, _ in throw AccountError.notSignedIn("a Cloud operation") }
+        self.cloudRun = cloudRun
+    }
+
+    /// An operation on the account layer (Cloud manager, relay, warrants).
+    static func cloud(
+        id: String, name: String, summary: String, fields: [OpField] = [],
+        category: String = "Cloud & Relay",
+        _ run: @escaping @Sendable (CloudOpContext, [String: String]) async throws -> String
+    ) -> SDKOperation {
+        SDKOperation(id: id, category: category, name: name, summary: summary, fields: fields, cloudRun: run)
+    }
 }
 
 // MARK: - Rendering / decoding helpers
 
 enum Fmt {
+    /// Parse a JSON field into a `JSONValue` (empty → `{}`).
+    static func value(_ s: String) throws -> JSONValue {
+        try decode(s, JSONValue.self)
+    }
+
     static func json<T: Encodable>(_ value: T) -> String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

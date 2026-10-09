@@ -1,32 +1,87 @@
 import Foundation
 import MeroKit
+import MeroKitUI
 
-/// Holds the authenticated `Mero` client for the explorer, drives login/logout,
-/// and keeps a diagnostics log so connection/auth problems are debuggable in-app.
+/// The explorer's session: Cloud sign-in (wallet passkey → device certificate
+/// → hosted relay), the live relay connection, and a diagnostics log.
+///
+/// There is no node URL and no password in the UI. The one exception is the
+/// development hook for the real-node e2e harnesses: launched with `E2E_NODE`,
+/// `E2E_NODE_USER` and `E2E_NODE_PASS` in the environment, the app signs in to
+/// that node directly at launch. Nothing in the UI exposes it.
 @MainActor
 final class MeroSession: ObservableObject {
     struct LogLine: Identifiable {
-        enum Level: String { case info = "•", ok = "✓", warn = "!", err = "✗", req = "→" }
+        enum Level {
+            case info, ok, warn, err, req
+
+            /// SF Symbol for the level (no glyphs in the UI).
+            var symbol: String {
+                switch self {
+                case .info: return "circle.fill"
+                case .ok: return "checkmark.circle"
+                case .warn: return "exclamationmark.triangle"
+                case .err: return "xmark.circle"
+                case .req: return "arrow.right"
+                }
+            }
+
+            var tag: String {
+                switch self {
+                case .info: return "info"
+                case .ok: return "ok"
+                case .warn: return "warn"
+                case .err: return "error"
+                case .req: return "req"
+                }
+            }
+        }
+
         let id = UUID()
         let time: Date
         let level: Level
         let text: String
     }
 
+    static let callbackScheme = "mero-sample"
+
     @Published private(set) var isAuthenticated = false
     @Published private(set) var isLoading = false
-    @Published var nodeURL = "http://localhost:4001"
-    @Published var username = ""
     @Published var errorMessage: String?
-    @Published private(set) var nodeSummary = ""
+    /// The signed-in account, 64 hex.
+    @Published private(set) var account: String?
+    /// The relay serving it, or nil (signed in without a relay).
+    @Published private(set) var relayURL: String?
+    /// A note about the relay or reads, to show as a callout.
+    @Published private(set) var note: String?
+    /// The development node, when signed in through the e2e hook.
+    @Published private(set) var devNodeURL: String?
     @Published private(set) var logs: [LogLine] = []
-    /// One chat service for the whole session, so its installed-app state
-    /// survives closing/reopening the chat sheet.
+    /// One chat service for the whole session.
     @Published private(set) var chat: ChatService?
 
-    private(set) var mero: Mero?
-    private let sso = SsoWebLogin()
-    private let callbackScheme = "merokit"
+    private(set) var connection: CloudConnection?
+    private var devMero: Mero?
+    let signIn: CloudSignIn
+    private let web: any WebAuthenticating
+    private let urlSession: URLSession
+
+    /// The `Mero` for admin calls: the relay's Bearer session, or the dev node.
+    var mero: Mero? { connection?.mero ?? devMero }
+    var relay: RelayClient? { connection?.relay }
+
+    /// A display name for chat and the header.
+    var displayName: String {
+        if let name = ProcessInfo.processInfo.environment["E2E_USERNAME"], !name.isEmpty { return name }
+        if let account { return "Account \(account.prefix(6))" }
+        return devMero == nil ? "" : "dev"
+    }
+
+    init(signIn: CloudSignIn, web: any WebAuthenticating, urlSession: URLSession = .shared) {
+        self.signIn = signIn
+        self.web = web
+        self.urlSession = urlSession
+    }
 
     private static let ts: DateFormatter = {
         let f = DateFormatter()
@@ -34,146 +89,144 @@ final class MeroSession: ObservableObject {
         return f
     }()
 
-    private func log(_ level: LogLine.Level, _ text: String) {
+    func log(_ level: LogLine.Level, _ text: String) {
         logs.append(LogLine(time: Date(), level: level, text: text))
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
-        // Also emit to stdout so logs are readable via Xcode console or
-        // `xcrun simctl launch --console-pty`, outside the app.
-        print("[MeroKit] \(Self.ts.string(from: Date())) \(level.rawValue) \(text)")
+        print("[MeroKit] \(Self.ts.string(from: Date())) \(level.tag) \(text)")
     }
 
     func clearLogs() { logs.removeAll() }
 
-    /// The whole log as copy-pasteable text.
     func logText() -> String {
-        logs.map { "\(Self.ts.string(from: $0.time)) \($0.level.rawValue) \($0.text)" }.joined(separator: "\n")
+        logs.map { "\(Self.ts.string(from: $0.time)) [\($0.level.tag)] \($0.text)" }.joined(separator: "\n")
     }
 
-    /// Hosted-SSO login: open the node's `/auth/login` page (admin mode), let the
-    /// user authenticate there, and adopt the tokens from the callback fragment —
-    /// the same redirect flow mero-chat/mero-react use, via ASWebAuthenticationSession.
-    func connect(nodeURL nodeURLString: String) async {
-        errorMessage = nil
-        log(.req, "SSO connect \(nodeURLString)")
-        guard let base = URL(string: nodeURLString), base.scheme != nil else {
-            errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
-            log(.err, "invalid node URL")
+    // MARK: - Launch
+
+    /// Restore a previous Cloud session, or use the e2e dev-node hook.
+    func start() async {
+        let env = ProcessInfo.processInfo.environment
+        if let node = env["E2E_NODE"], !node.isEmpty, let user = env["E2E_NODE_USER"], let pass = env["E2E_NODE_PASS"] {
+            await connectDevelopmentNode(node, username: user, password: pass)
             return
         }
+        guard let stored = await signIn.restoreSession() else { return }
+        log(.info, "restoring Cloud session for \(stored.account.prefix(12))…")
         isLoading = true
         defer { isLoading = false }
+        adopt(await signIn.connect(stored))
+    }
 
-        let loginURLString = Mero.buildAuthLoginUrl(
-            nodeUrl: nodeURLString,
-            options: AuthLoginOptions(
-                callbackUrl: "\(callbackScheme)://auth-callback", mode: "admin", permissions: ["admin"]))
-        log(.info, "opening \(loginURLString)")
-        guard let loginURL = URL(string: loginURLString) else {
-            errorMessage = "Could not build the login URL."
-            log(.err, "bad login URL")
-            return
-        }
+    // MARK: - Cloud sign-in
+
+    func signInWithCloud() async {
+        errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
+        let callback = CloudCallback.scheme(Self.callbackScheme)
         do {
-            let callback = try await sso.authenticate(loginURL: loginURL, callbackScheme: callbackScheme)
-            log(.info, "callback received (\(callback.absoluteString.prefix(60))…)")
-            guard let result = Mero.parseAuthCallback(callback.absoluteString) else {
-                errorMessage = "The login page returned no tokens."
-                log(.err, "no access_token in callback fragment")
-                return
-            }
-            let client = Mero(config: MeroConfig(baseURL: base, tokenStore: MemoryTokenStore()))
-            await client.setTokenData(from: result)
-            self.mero = client
-            self.nodeURL = nodeURLString
-            self.username = "admin"
-            self.isAuthenticated = true
-            self.chat = ChatService(mero: client, username: self.username)
-            log(.ok, "authenticated via SSO — tokens adopted")
-            await refreshSummary()
+            let walletURL = try await signIn.beginEnrolment(callbackURL: callback.url)
+            log(.req, "opening wallet \(walletURL.host ?? "")")
+            let returned = try await web.authenticate(url: walletURL, callback: callback)
+            try await complete(returned)
+        } catch is WebAuthenticationCancelled {
+            log(.info, "sign-in sheet dismissed")
         } catch {
-            isAuthenticated = false
             errorMessage = friendly(error)
-            log(.err, "SSO login failed — \(detail(error))")
+            log(.err, "sign-in failed: \(detail(error))")
         }
     }
 
-    func login(nodeURL nodeURLString: String, username: String, password: String) async {
-        errorMessage = nil
-        log(.req, "connect \(nodeURLString) as “\(username.isEmpty ? "<empty>" : username)”")
-        guard let url = URL(string: nodeURLString), url.scheme != nil else {
-            errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
-            log(.err, "invalid node URL")
-            return
-        }
-        guard !username.isEmpty, !password.isEmpty else {
-            errorMessage = "Username and password are required."
-            log(.warn, "missing username or password — nothing sent")
-            return
-        }
+    /// A callback delivered to the app itself (`onOpenURL`).
+    func handleCallback(_ url: URL) async {
+        guard url.scheme == Self.callbackScheme else { return }
         isLoading = true
         defer { isLoading = false }
-
-        let client = Mero(config: MeroConfig(baseURL: url, tokenStore: MemoryTokenStore()))
         do {
-            log(.info, "POST \(url.absoluteString)/auth/token …")
-            _ = try await client.authenticate(Credentials(username: username, password: password))
-            self.mero = client
-            self.nodeURL = nodeURLString
-            self.username = username
-            self.isAuthenticated = true
-            self.chat = ChatService(mero: client, username: self.username)
-            log(.ok, "authenticated — token acquired")
-            await refreshSummary()
+            try await complete(url)
         } catch {
-            self.isAuthenticated = false
-            self.errorMessage = friendly(error)
-            log(.err, "login failed — \(detail(error))")
+            errorMessage = friendly(error)
+            log(.err, "callback refused: \(detail(error))")
         }
     }
+
+    private func complete(_ url: URL) async throws {
+        let session = try await signIn.completeEnrolment(callbackURL: url)
+        log(.ok, "device certified for account \(session.account.prefix(12))…")
+        log(.info, session.relayUrl.map { "relay: \($0)" } ?? "no relay yet")
+        adopt(await signIn.connect(session))
+    }
+
+    private func adopt(_ connection: CloudConnection) {
+        self.connection = connection
+        account = connection.session.account
+        relayURL = connection.session.relayUrl
+        note = connection.readNote ?? connection.session.note
+        if let readNote = connection.readNote { log(.warn, readNote) }
+        if connection.mero != nil { log(.ok, "relay session established") }
+        chat = ChatService(backend: .relay(connection, signIn), username: displayName)
+        isAuthenticated = true
+    }
+
+    /// Re-connect after the session changed (a join adopted a relay).
+    func reconnect() async {
+        guard let stored = await signIn.restoreSession() else { return }
+        adopt(await signIn.connect(stored))
+    }
+
+    // MARK: - Development node (e2e hook only)
+
+    private func connectDevelopmentNode(_ urlString: String, username: String, password: String) async {
+        guard let url = URL(string: urlString) else { return }
+        isLoading = true
+        defer { isLoading = false }
+        log(.req, "development node \(urlString)")
+        let client = Mero(config: MeroConfig(baseURL: url, tokenStore: MemoryTokenStore()), session: urlSession)
+        do {
+            _ = try await client.authenticate(Credentials(username: username, password: password))
+            devMero = client
+            devNodeURL = urlString
+            chat = ChatService(backend: .node(client), username: displayName)
+            isAuthenticated = true
+            log(.ok, "authenticated on the development node")
+        } catch {
+            errorMessage = friendly(error)
+            log(.err, "development node login failed: \(detail(error))")
+        }
+    }
+
+    // MARK: - Sign out
 
     func logout() async {
-        log(.req, "logout")
-        if let mero { await mero.logout() }
-        mero = nil
+        log(.req, "sign out")
+        if connection != nil { await signIn.signOut() }
+        if let devMero { await devMero.logout() }
+        connection = nil
+        devMero = nil
+        devNodeURL = nil
+        account = nil
+        relayURL = nil
+        note = nil
         chat = nil
         isAuthenticated = false
-        nodeSummary = ""
         log(.ok, "signed out")
     }
 
-    private func refreshSummary() async {
-        guard let mero else { return }
-        do {
-            let id = try await mero.auth.getIdentity()
-            let peers = try? await mero.admin.getPeersCount()
-            var line = "\(id.service) · \(id.version) · \(id.authenticationMode)"
-            if let peers { line += " · \(peers.count) peers" }
-            nodeSummary = line
-            log(.info, "identity: \(line)")
-        } catch {
-            nodeSummary = "connected"
-            log(.warn, "identity fetch failed — \(detail(error))")
-        }
-    }
+    // MARK: - Messages
 
-    /// Short, user-facing message.
     private func friendly(_ error: Error) -> String {
         switch error {
-        case MeroError.authRevoked: return "Session revoked — sign in again."
-        case MeroError.authenticationFailed: return "Login failed — check your username and password."
-        case MeroError.network(let m): return "Can't reach the node: \(m)"
-        default:
-            if let u = error as? URLError { return "Can't reach the node (\(u.code))." }
-            return (error as? LocalizedError)?.errorDescription ?? "Something went wrong."
+        case AccountError.enrolmentDeclined: return "This device was not approved. You can try again."
+        case AccountError.stateMismatch: return "That sign-in did not come from this app. Please try again."
+        case AccountError.credentialRejected:
+            return "The wallet's answer could not be verified, so nothing was saved."
+        case MeroError.network(let m): return "Can't reach Calimero: \(m)"
+        default: return (error as? LocalizedError)?.errorDescription ?? "Something went wrong."
         }
     }
 
-    /// Verbose one-line detail for the diagnostics log — distinguishes a
-    /// connectivity failure (URLError) from an auth rejection, with the URL.
     private func detail(_ error: Error) -> String {
-        if let u = error as? URLError {
-            return "URLError \(u.errorCode) (\(u.code)) url=\(u.failingURL?.absoluteString ?? nodeURL)"
-        }
+        if let u = error as? URLError { return "URLError \(u.errorCode) url=\(u.failingURL?.absoluteString ?? "")" }
         return String(reflecting: error)
     }
 }

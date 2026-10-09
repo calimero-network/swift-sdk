@@ -81,7 +81,38 @@ targets: [
 
 Or in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
 
-## Quick start
+## Sign in with Calimero Cloud (mobile)
+
+Mobile apps sign in with **Calimero Cloud** only: the person approves this
+device with their passkey on the Calimero wallet (in the system auth sheet),
+the wallet returns a certificate for a device key that never leaves the app,
+and the app talks to the hosted relay that serves their account. No node URL,
+no password.
+
+```swift
+import MeroKitUI
+
+@StateObject private var client = MeroClient()
+// …
+MeroRootView(callbackScheme: "myapp").environmentObject(client)
+// or, from your own button:
+await client.signInWithCloud(callbackScheme: "myapp")
+```
+
+Without the UI layer, `CloudSignIn` does the same in four calls
+(`beginEnrolment` → present the URL → `completeEnrolment` → `connect`) and hands
+back a `RelayClient` (warranted writes, query reads) plus a `Mero` holding the
+relay's Bearer session (admin reads, SSE). See
+[Authentication](docs/src/content/docs/get-started/authentication.mdx).
+
+> The hosted wallet returns only to `https://` callbacks today; app-scheme
+> callbacks are a pending wallet change. The SDK accepts either. The relay's
+> node key is taken from its TEE attestation over TLS; full DCAP quote
+> verification is a follow-up (pluggable via `RelayKeyVerifier`).
+
+## Quick start (development node)
+
+The steps below talk to a node you run yourself.
 
 ### 1. Create the client
 
@@ -189,15 +220,23 @@ struct MyApp: App {
     @StateObject private var client = MeroClient()
     var body: some Scene {
         WindowGroup {
-            MeroRootView().environmentObject(client)   // routes Login ⇄ Home on auth state
+            // Restores a stored session, else shows the Cloud sign-in screen.
+            MeroRootView(callbackScheme: "myapp").environmentObject(client)
         }
     }
 }
 ```
 
 `MeroClient` is an `@MainActor ObservableObject` exposing `isAuthenticated`,
-`login(...)`, `runSampleRpc(...)`, `logout()`, and friendly error text. A full
-SwiftUI sample app lives in `Examples/MeroSampleApp`.
+`signInWithCloud(callbackScheme:)`, `handleEnrolmentCallback(_:)`, the session
+(`account`, `relayURL`, `isSignedInWithoutRelay`, `connection`),
+`runSampleRpc(...)`, `logout()`, and friendly error text. `LoginView` is a single
+"Continue with Calimero" button (accessibility ids `loginTitle`,
+`cloudSignInButton`, `loginError`, and `loginButton` on the sign-in panel).
+
+A full SwiftUI sample app lives in `Examples/MeroSampleApp`: Cloud sign-in, a
+chat example running on the relay, and an explorer for every SDK method, in the
+Calimero light design. Its wallet callback scheme is `mero-sample`.
 
 ## Runnable example
 
