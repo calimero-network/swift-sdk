@@ -69,6 +69,29 @@ strings ascending.
 | `syncContext(_ contextId: String? = nil)` | `POST /contexts/sync/{contextId?}` |
 | `resyncContext(_ contextId: String, request: ResyncContextRequest = .init()) -> ResyncContextResponseData` | `POST /contexts/{contextId}/resync` |
 | `performIntent(_ contextId: String, request: PerformIntentRequest) -> PerformIntentResponseData` | `POST /contexts/{contextId}/intents` |
+| `getIntentRelay(_ contextId: String) -> IntentRelayInfo` | `GET /contexts/{contextId}/intents` |
+| `queryContext(_ contextId: String, request: QueryContextRequest) -> QueryContextResponseData` | `POST /contexts/{contextId}/query` |
+| `postPresenceIntent(_ contextId: String, request: PresenceIntentRequest)` | `POST /contexts/{contextId}/presence-intents` |
+| `getWarrantNonce(_ contextId: String, authorDeviceKey: String) -> WarrantNonceState` | `GET /contexts/{contextId}/warrant-nonce/{key}` |
+| `getWarrantNonceAsAuthor(_ contextId: String, authorProof: String) -> WarrantNonceState` | `POST /contexts/{contextId}/warrant-nonce` |
+
+### Account reads and delegated intents (core rc.83)
+
+`queryContext` reads a context **as the session's account**. It needs an
+account-authenticated (`account_proof`) session, membership of the owning group
+(`403` otherwise), and a method the ABI marks read-only (`409` otherwise). A
+method error is a `400` with `type: "FunctionCallError"`, readable through
+`MeroError.refusal` (see [Error model](/reference/error-model/)).
+
+`getIntentRelay` answers what a warrant for this node must name: `executorAccount`,
+`executorKey`, `releaseBytecodeId` and `releaseVersion` (the last three are new in
+rc.83, and a warrant minted for rc.41 is refused). `canAuthorOnBehalf: false` is
+the default state of every context, not an error. The warrant, author proof and
+presence signature are minted by the caller; these methods only carry them.
+
+The warrant-nonce routes are in mero-js but **not served by core rc.83**, which
+answers `404`. Treat a 404 as "fall back to your own counter". Nonces are
+`UInt64` and decoded exactly.
 
 ### Context identity
 
@@ -136,6 +159,15 @@ rotates.
 | `rescopeDevice(_ deviceId: String, request: RescopeDeviceRequest) -> RescopeDeviceResponseData` | `PUT /account/devices/{deviceId}/scope` |
 | `labelDevice(_ deviceId: String, request: LabelDeviceRequest) -> LabelDeviceResponseData` | `PUT /account/devices/{deviceId}/label` |
 | `revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) -> RevokeDeviceResponseData` | `POST /namespaces/{namespaceId}/account/revoke` |
+| `linkAccountDevice(_ namespaceId: String, request: LinkAccountDeviceRequest) -> LinkAccountDeviceResponseData` | `POST /namespaces/{namespaceId}/account/link-device` |
+| `signWithAccountRoot(_ request: AccountSignWithRootRequest) -> AccountSignWithRootResponseData` | `POST /account/sign-with-root` |
+| `sealToAccount(_ groupId: String, account: String, request: SealToAccountRequest) -> SealedEnvelope` | `POST /groups/{groupId}/accounts/{account}/seal` |
+
+rc.83: the pairing `statement` is now 72 bytes (144 hex) with a timestamp, and
+goes stale after 300 s. The SDK relays it opaquely, so nothing changes for a
+caller beyond completing the pairing promptly. `signWithAccountRoot` returns a
+**base64** signature; `AccountSignWithRootRequest(domain:text:)` hex-encodes a
+text challenge for you.
 
 ## Blobs
 
@@ -202,8 +234,20 @@ answers all four with 404.
 | `joinNamespace(_ namespaceId: String, request: JoinNamespaceRequest) -> JoinNamespaceResponseData` | `POST /namespaces/{namespaceId}/join` |
 | `leaveNamespace(_ namespaceId: String, request: [String: JSONValue]? = nil)` | `POST /namespaces/{namespaceId}/leave` |
 | `createGroupInNamespace(_ namespaceId: String, request: … = nil) -> CreateGroupInNamespaceResponseData` | `POST /namespaces/{namespaceId}/groups` |
+| `changeNamespaceAdmin(_ namespaceId: String, request: ChangeNamespaceAdminRequest)` | `POST /namespaces/{namespaceId}/admin` |
 | `listNamespaceGroups(_ namespaceId: String) -> [SubgroupEntry]` | `GET /namespaces/{namespaceId}/groups` |
 | `admitJoin(_ namespaceId: String, request: AdmitJoinRequest) -> AdmitJoinResponseData` | `POST /namespaces/{namespaceId}/admit` |
+
+⚠️ **Subgroup visibility.** core rc.83 changed what an absent `visibility` means
+on `POST /namespaces/{id}/groups`: it now creates an **open** subgroup (it used to
+be restricted). `createGroupInNamespace` therefore always sends one, and sends
+`"open"` (`CreateGroupInNamespaceRequest.defaultVisibility`) when you name none,
+matching core and mero-js. Pass `visibility: "restricted"` to keep a subgroup closed.
+
+rc.83 also added `Namespace.founding` (the founder account and salt the id was
+derived from) and `Namespace.heldOps` (group ops this node holds unapplied for
+want of a key). `CreateNamespaceResponseData.founding` carries the same
+founding. A namespace outside an account session's scope answers `404`.
 
 ## Group management
 
@@ -211,17 +255,44 @@ answers all four with 404.
 
 | Method | Endpoint |
 | --- | --- |
+| `createGroup(_ request: CreateGroupRequest) -> CreateGroupResponseData` | `POST /groups` |
 | `createGroup(_ request: [String: JSONValue]) -> CreateGroupResponseData` | `POST /groups` |
 | `getGroupInfo(_ groupId: String) -> GroupInfo` | `GET /groups/{groupId}` |
 | `deleteGroup(_ groupId: String, request: DeleteGroupRequest? = nil) -> DeleteGroupResponseData` | `DELETE /groups/{groupId}` |
+| `ownerDeleteGroup(_ groupId: String, request: RootGuardedOpRequest = .init())` | `POST /groups/{groupId}/owner-delete` |
+| `transferOwnership(_ groupId: String, request: TransferOwnershipRequest)` | `POST /groups/{groupId}/transfer-ownership` |
 | `listGroupMembers(_ groupId: String) -> ListGroupMembersResponseData` | `GET /groups/{groupId}/members` |
 | `listMemberDevices(_ groupId: String, offset: Int? = nil, limit: Int? = nil) -> [MemberDevicesEntry]` | `GET /groups/{groupId}/member-devices` |
+| `listGroupMemberDevices(_ groupId: String, offset: Int? = nil, limit: Int? = nil) -> [MemberDevicesEntry]` | same (the mero-js name) |
 | `listGroupContexts(_ groupId: String) -> [GroupContextEntry]` | `GET /groups/{groupId}/contexts` |
 | `addGroupMembers(_ groupId: String, request: AddGroupMembersRequest)` | `POST /groups/{groupId}/members` |
 | `removeGroupMembers(_ groupId: String, request: RemoveGroupMembersRequest)` | `POST /groups/{groupId}/members/remove` |
 | `updateMemberRole(_ groupId: String, identity:, request: UpdateMemberRoleRequest)` | `PUT /groups/{groupId}/members/{identity}/role` |
 | `setMemberAutoFollow(_ groupId: String, identity:, request: [String: JSONValue])` | `PUT /groups/{groupId}/members/{identity}/auto-follow` |
 | `leaveGroup(_ groupId: String, request: [String: JSONValue]? = nil)` | `POST /groups/{groupId}/leave` |
+
+⚠️ **No `groupId` on create.** core rc.83 derives every group id and refuses a
+`POST /groups` body that names one (`deny_unknown_fields`), so
+`CreateGroupRequest.groupId` was removed. Do not put one in the dictionary form
+either.
+
+`GroupInfo` gained `namespaceId` and `ownerOpCounter` in rc.83. A member `role`
+may now be `"RelayTee"`.
+
+### Root-guarded owner ops (core rc.83)
+
+`transferOwnership`, `ownerDeleteGroup`, `changeNamespaceAdmin`,
+`setTeeAdmissionPolicy` and `setTeeAuthoringPolicy` / `disableTeeAuthoringPolicy`
+take an optional `rootProof`: hex borsh of an
+`AccountProof<OwnerOpAuthorization>` that names the group's `namespaceId` and its
+current `ownerOpCounter` (both from `getGroupInfo`). Omit it on a node that holds
+the owner's account root; never send `""`.
+
+| Refusal | Status |
+| --- | --- |
+| Proof required, signer unbound, wrong account | `403` |
+| Stale counter: re-read `ownerOpCounter` and re-sign | `409` |
+| Invalid or mismatched proof, epoch below recorded | `400` |
 
 ### Capabilities & settings
 
@@ -235,6 +306,25 @@ answers all four with 404.
 | `setSubgroupVisibility(_ groupId: String, request:)` | `PUT /groups/{groupId}/settings/subgroup-visibility` |
 | `getTeeAdmissionPolicy(_ groupId: String) -> GetTeeAdmissionPolicyResponseData` | `GET /groups/{groupId}/settings/tee-admission-policy` |
 | `setTeeAdmissionPolicy(_ groupId: String, request:)` | `PUT /groups/{groupId}/settings/tee-admission-policy` |
+| `setTeeAuthoringPolicy(_ groupId: String, request: SetTeeAuthoringPolicyRequest)` | `PUT /groups/{groupId}/settings/tee-authoring-policy` |
+| `disableTeeAuthoringPolicy(_ groupId: String, request: RootGuardedOpRequest = .init())` | `DELETE /groups/{groupId}/settings/tee-authoring-policy` |
+| `openToDelegatedExecution(_ groupId: String) -> DelegatedExecutionChange` | default caps + `CAN_AUTHOR_ON_BEHALF` |
+| `grantAuthorship(_ groupId: String, account: String) -> DelegatedExecutionChange` | member caps + `CAN_AUTHOR_ON_BEHALF` |
+
+The TEE admission policy has two forms since rc.83, and the node validates them
+strictly (`400`):
+
+- `SetTeeAdmissionPolicyRequest.measurement(...)`: `allowedMrtd` **and**
+  `allowedRtmr1`/`2`/`3` must all be non-empty, even with `acceptMock: true`.
+- `SetTeeAdmissionPolicyRequest.signedRelease(...)`: admit nodes running a signed
+  release with one of `allowedProfiles`; every measurement list is sent empty.
+
+Both take `mode` (`.replica`, the default, or `.relay`) and `rootProof`. The GET
+now reports `enabled`, `signedRelease` and `mode`.
+
+`openToDelegatedExecution` and `grantAuthorship` are read-modify-write: they add
+`Capabilities.canAuthorOnBehalf` (bit 9) and keep every other bit. A relay needs
+this grant before it can run intents for members.
 
 ### Metadata
 
@@ -247,6 +337,19 @@ answers all four with 404.
 | `setContextMetadata(_ groupId: String, contextId:, request:)` | `PUT /groups/{groupId}/contexts/{contextId}/metadata` |
 | `getContextMetadata(_ groupId: String, contextId:) -> MetadataRecord?` | `GET /groups/{groupId}/contexts/{contextId}/metadata` |
 
+### Delegated creation and governance (core rc.83)
+
+| Method | Endpoint |
+| --- | --- |
+| `getContextIntentRelay(_ groupId: String, author: String? = nil) -> ContextIntentRelayInfo` | `GET /groups/{groupId}/context-intents` |
+| `createContextIntent(_ groupId: String, request: CreateContextIntentRequest) -> CreateContextIntentResponseData` | `POST /groups/{groupId}/context-intents` |
+| `getGovernanceIntentRelay(_ groupId: String) -> GovernanceIntentRelayInfo` | `GET /groups/{groupId}/governance-intents` |
+| `governanceIntent(_ groupId: String, request: GovernanceIntentRequest) -> GovernanceIntentResponseData` | `POST /groups/{groupId}/governance-intents` |
+
+These, `/contexts/{id}/intents` and `/presence-intents` are the delegated-execution
+routes. They are public (the warrant is the credential) on a node run with
+`admin.delegated_access = true`, and protected otherwise.
+
 ### Invitations, join & subgroups
 
 | Method | Endpoint |
@@ -257,8 +360,14 @@ answers all four with 404.
 | `listSubgroups(_ groupId: String) -> [SubgroupEntry]` | `GET /groups/{groupId}/subgroups` |
 | `reparentGroup(_ childGroupId: String, request: ReparentGroupRequest) -> ReparentGroupResponseData` | `POST /groups/{childGroupId}/reparent` |
 | `detachContextFromGroup(_ groupId: String, contextId:, request: … = nil)` | `POST /groups/{groupId}/contexts/{contextId}/remove` |
-| `issueOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-ownership-proof` |
-| `issueNamespaceOwnershipProof(_ groupId: String, request: … = nil) -> JSONValue` | `POST /groups/{groupId}/issue-namespace-ownership-proof` |
+| `issueOwnershipProof(_ groupId: String, request: IssueOwnershipProofRequest) -> IssueOwnershipProofResponseData` | `POST /groups/{groupId}/issue-ownership-proof` |
+| `issueNamespaceOwnershipProof(_ groupId: String, request: IssueNamespaceOwnershipProofRequest) -> IssueOwnershipProofResponseData` | `POST /groups/{groupId}/issue-namespace-ownership-proof` |
+| `issueOwnershipProof(_ groupId: String, request: [String: JSONValue]? = nil) -> JSONValue` | untyped form of the above |
+| `issueNamespaceOwnershipProof(_ groupId: String, request: [String: JSONValue]? = nil) -> JSONValue` | untyped form of the above |
+
+A namespace ownership proof carries `founding` and `credential` since rc.83, which
+let a verifier check that the signer belongs to the account that founded the
+namespace.
 
 ### Sync, upgrades & migration
 
@@ -278,7 +387,15 @@ answers all four with 404.
 | --- | --- |
 | `getTeeInfo() -> TeeInfoResponseData` | `GET /tee/info` |
 | `teeAttest(_ request: TeeAttestRequest) -> TeeAttestResponseData` | `POST /tee/attest` |
-| `teeVerifyQuote(_ request: TeeVerifyQuoteRequest) -> TeeVerifyQuoteResponseData` | `POST /tee/verify-quote` |
+| `teeRegistrationAttest(_ request: TeeRegistrationAttestRequest) -> TeeAttestResponseData` | `POST /tee/registration-attest` |
+
+`TeeAttestRequest` takes `bindNodeKey`, `bindTransportKey` and `includeCollateral`
+(rc.83), answered by `boundPublicKey`, `transportPublicKey` and `collateral`. The
+flags are sent only when set.
+
+`teeVerifyQuote` is gone: the node has not served `POST /tee/verify-quote` since
+before rc.41. Verify a quote client-side against the collateral `teeAttest`
+returns with `includeCollateral: true`.
 
 ## Network & node
 
@@ -287,7 +404,8 @@ answers all four with 404.
 | `getPeersCount() -> PeersCountResponseData` | `GET /peers` |
 | `getNetworkStatus() -> JSONValue` | `GET /network/status` |
 | `getUsage() -> JSONValue` | `GET /usage` |
-| `getCertificate() -> String` | `GET /certificate` (PEM) |
+
+`getCertificate` is gone: core rc.83 removed `GET /certificate`.
 
 ## Key domain types
 
@@ -306,6 +424,9 @@ struct Namespace: Codable, Sendable {
   let createdAt: Int
   let name: String?
   let memberCount, contextCount, subgroupCount: Int
+  let appVersion: String?
+  let founding: NamespaceFounding?    // rc.83
+  let heldOps: NamespaceHeldOps?      // rc.83
 }
 
 struct GroupInfo: Codable, Sendable {          // = GroupInfoResponseData
@@ -314,6 +435,9 @@ struct GroupInfo: Codable, Sendable {          // = GroupInfoResponseData
   let subgroupVisibility: String
   let activeUpgrade: GroupUpgradeStatus?
   let metadata: MetadataRecord?
+  let groupStateHash: String?
+  let namespaceId: String?            // rc.83
+  let ownerOpCounter: UInt64?         // rc.83
 }
 
 struct MetadataRecord: Codable, Sendable {

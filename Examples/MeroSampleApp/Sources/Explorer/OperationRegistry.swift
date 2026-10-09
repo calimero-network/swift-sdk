@@ -28,10 +28,6 @@ private let healthOps: [SDKOperation] = [
         id: "adm.usage", category: "Health & Node", name: "getUsage",
         summary: "Storage / usage stats", fields: []
     ) { m, _ in Fmt.json(try await m.admin.getUsage()) },
-    SDKOperation(
-        id: "adm.cert", category: "Health & Node", name: "getCertificate",
-        summary: "Node TLS certificate (PEM)", fields: []
-    ) { m, _ in try await m.admin.getCertificate() },
 ]
 
 // MARK: Auth & Identity
@@ -956,12 +952,6 @@ private let teeOps: [SDKOperation] = [
         summary: "Request an attestation quote", fields: [.json("body", "TeeAttestRequest")]
     ) { m, i in
         Fmt.json(try await m.admin.teeAttest(try Fmt.decode(i.v("body"), TeeAttestRequest.self)))
-    },
-    SDKOperation(
-        id: "tee.verify", category: "TEE", name: "teeVerifyQuote",
-        summary: "Verify an attestation quote", fields: [.json("body", "TeeVerifyQuoteRequest")]
-    ) { m, i in
-        Fmt.json(try await m.admin.teeVerifyQuote(try Fmt.decode(i.v("body"), TeeVerifyQuoteRequest.self)))
     },
 ]
 

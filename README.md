@@ -14,7 +14,7 @@ HTTP(S) call to a remote node's endpoints.
 - Swift 5.9+ (built and tested on Swift 6)
 - iOS 15+ / macOS 12+
 - Zero third-party dependencies (uses `URLSession`, `Foundation`, `Security`).
-- A Calimero node on **core `0.11.0-rc.41`**.
+- A Calimero node on **core `0.11.0-rc.83`**.
 
 ### Which core release?
 
@@ -37,6 +37,30 @@ no request body closed further. What they added is served here —
 ⚠️ rc.39 also removed blob discovery from the DHT, which is a behaviour change
 rather than a wire one: `context_id` is now the only way to reach a blob a peer
 holds, so `getBlob` and `getBlobInfo` take one.
+
+rc.42–rc.83 took things away, and this SDK follows:
+
+- **Log in again after upgrading the node.** Tokens gained a required `key_id`
+  claim, so every token an older node minted is refused. Clear the stored
+  session and `authenticate` again.
+- `getCertificate` (`GET /certificate`) and `teeVerifyQuote`
+  (`POST /tee/verify-quote`) are gone; the node serves neither.
+- `CreateGroupRequest.groupId` is gone: group ids are derived, and a body naming
+  one is a `400`.
+- An absent subgroup `visibility` now means `open`. `createGroupInNamespace`
+  always sends one, `"open"` unless you say otherwise.
+- `setTeeAdmissionPolicy` needs RTMR1–3 as well as MRTD (or the new signed-release
+  form), and is a root-guarded owner op.
+
+And it added: `queryContext`, the delegated intent routes (`getIntentRelay` with
+`executorKey` and release, context, governance and presence intents), root-guarded
+owner ops (`transferOwnership`, `changeNamespaceAdmin`, `ownerDeleteGroup`,
+`setTeeAuthoringPolicy`), `signWithAccountRoot`, `linkAccountDevice`,
+`sealToAccount`, `Capabilities.canAuthorOnBehalf` with
+`openToDelegatedExecution` / `grantAuthorship`, `POST /auth/logout` (now called by
+`mero.logout()`), group-keyed SSE subscriptions, typed refusals
+(`MeroError.refusal`) and the `ReadOnlyWriteRefused` JSON-RPC error. See
+[CHANGELOG.md](CHANGELOG.md).
 
 Bumping to a newer core is a one-line change there, plus whatever wire changes
 it brings to `Sources/MeroKit/Admin`.

@@ -31,6 +31,20 @@ the shared [`HttpClient`](/reference/error-model/#transport); methods are
 | `generateMockTokens(_ request: MockTokenRequest) -> TokenResponse` | `POST /auth/mock-token` (dev) |
 | `validateToken(_ token: String) -> TokenValidation` | `HEAD /auth/validate` — `async`, **not** `throws` |
 | `revokeTokens(_ request: RevokeTokenRequest) -> RevokeTokenResponse` | `POST /admin/revoke` |
+| `logout(_ request: LogoutRequest) -> LogoutResponse` | `POST /auth/logout` (core rc.83) |
+
+`await mero.logout()` calls `logout` with the stored refresh token, then clears
+the session locally. The server half is best-effort: an unreachable node, an
+older node without the route, or a `401` for a token the node already refuses
+never keeps the caller logged in.
+
+<Aside type="caution">
+  **Log in again after upgrading the node to core rc.83.** Tokens gained a
+  required `key_id` claim, so every access and refresh token minted by an older
+  node fails verification. A stored session from before the upgrade surfaces as a
+  `401`; clear it (`await mero.clearToken()`) and call `authenticate` again. A
+  token's `sub` is now an opaque user id, not a key id or username.
+</Aside>
 
 ## Root keys
 
@@ -52,6 +66,16 @@ a replacement.
 | `listClientKeys() -> [ClientKey]` | `GET /admin/keys/clients` |
 | `generateClientKey(_ request: GenerateClientKeyRequest) -> TokenResponse` | `POST /admin/client-key` |
 | `deleteClientKey(keyId: String, clientId: String) -> DeleteClientResponse` | `DELETE /admin/keys/{keyId}/clients/{clientId}` |
+
+`GenerateClientKeyRequest` takes `applicationId` (binds the key to one app) and
+`ttlSecs` since rc.83. A client key is narrower than the session that mints it:
+
+- It **expires**. `ttlSecs` defaults to 30 days and there is no non-expiring key.
+  Its access token lives 15 minutes and its refresh token 7 days.
+- `keys:*` permissions are never grantable to it, and `admin` only when it binds
+  no context (no `contextId`, no `contextIdentity`). Anything else is a `400`.
+- It acts **only** on the contexts and groups it is bound to. Elsewhere it gets a
+  `403`, including on JSON-RPC and SSE subscribe.
 
 ## Key types
 

@@ -38,6 +38,16 @@ public struct AuthApi: Sendable {
         try await http.post("/auth/refresh", json: request)
     }
 
+    /// Retire a refresh token on the node (`POST /auth/logout`, new in core
+    /// rc.83), so a copy of it can no longer mint access tokens.
+    ///
+    /// An invalid or already-retired token is a `401`.
+    @discardableResult
+    public func logout(_ request: LogoutRequest) async throws -> LogoutResponse {
+        let resp: ApiResponse<LogoutResponse> = try await http.post("/auth/logout", json: request)
+        return resp.data ?? LogoutResponse(success: true)
+    }
+
     public func generateMockTokens(_ request: MockTokenRequest) async throws -> TokenResponse {
         try await http.post("/auth/mock-token", json: request)
     }

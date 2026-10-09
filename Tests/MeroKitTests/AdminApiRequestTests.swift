@@ -101,6 +101,8 @@ struct CapturedRequest: Sendable {
     let path: String
     let query: String?
     let body: Data?
+    /// The `Authorization` header, when a test records it.
+    var authorization: String?
 
     var jsonBody: [String: Any]? {
         guard let body, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
@@ -137,5 +139,10 @@ final class RequestRecorder: @unchecked Sendable {
 
     private func record(_ request: CapturedRequest) {
         lock.lock(); _requests.append(request); lock.unlock()
+    }
+
+    /// Record a request a custom handler built.
+    func appendCaptured(_ request: CapturedRequest) {
+        record(request)
     }
 }

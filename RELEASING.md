@@ -32,6 +32,14 @@ SPM reads the Git tags of this repo and picks the best match for `from:` /
 That’s it — consumers can now resolve `0.1.0`. (A GitHub Release is optional for
 SPM resolution but nice for humans/changelogs; the tag is what SPM needs.)
 
+### Release notes for a core bump
+
+Every release that moves `ci/core-version` gets an entry in
+[CHANGELOG.md](CHANGELOG.md) with an **Upgrade notes** section. Name anything a
+caller must do by hand. For core rc.83 that is: log in again after the node
+upgrade (tokens need a `key_id` claim, so older tokens are refused), and
+`mero.logout()` is now `async`.
+
 ### Versioning policy
 
 Semver. We track the `mero-js` wire contract this SDK implements — aim to keep the

@@ -16,7 +16,7 @@ mask. Use them with the group capability methods on
 
 ## Constants
 
-Core `MemberCapabilities`, bits 0–8:
+Core `MemberCapabilities`, bits 0–9:
 
 ```swift
 public enum Capabilities {
@@ -29,6 +29,7 @@ public enum Capabilities {
     public static let canDeleteSubgroup:     UInt32 = 1 << 6
     public static let canManageVisibility:   UInt32 = 1 << 7
     public static let canManageMetadata:     UInt32 = 1 << 8
+    public static let canAuthorOnBehalf:     UInt32 = 1 << 9   // rc.83: run intents for others (relays)
 }
 ```
 

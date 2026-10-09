@@ -63,7 +63,7 @@ func currentTokenData() -> TokenData?         // current bundle (debug / handoff
 func setTokenData(_ data: TokenData)          // set directly; derives expiresAt from the JWT
 func setTokenData(from callback: AuthCallbackResult)  // from a parsed SSO callback
 func clearToken()                             // drop the bundle + clear the store
-func logout()                                 // clearToken() + close()
+func logout() async                           // POST /auth/logout (best-effort), clearToken() + close()
 func close()                                  // release long-lived actor resources
 ```
 

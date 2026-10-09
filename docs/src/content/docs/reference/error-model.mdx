@@ -42,6 +42,38 @@ public struct HTTPError: Error, Sendable, Equatable {
 }
 ```
 
+### Typed refusals (core rc.83)
+
+Since core rc.83 most refusals carry a precise status instead of a blanket `500`,
+and the body is still `{"error": "..."}`. Method errors from
+`/contexts/{id}/query` and `/contexts/{id}/intents` add `type` and `data`, the same
+pair a JSON-RPC error carries. Read them without parsing `bodyText` yourself:
+
+```swift
+public struct ErrorRefusal: Sendable, Equatable {
+  public let message: String?   // "error"
+  public let type: String?      // e.g. "FunctionCallError"
+  public let data: JSONValue?
+}
+
+extension HTTPError { public var refusal: ErrorRefusal? { get } }
+extension MeroError {
+  public var httpStatus: Int? { get }      // .http / .authRevoked
+  public var refusal: ErrorRefusal? { get }
+  public var errorType: String? { get }    // RPC `type`, or the refusal's `type`
+}
+```
+
+| Status | Means (rc.83) |
+| --- | --- |
+| `400` | Invalid input, invitation or proof; invalid TEE policy; a method error (`FunctionCallError`) |
+| `403` | Not a member or admin; client key out of scope; owner-proof refusal |
+| `404` | Unknown device, upgrade or context; namespace out of an account's scope; a route the node does not serve |
+| `409` | Upgrade in progress; already exists; stale nonce, state hash or owner counter; write method on `/query` |
+| `503` | Authority undecidable; join key delivery timed out (was a `504` before rc.83) |
+
+The cases of `MeroError` did not change, so an existing `switch` keeps compiling.
+
 ### `RpcError`
 
 ```swift
@@ -50,8 +82,17 @@ public struct RpcError: Error, Sendable, Equatable {
   public let message: String
   public let type: String?
   public let data: JSONValue?
+
+  public var isReadOnlyWriteRefused: Bool { get }  // type == "ReadOnlyWriteRefused"
+  public var refusedContextId: String? { get }     // data.context_id
 }
 ```
+
+`ReadOnlyWriteRefused` (core rc.83) means the node's role in the context
+(`ReadOnly`, `ReadOnlyTee` or `RelayTee`) discards its writes. Retrying the same
+node never helps: send the write to a node with a writing role, or as an intent.
+Since rc.83 an execute also needs `context:execute` in a scoped token, and an
+account-authenticated session cannot execute at all.
 
 ## Handling pattern
 

@@ -17,6 +17,19 @@ threw on every join. And the previous invitation model named 2 of the envelope's
 5 keys and 5 of the signed body's 6, with a full green suite, because each test
 built its input from the same model it then asserted on.
 
+## Core's own wire fixtures (`rc83-*`)
+
+`rc83-*.json` are not captures from a live node. They are core's own wire
+fixtures, copied verbatim from `crates/server/primitives/fixtures/wire/` at tag
+`0.11.0-rc.83` and renamed `rc83-<dir>-<name>-<req|res>.json`. Core's suite
+asserts its serializers write exactly these bytes, so they are as authoritative
+as a capture and need no running node. Refresh them with:
+
+```sh
+git -C core show 0.11.0-rc.83:crates/server/primitives/fixtures/wire/groups/group_info.res.json \
+  > rc83-groups-group-info-res.json
+```
+
 ## Refreshing after a core bump
 
 Boot a node at the pinned release (TESTING.md §4a) and re-capture. An

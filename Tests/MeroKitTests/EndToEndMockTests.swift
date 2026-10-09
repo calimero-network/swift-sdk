@@ -64,6 +64,7 @@ final class EndToEndMockTests: XCTestCase {
         XCTAssertFalse(stillAuthed)
         XCTAssertNil(store.getTokens())
         XCTAssertEqual(node.refreshCalls, 0, "no refresh should happen on the happy path")
+        XCTAssertEqual(node.logoutCalls, 1, "logout retires the refresh token on the node (core rc.83)")
     }
 
     /// Access token expires mid-journey → a protected call triggers exactly one

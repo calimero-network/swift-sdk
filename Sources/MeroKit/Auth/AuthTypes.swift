@@ -104,6 +104,29 @@ public struct RefreshTokenRequest: Codable, Sendable {
     }
 }
 
+/// Body for `POST /auth/logout` (new in core rc.83). Snake_case, and the
+/// node refuses any other field.
+public struct LogoutRequest: Codable, Sendable {
+    public let refreshToken: String
+
+    public init(refreshToken: String) {
+        self.refreshToken = refreshToken
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case refreshToken = "refresh_token"
+    }
+}
+
+/// `POST /auth/logout` answers `{"data":{"success":true}}`.
+public struct LogoutResponse: Codable, Sendable {
+    public let success: Bool
+
+    public init(success: Bool) {
+        self.success = success
+    }
+}
+
 /// Mock-token request (CI/testing). Core's shape is snake_case.
 public struct MockTokenRequest: Codable, Sendable {
     public let clientName: String
@@ -219,20 +242,37 @@ public struct ClientKey: Codable, Sendable {
     }
 }
 
+/// Body for `POST /admin/client-key`.
+///
+/// Since core rc.83 a client key is narrower than the session that mints it:
+/// - `keys:*` permissions are never grantable to one, and `admin` only when the
+///   key binds no context (no `contextId`, no `contextIdentity`). Anything
+///   else is a `400` "Permission cannot be granted to a client key".
+/// - It acts only on the contexts and groups it is bound to; elsewhere it gets
+///   a `403`, including on JSON-RPC and SSE subscribe.
+/// - It expires: `ttlSecs` defaults to 30 days and there is no non-expiring
+///   key. Its access token lives 15 minutes and its refresh token 7 days.
 public struct GenerateClientKeyRequest: Codable, Sendable {
     public let contextId: String?
     public let contextIdentity: String?
     public let permissions: [String]?
     public let targetNodeUrl: String?
+    /// Bind the key to one application. New in core rc.83.
+    public let applicationId: String?
+    /// How long the key stays valid, in seconds. `nil` takes the node's
+    /// default (30 days at rc.83).
+    public let ttlSecs: UInt64?
 
     public init(
         contextId: String? = nil, contextIdentity: String? = nil, permissions: [String]? = nil,
-        targetNodeUrl: String? = nil
+        targetNodeUrl: String? = nil, applicationId: String? = nil, ttlSecs: UInt64? = nil
     ) {
         self.contextId = contextId
         self.contextIdentity = contextIdentity
         self.permissions = permissions
         self.targetNodeUrl = targetNodeUrl
+        self.applicationId = applicationId
+        self.ttlSecs = ttlSecs
     }
 
     enum CodingKeys: String, CodingKey {
@@ -240,6 +280,8 @@ public struct GenerateClientKeyRequest: Codable, Sendable {
         case contextIdentity = "context_identity"
         case permissions
         case targetNodeUrl = "target_node_url"
+        case applicationId = "application_id"
+        case ttlSecs = "ttl_secs"
     }
 }
 

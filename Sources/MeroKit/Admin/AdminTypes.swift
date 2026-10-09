@@ -805,17 +805,53 @@ public struct Namespace: Codable, Sendable {
     /// which is the shape of the change: a policy nobody applied, replaced by the
     /// version actually in force.
     public let appVersion: String?
+    /// What the namespace id was derived from: its founder and a salt. Since
+    /// core rc.83 every namespace id is derived this way. `nil` on a node that
+    /// predates it.
+    public let founding: NamespaceFounding?
+    /// Group ops this node logged but cannot apply yet, because their group's
+    /// history is sealed under a key it lacks. Explains a subgroup that looks
+    /// stale here and current elsewhere. `nil` when nothing is held. New in rc.83.
+    public let heldOps: NamespaceHeldOps?
     public init(
         namespaceId: String, appKey: String, targetApplicationId: String,
         upgradePolicy: String? = nil, createdAt: Int,
         name: String? = nil, memberCount: Int, contextCount: Int, subgroupCount: Int,
-        appVersion: String? = nil
+        appVersion: String? = nil, founding: NamespaceFounding? = nil, heldOps: NamespaceHeldOps? = nil
     ) {
         self.namespaceId = namespaceId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
         self.upgradePolicy = upgradePolicy; self.createdAt = createdAt; self.name = name
         self.memberCount = memberCount; self.contextCount = contextCount; self.subgroupCount = subgroupCount
-        self.appVersion = appVersion
+        self.appVersion = appVersion; self.founding = founding; self.heldOps = heldOps
     }
+}
+
+/// The founder and salt a namespace id was derived from:
+/// `domain_hash("calimero.namespace.id.v1", [founder, salt]) == namespaceId`.
+public struct NamespaceFounding: Codable, Sendable, Equatable {
+    /// Hex account id of the founder.
+    public let founderAccountId: String
+    /// Hex 32-byte salt.
+    public let salt: String
+    public init(founderAccountId: String, salt: String) {
+        self.founderAccountId = founderAccountId; self.salt = salt
+    }
+}
+
+/// The group ops a namespace holds unapplied on the node that answered.
+public struct NamespaceHeldOps: Codable, Sendable, Equatable {
+    public let ops: [NamespaceHeldOp]
+    /// Holds past the node's listing bound: counted, not listed.
+    public let untracked: Int
+    public init(ops: [NamespaceHeldOp], untracked: Int) { self.ops = ops; self.untracked = untracked }
+}
+
+public struct NamespaceHeldOp: Codable, Sendable, Equatable {
+    /// Hex id of the op in the governance DAG.
+    public let deltaId: String
+    /// Hex id of the group whose sealed history it waits on.
+    public let groupId: String
+    public init(deltaId: String, groupId: String) { self.deltaId = deltaId; self.groupId = groupId }
 }
 
 public typealias ListNamespacesResponseData = [Namespace]
@@ -949,7 +985,11 @@ public struct CreateNamespaceRequest: Codable, Sendable {
 
 public struct CreateNamespaceResponseData: Codable, Sendable {
     public let namespaceId: String
-    public init(namespaceId: String) { self.namespaceId = namespaceId }
+    /// What the id was derived from. `nil` on a node that predates derived ids.
+    public let founding: NamespaceFounding?
+    public init(namespaceId: String, founding: NamespaceFounding? = nil) {
+        self.namespaceId = namespaceId; self.founding = founding
+    }
 }
 
 public struct DeleteNamespaceRequest: Codable, Sendable {
@@ -1117,9 +1157,17 @@ public struct JoinNamespaceResponseData: Codable, Sendable {
 /// from 0.11.0-rc.38, which is every call that bothered to name the subgroup.
 /// Only the empty body ever worked.
 public struct CreateGroupInNamespaceRequest: Codable, Sendable {
+    /// What ``AdminApi/createGroupInNamespace(_:request:)`` sends when the
+    /// caller names no visibility.
+    ///
+    /// core rc.83 made an absent `visibility` mean `open`; before, it meant
+    /// `restricted`. This SDK sends `restricted` explicitly so a subgroup does
+    /// not quietly become joinable by every namespace member after a node upgrade.
+    public static let defaultVisibility = "open"
     /// The subgroup's name. Sent as `groupName`, which is what the route reads.
     public var groupName: String?
     /// `"open"` or `"restricted"` — lowercase; the node rejects other spellings.
+    /// `nil` sends ``defaultVisibility``.
     public var visibility: String?
     public init(groupName: String? = nil, visibility: String? = nil) {
         self.groupName = groupName; self.visibility = visibility
@@ -1146,17 +1194,21 @@ public struct SubgroupEntry: Codable, Sendable {
 
 // MARK: - Groups
 
+/// Body for `POST /admin-api/groups`.
+///
+/// ⚠️ There is no `groupId`. core rc.83 derives every group id and refuses a
+/// body that names one (the struct is `deny_unknown_fields`), so the field was
+/// removed rather than left to fail at the node.
 public struct CreateGroupRequest: Codable, Sendable {
     public var applicationId: String
-    public var groupId: String?
     public var appKey: String?
     public var name: String?
     public var parentGroupId: String?
     public init(
-        applicationId: String, groupId: String? = nil, appKey: String? = nil,
+        applicationId: String, appKey: String? = nil,
         name: String? = nil, parentGroupId: String? = nil
     ) {
-        self.applicationId = applicationId; self.groupId = groupId
+        self.applicationId = applicationId
         self.appKey = appKey; self.name = name; self.parentGroupId = parentGroupId
     }
 
@@ -1164,12 +1216,10 @@ public struct CreateGroupRequest: Codable, Sendable {
     @available(*, deprecated, message: "upgradePolicy is no longer sent; drop the argument")
     @_disfavoredOverload
     public init(
-        applicationId: String, upgradePolicy: String, groupId: String? = nil,
+        applicationId: String, upgradePolicy: String,
         appKey: String? = nil, name: String? = nil, parentGroupId: String? = nil
     ) {
-        self.init(
-            applicationId: applicationId, groupId: groupId, appKey: appKey,
-            name: name, parentGroupId: parentGroupId)
+        self.init(applicationId: applicationId, appKey: appKey, name: name, parentGroupId: parentGroupId)
     }
 }
 
@@ -1314,13 +1364,20 @@ public struct GroupInfo: Codable, Sendable {
     ///
     /// Optional only because a node predating the field omits it.
     public let groupStateHash: String?
+    /// The namespace this group belongs to (itself, for a namespace root). A
+    /// root proof for an owner op names it. New in core rc.83.
+    public let namespaceId: String?
+    /// How many root-guarded owner ops this group has applied: the `counter`
+    /// the root proof for its next one must name. New in core rc.83.
+    public let ownerOpCounter: UInt64?
     public init(
         groupId: String, appKey: String, targetApplicationId: String,
         upgradePolicy: String? = nil, memberCount: Int, contextCount: Int,
         activeUpgrade: GroupUpgradeStatus? = nil,
         defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil,
-        groupStateHash: String? = nil
+        groupStateHash: String? = nil, namespaceId: String? = nil, ownerOpCounter: UInt64? = nil
     ) {
+        self.namespaceId = namespaceId; self.ownerOpCounter = ownerOpCounter
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
         self.upgradePolicy = upgradePolicy
         self.memberCount = memberCount; self.contextCount = contextCount
@@ -1420,42 +1477,6 @@ public struct SetSubgroupVisibilityRequest: Codable, Sendable {
     public var subgroupVisibility: String
     public init(subgroupVisibility: String) {
         self.subgroupVisibility = subgroupVisibility
-    }
-}
-
-public struct SetTeeAdmissionPolicyRequest: Codable, Sendable {
-    public var allowedMrtd: [String]
-    public var allowedRtmr0: [String]
-    public var allowedRtmr1: [String]
-    public var allowedRtmr2: [String]
-    public var allowedRtmr3: [String]
-    public var allowedTcbStatuses: [String]
-    public var acceptMock: Bool
-    public init(
-        allowedMrtd: [String], allowedRtmr0: [String], allowedRtmr1: [String], allowedRtmr2: [String],
-        allowedRtmr3: [String], allowedTcbStatuses: [String], acceptMock: Bool
-    ) {
-        self.allowedMrtd = allowedMrtd; self.allowedRtmr0 = allowedRtmr0; self.allowedRtmr1 = allowedRtmr1
-        self.allowedRtmr2 = allowedRtmr2; self.allowedRtmr3 = allowedRtmr3
-        self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock
-    }
-}
-
-public struct GetTeeAdmissionPolicyResponseData: Codable, Sendable {
-    public let allowedMrtd: [String]
-    public let allowedRtmr0: [String]
-    public let allowedRtmr1: [String]
-    public let allowedRtmr2: [String]
-    public let allowedRtmr3: [String]
-    public let allowedTcbStatuses: [String]
-    public let acceptMock: Bool
-    public init(
-        allowedMrtd: [String], allowedRtmr0: [String], allowedRtmr1: [String], allowedRtmr2: [String],
-        allowedRtmr3: [String], allowedTcbStatuses: [String], acceptMock: Bool
-    ) {
-        self.allowedMrtd = allowedMrtd; self.allowedRtmr0 = allowedRtmr0; self.allowedRtmr1 = allowedRtmr1
-        self.allowedRtmr2 = allowedRtmr2; self.allowedRtmr3 = allowedRtmr3
-        self.allowedTcbStatuses = allowedTcbStatuses; self.acceptMock = acceptMock
     }
 }
 
@@ -1663,110 +1684,6 @@ public struct JoinGroupResponseData: Codable, Sendable {
     public let memberAccount: String
     public init(groupId: String, memberIdentity: String, memberAccount: String) {
         self.groupId = groupId; self.memberIdentity = memberIdentity; self.memberAccount = memberAccount
-    }
-}
-
-// MARK: - TEE
-
-public struct TeeInfoResponseData: Codable, Sendable {
-    public let cloudProvider: String
-    public let osImage: String
-    public let mrtd: String
-    public init(cloudProvider: String, osImage: String, mrtd: String) {
-        self.cloudProvider = cloudProvider; self.osImage = osImage; self.mrtd = mrtd
-    }
-}
-
-public struct TeeAttestRequest: Codable, Sendable {
-    public var nonce: String
-    public var applicationId: String?
-    public init(nonce: String, applicationId: String? = nil) { self.nonce = nonce; self.applicationId = applicationId }
-}
-
-public struct QuoteHeader: Codable, Sendable {
-    public let version: Int
-    public let attestationKeyType: Int
-    public let teeType: Int
-    public let qeVendorId: String
-    public let userData: String
-    public init(version: Int, attestationKeyType: Int, teeType: Int, qeVendorId: String, userData: String) {
-        self.version = version; self.attestationKeyType = attestationKeyType; self.teeType = teeType
-        self.qeVendorId = qeVendorId; self.userData = userData
-    }
-}
-
-public struct QuoteBody: Codable, Sendable {
-    public let tdxVersion: String
-    public let teeTcbSvn: String
-    public let mrseam: String
-    public let mrsignerseam: String
-    public let seamattributes: String
-    public let tdattributes: String
-    public let xfam: String
-    public let mrtd: String
-    public let mrconfigid: String
-    public let mrowner: String
-    public let mrownerconfig: String
-    public let rtmr0: String
-    public let rtmr1: String
-    public let rtmr2: String
-    public let rtmr3: String
-    public let reportdata: String
-    public let teeTcbSvn2: String?
-    public let mrservicetd: String?
-    public init(
-        tdxVersion: String, teeTcbSvn: String, mrseam: String, mrsignerseam: String, seamattributes: String,
-        tdattributes: String, xfam: String, mrtd: String, mrconfigid: String, mrowner: String,
-        mrownerconfig: String, rtmr0: String, rtmr1: String, rtmr2: String, rtmr3: String, reportdata: String,
-        teeTcbSvn2: String? = nil, mrservicetd: String? = nil
-    ) {
-        self.tdxVersion = tdxVersion; self.teeTcbSvn = teeTcbSvn; self.mrseam = mrseam; self.mrsignerseam = mrsignerseam
-        self.seamattributes = seamattributes; self.tdattributes = tdattributes; self.xfam = xfam; self.mrtd = mrtd
-        self.mrconfigid = mrconfigid; self.mrowner = mrowner; self.mrownerconfig = mrownerconfig
-        self.rtmr0 = rtmr0; self.rtmr1 = rtmr1; self.rtmr2 = rtmr2; self.rtmr3 = rtmr3; self.reportdata = reportdata
-        self.teeTcbSvn2 = teeTcbSvn2; self.mrservicetd = mrservicetd
-    }
-}
-
-public struct Quote: Codable, Sendable {
-    public let header: QuoteHeader
-    public let body: QuoteBody
-    public let signature: String
-    public let attestationKey: String
-    /// `unknown` in the TS — arbitrary JSON. Modeled optional to tolerate omission.
-    public let certificationData: JSONValue?
-    public init(
-        header: QuoteHeader, body: QuoteBody, signature: String, attestationKey: String,
-        certificationData: JSONValue? = nil
-    ) {
-        self.header = header; self.body = body; self.signature = signature
-        self.attestationKey = attestationKey; self.certificationData = certificationData
-    }
-}
-
-public struct TeeAttestResponseData: Codable, Sendable {
-    public let quoteB64: String
-    public let quote: Quote
-    public init(quoteB64: String, quote: Quote) { self.quoteB64 = quoteB64; self.quote = quote }
-}
-
-public struct TeeVerifyQuoteRequest: Codable, Sendable {
-    public var quoteB64: String
-    public var nonce: String
-    public var expectedApplicationHash: String?
-    public init(quoteB64: String, nonce: String, expectedApplicationHash: String? = nil) {
-        self.quoteB64 = quoteB64; self.nonce = nonce; self.expectedApplicationHash = expectedApplicationHash
-    }
-}
-
-public struct TeeVerifyQuoteResponseData: Codable, Sendable {
-    public let quoteVerified: Bool
-    public let nonceVerified: Bool
-    public let applicationHashVerified: Bool?
-    public let quote: Quote
-    public init(quoteVerified: Bool, nonceVerified: Bool, applicationHashVerified: Bool? = nil, quote: Quote) {
-        self.quoteVerified = quoteVerified; self.nonceVerified = nonceVerified
-        self.applicationHashVerified = applicationHashVerified; self.quote = quote
     }
 }
 

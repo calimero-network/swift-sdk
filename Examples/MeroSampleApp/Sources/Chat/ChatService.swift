@@ -419,7 +419,7 @@ final class ChatService: ObservableObject {
     private func rpc<T: Decodable>(
         _ contextId: String, _ method: String, executor: String, args: [String: JSONValue] = [:]
     ) async throws -> T {
-        try await mero.rpc.execute(contextId: contextId, method: method, argsJson: args, executorPublicKey: executor)
+        try await mero.rpc.execute(contextId: contextId, method: method, argsJson: args)
     }
 
     private func run(_ message: String, _ body: @escaping () async throws -> Void) async {
