@@ -29,6 +29,9 @@ public struct MeroRootView: View {
         }
         .task { await client.restore() }
         .onOpenURL { url in
+            // An invitation link is captured whoever is signed in; an
+            // `InviteRedemption` takes it from there.
+            InvitationCapture.shared.handle(url)
             Task {
                 // A node login's SSO callback, else a Cloud enrolment's.
                 if await client.handleAuthCallback(url) { return }
