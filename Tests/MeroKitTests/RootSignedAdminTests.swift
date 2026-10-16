@@ -135,7 +135,8 @@ final class RootSignedAdminTests: XCTestCase {
         XCTAssertEqual(json["credential"] as? String, "ab")
         let scope = try XCTUnwrap(json["scope"] as? String)
         // genesis (33) + empty chain (4) + account + device + 1 application + epochs + signature.
-        XCTAssertEqual(scope.count, (33 + 4 + 32 + 32 + 4 + 32 + 4 + 4 + 64) * 2)
+        let scopeBytes: Int = 33 + 4 + 32 + 32 + 4 + 32 + 4 + 4 + 64
+        XCTAssertEqual(scope.count, scopeBytes * 2)
         XCTAssertTrue(log.requests.last?.url.hasSuffix("/namespaces/\(Self.namespace)/account/link-device") == true)
     }
 }

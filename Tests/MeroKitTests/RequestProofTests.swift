@@ -212,7 +212,8 @@ final class RequestProofTests: XCTestCase {
     func testProofSignerDefaultsToA120SecondExpiry() async throws {
         let sign = try createProofSigner(
             ProofSignerOptions(credential: Self.credential, signerSecret: Self.sessionSecret, now: { 1_700_000_000 }))
-        let proof = try XCTUnwrap(try await sign(ProofRequest(method: "GET", path: "/admin-api/namespaces")))
+        let signed = try await sign(ProofRequest(method: "GET", path: "/admin-api/namespaces"))
+        let proof = try XCTUnwrap(signed)
         // expires_at is the u64 just before the signature.
         let expires = String(proof.dropLast(128).suffix(16))
         XCTAssertEqual(expires, Hex.encode(LittleEndian.u64(1_700_000_120)))
