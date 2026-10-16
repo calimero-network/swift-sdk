@@ -488,7 +488,8 @@ enum ReleaseVersion {
 
     private static func identifierOrder(_ x: String, _ y: String) -> Int {
         let digits = { (s: String) in !s.isEmpty && s.utf8.allSatisfy { (0x30...0x39).contains($0) } }
-        switch (digits(x), digits(y)) {
+        let kinds = (digits(x), digits(y))
+        switch kinds {
         case (true, true):
             let (a, b) = (Double(x) ?? 0, Double(y) ?? 0)
             return a == b ? 0 : (a < b ? -1 : 1)
