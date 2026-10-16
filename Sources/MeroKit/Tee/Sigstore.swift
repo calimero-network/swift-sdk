@@ -76,7 +76,7 @@ public enum Sigstore {
                     "VR0OBBYEFMjFHQBBmiQpMlEk6w2uSu1KBtPsMB8GA1UdIwQYMBaAFMjFHQBBmiQpMlEk6w2uSu1KBtPsMAoGCCqG",
                     "SM49BAMDA2gAMGUCMH8liWJfMui6vXXBhjDgY4MwslmN/TJxVe/83WrFomwmNf056y1X48F9c4m3a3ozXAIxAKjR",
                     "ay5/aj/jsKKGIkmQatjI8uupHr/+CxFvaJWmpYqNkLDGRU+9orzh5hI2RrcuaQ==",
-                ].joined(),
+                ].joined()
             ]),
         FulcioAuthority(
             uri: "https://fulcio.sigstore.dev", validFrom: "2022-04-13T20:06:15Z",
@@ -118,7 +118,7 @@ public enum Sigstore {
                 "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE2G2Y+2tabdTV5BcGiBIx0a9fAFwrkBbmLSGtks4L3qX6yYY0zufB",
                 "nhC8Ur/iy55GhWP/9A/bY2LhC30M9+RYtw==",
             ].joined(),
-            validFrom: "2021-01-12T11:53:27Z", validUntil: nil),
+            validFrom: "2021-01-12T11:53:27Z", validUntil: nil)
     ]
 
     static let subjectAltName = "2.5.29.17"

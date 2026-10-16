@@ -480,10 +480,11 @@ public actor SealedTransport {
     /// body. Returns when the head is known; a failure before it is thrown
     /// here, one after it ends the body.
     static func streamed(
-        _ work: @escaping @Sendable (
-            _ emitHead: @escaping @Sendable (Int, [String: String]) -> Void,
-            _ body: AsyncThrowingStream<Data, Error>.Continuation
-        ) async throws -> Void
+        _ work:
+            @escaping @Sendable (
+                _ emitHead: @escaping @Sendable (Int, [String: String]) -> Void,
+                _ body: AsyncThrowingStream<Data, Error>.Continuation
+            ) async throws -> Void
     ) async throws -> SealedResponse {
         var captured: AsyncThrowingStream<Data, Error>.Continuation?
         let body = AsyncThrowingStream<Data, Error> { captured = $0 }

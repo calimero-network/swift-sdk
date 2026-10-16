@@ -25,8 +25,8 @@ public struct DcapVerifiedReport: Sendable, Equatable {
 /// Verify a quote's signature chain against `collateral` as of `nowSecs`, and
 /// appraise its TCB level; throw when it does not verify. ``Dcap/verify(_:collateral:nowSecs:)``
 /// has exactly this shape. (== mero-js `DcapVerify`.)
-public typealias DcapVerify = @Sendable (_ quote: Data, _ collateral: DcapCollateral, _ nowSecs: Int64) throws ->
-    DcapVerifiedReport
+public typealias DcapVerify =
+    @Sendable (_ quote: Data, _ collateral: DcapCollateral, _ nowSecs: Int64) throws -> DcapVerifiedReport
 
 /// DCAP quote verification against Intel's SGX root CA.
 public enum Dcap {
