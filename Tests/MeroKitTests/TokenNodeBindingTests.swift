@@ -52,7 +52,7 @@ final class TokenNodeBindingTests: XCTestCase {
         _ = try await b.admin.getContexts()
 
         XCTAssertEqual(log.values.count, 1)
-        XCTAssertFalse((log.values.first ?? nil)?.contains("a-access") ?? false)
+        XCTAssertFalse(log.values.compactMap { $0 }.first?.contains("a-access") ?? false)
         let authed = await b.isAuthenticated
         XCTAssertFalse(authed)
     }
@@ -78,7 +78,7 @@ final class TokenNodeBindingTests: XCTestCase {
         let sdk = mero(nodeA, store)
         _ = try await sdk.admin.getContexts()
 
-        XCTAssertFalse((log.values.first ?? nil)?.contains("legacy-access") ?? false)
+        XCTAssertFalse(log.values.compactMap { $0 }.first?.contains("legacy-access") ?? false)
         let authed = await sdk.isAuthenticated
         XCTAssertFalse(authed)
     }
@@ -127,7 +127,7 @@ final class TokenNodeBindingTests: XCTestCase {
             let sdk = mero(other, store)
             _ = try await sdk.admin.getContexts()
 
-            XCTAssertFalse((log.values.first ?? nil)?.contains("a-access") ?? false, "\(issuer) → \(other)")
+            XCTAssertFalse(log.values.compactMap { $0 }.first?.contains("a-access") ?? false, "\(issuer) → \(other)")
             let authed = await sdk.isAuthenticated
             XCTAssertFalse(authed, "\(issuer) → \(other)")
         }
@@ -138,7 +138,10 @@ final class TokenNodeBindingTests: XCTestCase {
         await mero("https://host.example/node1/", store).setTokenData(bundle("a"))
 
         let log = recordAuthorization()
-        _ = try await mero("https://host.example/node1", store).admin.getContexts()
+        // Held in a local: the transport reads the token through a weak
+        // reference, so a temporary `Mero` is gone before the request is sent.
+        let again = mero("https://host.example/node1", store)
+        _ = try await again.admin.getContexts()
 
         XCTAssertEqual(log.values, ["Bearer a-access"])
     }

@@ -12,27 +12,32 @@ final class ClassifyErrorTests: XCTestCase {
     }
 
     func testStatusTable() {
-        let table: [(Int, ErrorKind, Bool)] = [
-            (400, .invalid, false),
-            (401, .unauthorized, true),
-            (403, .forbidden, false),
-            (404, .notFound, true),
-            (409, .conflict, false),
-            (410, .gone, false),
-            (413, .tooLarge, false),
-            (422, .invalid, false),
-            (429, .rateLimited, true),
-            (500, .server, true),
-            (502, .server, true),
-            (503, .unavailable, true),
-            (504, .unavailable, true),
-            (0, .unreachable, true),
+        struct Row {
+            let status: Int
+            let kind: ErrorKind
+            let retryable: Bool
+        }
+        let table: [Row] = [
+            Row(status: 400, kind: .invalid, retryable: false),
+            Row(status: 401, kind: .unauthorized, retryable: true),
+            Row(status: 403, kind: .forbidden, retryable: false),
+            Row(status: 404, kind: .notFound, retryable: true),
+            Row(status: 409, kind: .conflict, retryable: false),
+            Row(status: 410, kind: .gone, retryable: false),
+            Row(status: 413, kind: .tooLarge, retryable: false),
+            Row(status: 422, kind: .invalid, retryable: false),
+            Row(status: 429, kind: .rateLimited, retryable: true),
+            Row(status: 500, kind: .server, retryable: true),
+            Row(status: 502, kind: .server, retryable: true),
+            Row(status: 503, kind: .unavailable, retryable: true),
+            Row(status: 504, kind: .unavailable, retryable: true),
+            Row(status: 0, kind: .unreachable, retryable: true),
         ]
-        for (status, kind, retryable) in table {
-            let classified = classifyError(httpError(status, "no"))
-            XCTAssertEqual(classified.kind, kind, "\(status)")
-            XCTAssertEqual(classified.status, status, "\(status)")
-            XCTAssertEqual(classified.retryable, retryable, "\(status)")
+        for row in table {
+            let classified = classifyError(httpError(row.status, "no"))
+            XCTAssertEqual(classified.kind, row.kind, "\(row.status)")
+            XCTAssertEqual(classified.status, row.status, "\(row.status)")
+            XCTAssertEqual(classified.retryable, row.retryable, "\(row.status)")
         }
     }
 

@@ -70,10 +70,11 @@ final class WithRetryTests: XCTestCase {
     func testRetriesARetryableFailureUntilItSucceeds() async throws {
         let calls = Counter()
         let delays = DelayLog()
-        let value = try await withRetry(attempts: 3, sleep: { delays.append($0) }) { attempt -> Int in
+        let operation: @Sendable (Int) async throws -> Int = { attempt in
             if calls.increment() < 3 { throw http(503) }
             return attempt
         }
+        let value = try await withRetry(attempts: 3, sleep: { delays.append($0) }, operation)
         XCTAssertEqual(value, 3)
         XCTAssertEqual(calls.count, 3)
         XCTAssertEqual(delays.values.count, 2)
@@ -82,10 +83,11 @@ final class WithRetryTests: XCTestCase {
     func testDoesNotRetryARefusal() async {
         let calls = Counter()
         do {
-            _ = try await withRetry(attempts: 3, sleep: { _ in }) { _ -> Int in
+            let operation: @Sendable (Int) async throws -> Int = { _ in
                 calls.increment()
                 throw http(400)
             }
+            _ = try await withRetry(attempts: 3, sleep: { _ in }, operation)
             XCTFail("expected a throw")
         } catch {
             XCTAssertEqual((error as? MeroError)?.httpStatus, 400)
@@ -95,20 +97,22 @@ final class WithRetryTests: XCTestCase {
 
     func testGivesUpAfterTheLastAttempt() async {
         let calls = Counter()
-        _ = try? await withRetry(attempts: 2, sleep: { _ in }) { _ -> Int in
+        let operation: @Sendable (Int) async throws -> Int = { _ in
             calls.increment()
             throw MeroError.network("offline")
         }
+        _ = try? await withRetry(attempts: 2, sleep: { _ in }, operation)
         XCTAssertEqual(calls.count, 2)
     }
 
     func testHonoursRetryAfter() async throws {
         let calls = Counter()
         let delays = DelayLog()
-        _ = try await withRetry(attempts: 2, sleep: { delays.append($0) }) { _ -> Int in
+        let operation: @Sendable (Int) async throws -> Int = { _ in
             if calls.increment() == 1 { throw http(429, headers: ["retry-after": "7"]) }
             return 0
         }
+        _ = try await withRetry(attempts: 2, sleep: { delays.append($0) }, operation)
         XCTAssertEqual(delays.values, [7])
     }
 

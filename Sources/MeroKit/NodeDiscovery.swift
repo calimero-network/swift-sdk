@@ -73,7 +73,7 @@ public enum NodeDiscovery {
             }
             let first = await group.next()
             group.cancelAll()
-            return (first ?? nil) ?? false
+            return first.flatMap { $0 } ?? false
         }
     }
 
