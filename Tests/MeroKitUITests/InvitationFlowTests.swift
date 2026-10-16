@@ -38,7 +38,7 @@ final class InvitationCaptureTests: XCTestCase {
         if let appKey { capture.prime(appKey: appKey) }
         capture.handle(URL(string: "myapp://open?invitation=\(token)")!)
         var seen: [CapturedInvitation] = []
-        capture.onInvitation { seen.append($0) }
+        _ = capture.onInvitation { seen.append($0) }
         return seen
     }
 
@@ -51,7 +51,7 @@ final class InvitationCaptureTests: XCTestCase {
         let capture = InvitationCapture(defaults: defaults)
         capture.handle(URL(string: "https://app.example/teams/t1/projects?invitation=DEEP")!)
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, ["DEEP"])
     }
 
@@ -60,7 +60,7 @@ final class InvitationCaptureTests: XCTestCase {
         capture.prime()
         capture.handle(URL(string: "myapp://open?invitation=LATE")!)
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, ["LATE"])
     }
 
@@ -69,7 +69,7 @@ final class InvitationCaptureTests: XCTestCase {
         capture.handle(URL(string: "myapp://teams")!)
         capture.handle(URL(string: "https://app.example/teams")!)
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, [])
         XCTAssertNil(capture.peek())
     }
@@ -78,7 +78,7 @@ final class InvitationCaptureTests: XCTestCase {
         _ = openWith("AGAIN")
         let relaunch = InvitationCapture(defaults: defaults)
         var seen: [String] = []
-        relaunch.onInvitation { seen.append($0.token) }
+        _ = relaunch.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, ["AGAIN"], "persisted until acked")
     }
 
@@ -109,7 +109,7 @@ final class InvitationCaptureTests: XCTestCase {
         let capture = InvitationCapture(defaults: defaults)
         XCTAssertEqual(capture.attempts(for: "USED"), 0)
         var replayed: [String] = []
-        capture.onInvitation { replayed.append($0.token) }
+        _ = capture.onInvitation { replayed.append($0.token) }
         XCTAssertEqual(replayed, [], "acked: dropped from the store")
         XCTAssertEqual(openWith("USED").first?.autoJoin, true)
     }
@@ -118,7 +118,7 @@ final class InvitationCaptureTests: XCTestCase {
         let capture = InvitationCapture(defaults: defaults)
         capture.prime(appKey: "app", slugs: ["com.calimero.docs"])
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertTrue(capture.capture(raw: "calimero://com.calimero.docs/join?invitation=WARM"))
         XCTAssertFalse(capture.capture(raw: "calimero://com.calimero.chat/join?invitation=FOREIGN"))
         let foreignLink = "https://links.calimero.network/com.calimero.chat/join?invitation=FOREIGN2"
@@ -128,7 +128,7 @@ final class InvitationCaptureTests: XCTestCase {
         let relaunch = InvitationCapture(defaults: defaults)
         relaunch.prime(appKey: "app", slugs: ["com.calimero.docs"])
         var replayed: [String] = []
-        relaunch.onInvitation { replayed.append($0.token) }
+        _ = relaunch.onInvitation { replayed.append($0.token) }
         XCTAssertEqual(replayed, ["WARM"], "the foreign ones were acked, not kept")
     }
 
@@ -142,7 +142,7 @@ final class InvitationCaptureTests: XCTestCase {
         XCTAssertEqual(capture.peek()?.token, "WATCHED")
 
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, ["WATCHED"], "watching consumed nothing")
 
         let before = changes
@@ -157,14 +157,14 @@ final class InvitationCaptureTests: XCTestCase {
         capture.handle(URL(string: "myapp://open?invitation=DECLINED")!)
         capture.peek()?.resolve()
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         XCTAssertEqual(seen, [])
     }
 
     func testTheSameLinkFromTwoSourcesIsHandledOnce() {
         let capture = InvitationCapture(defaults: defaults)
         var seen: [String] = []
-        capture.onInvitation { seen.append($0.token) }
+        _ = capture.onInvitation { seen.append($0.token) }
         capture.capture(raw: "calimero://app/join?invitation=ONCE")
         capture.capture(raw: "calimero://app/join?invitation=ONCE")
         XCTAssertEqual(seen, ["ONCE"])
@@ -431,7 +431,7 @@ final class JoinSyncTests: XCTestCase {
     func testMarkingTwiceDoesNotDuplicate() {
         let store = JustJoinedNamespaces()
         var heard = 0
-        store.subscribe { heard += 1 }
+        _ = store.subscribe { heard += 1 }
         store.mark("ns1")
         store.mark("ns1")
         XCTAssertEqual(heard, 1)
