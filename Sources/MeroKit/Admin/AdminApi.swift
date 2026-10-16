@@ -696,6 +696,17 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "revokeDevice")
     }
 
+    /// The devices revoked in a namespace and the slots withdrawn there
+    /// (`GET /admin-api/namespaces/:namespace_id/revoked-devices`). A subgroup
+    /// id resolves to its namespace. `403` unless this node holds an account
+    /// bound in the namespace.
+    ///
+    /// The handler serializes the payload directly: there is no `{ data }`
+    /// envelope. (== mero-js `listNamespaceRevokedDevices`.)
+    public func listNamespaceRevokedDevices(_ namespaceId: String) async throws -> NamespaceRevokedDevices {
+        try await http.get("/admin-api/namespaces/\(namespaceId.percentEncoded())/revoked-devices")
+    }
+
     // MARK: - Account (devices, applications, pairing)
     //
     // These moved in core 0.11.0-rc.28: pairing used to be namespace-scoped
