@@ -79,6 +79,24 @@ public struct CloudConnection: Sendable {
     public let nodeKey: String?
     /// Why reads are unavailable, when they are.
     public let readNote: String?
+    /// The account's presence through the relay: device-signed updates,
+    /// resent every 2.5 s while set, read off ``mero``'s ``Mero/sse``.
+    /// `nil` when relayless.
+    public let presence: RelayPresenceClient?
+
+    public init(
+        session: CloudSession, relay: RelayClient?, mero: Mero?, nodeKey: String?, readNote: String?,
+        presence: RelayPresenceClient? = nil
+    ) {
+        self.session = session
+        self.relay = relay
+        self.mero = mero
+        self.nodeKey = nodeKey
+        self.readNote = readNote
+        self.presence = presence ?? relay.map { relay in
+            RelayPresenceClient(relay: relay, events: { mero?.sse })
+        }
+    }
 }
 
 /// Cloud sign-in, end to end, for a native app:

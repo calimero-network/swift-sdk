@@ -1325,6 +1325,19 @@ public struct AdminApi: Sendable {
             jsonRequest("/admin-api/contexts/\(contextId)/presence-intents", method: .post, body: request))
     }
 
+    /// Sign a presence update with the device key in `keys` and post it
+    /// (``PresenceStatement/signedIntent(contextId:state:seq:sentAtMs:keys:authorProof:)``),
+    /// so the caller supplies no signature. `state` is the encoded slice, or
+    /// `nil` to retract; `seq` must rise per context (``RelayPresenceClient``
+    /// seeds it from the clock).
+    public func postPresenceIntent(
+        _ contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64, keys: DeviceKeys, authorProof: String
+    ) async throws {
+        let request = try PresenceStatement.signedIntent(
+            contextId: contextId, state: state, seq: seq, sentAtMs: sentAtMs, keys: keys, authorProof: authorProof)
+        try await postPresenceIntent(contextId, request: request)
+    }
+
     /// What this node can do to create a context in `groupId` on a member's
     /// behalf. Pass `author` (an account id) to also learn `authorMayCreate`.
     public func getContextIntentRelay(
