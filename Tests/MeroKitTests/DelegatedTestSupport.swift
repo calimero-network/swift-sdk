@@ -18,8 +18,10 @@ enum DelegatedFixture {
 
     static func rep(_ byte: String, _ count: Int = 32) -> String { String(repeating: byte, count: count) }
 
-    /// The wallet's certificate for ``keys``.
-    static var enrolled: EnrolmentCallback { wallet.approve(keys, state: nil) }
+    /// The wallet's certificate for ``keys``, signed once: CryptoKit's Ed25519
+    /// is randomized, so re-signing on every read would give each session a
+    /// different credential and break byte comparisons of ops that embed it.
+    static let enrolled: EnrolmentCallback = wallet.approve(keys, state: nil)
 
     static func session(relayUrl: String? = relay, executorAccount: String? = nil) -> DelegatedSession {
         let cb = enrolled
