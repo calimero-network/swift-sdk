@@ -112,13 +112,22 @@ public enum NamespaceOps {
     }
 }
 
-/// The relay a join was admitted through.
+/// The relay a join was admitted through. (== mero-js `ResolvedInvitationRelay`.)
 public struct InvitationRelay: Sendable, Equatable {
+    /// The node origin to connect through.
     public let relayUrl: String
+    /// Where the signed join is posted: the cloud's own, never rebuilt when given.
     public let admitUrl: String
+    /// The admitter's account, as the cloud reported it.
     public let admitterAccount: String?
+    /// Whether this node can also run delegated writes (`CAN_AUTHOR_ON_BEHALF`).
+    /// `false` is not a failure of admission: the connection that follows
+    /// reads and receives events but has its intents refused.
     public let writable: Bool
+    /// Whether the attempt rests on advisory data (a lapsed heartbeat).
     public let stale: Bool
+    /// The node's peer id, as the cloud reported it.
+    public let peerId: String
 }
 
 /// The outcome of a join: whether the op reached the namespace topic, and the
@@ -127,109 +136,331 @@ public struct JoinOutcome: Sendable, Equatable {
     /// NOT "joined": membership lands when peers apply the op.
     public let published: Bool
     public let relayUrl: String
+    /// How the node was chosen, when the cloud chose it; `nil` when the caller
+    /// named the node itself.
     public let relay: InvitationRelay?
 }
 
-/// Joining as an account (no node of its own).
-public enum AccountJoin {
-    /// Pick the node to be admitted through: the cloud's routing intersected
-    /// with the invitation's signed `admitters`, else an http(s) admitter
-    /// address from the invitation itself.
-    public static func resolveRelay(
-        namespaceId: String, invitation: SignedGroupOpenInvitation, cloud: CloudClient
-    ) async throws -> InvitationRelay {
-        let routing = try await cloud.getNamespaceRouting(namespaceId)
-        let invited = Set(invitation.invitation.admitters.compactMap(normaliseAccount))
+/// Which step of joining from an invitation could not be completed. Each one
+/// needs a different action from the person, which is why this is an enum and
+/// not a message. Raw values are mero-js's `BootstrapStep` strings.
+public enum BootstrapStep: String, Sendable, Equatable, CaseIterable {
+    /// The cloud read itself failed (offline, 5xx, a refused routing proof).
+    /// Nothing is known about the namespace yet.
+    case admittersLookup = "admitters-lookup"
+    /// The cloud lists no node to admit through. An address on the invitation
+    /// is not one: `admitter_addrs` is unsigned.
+    case noNodes = "no-nodes"
+    /// Nodes serve the namespace, and the invitation names none of them.
+    /// Terminal for this invitation: ask for a fresh one.
+    case notInvited = "not-invited"
+    /// A named node exists but cannot take a join now. A wait.
+    case invitedUnreachable = "invited-unreachable"
+    /// A named node can admit but the cloud knows no address for it yet. A wait.
+    case noRelayURL = "no-relay-url"
+    /// The join op could not be signed; nothing was sent.
+    case sign
+    /// The node refused the join, or could not be reached.
+    case admit
+    /// This device holds no enrolled account, so there is nothing to admit.
+    case noCredential = "no-credential"
+}
 
-        if routing.nodes.isEmpty {
-            let httpAddrs = invitation.admitterAddrs.filter { $0.hasPrefix("https://") || $0.hasPrefix("http://") }
-            if var relayUrl = httpAddrs.first {
-                while relayUrl.hasSuffix("/") { relayUrl.removeLast() }
-                return InvitationRelay(
-                    relayUrl: relayUrl, admitUrl: "\(relayUrl)/admin-api/namespaces/\(namespaceId)/admit",
-                    admitterAccount: invited.count == 1 ? invited.first : nil, writable: true, stale: false)
-            }
-            throw AccountError.notSignedIn(
-                "The cloud lists no nodes serving this namespace, so there is no hosted node to be admitted through.")
+/// A join from an invitation that did not happen, and why.
+/// (== mero-js `BootstrapFailure` / `RelayResolutionFailure` / `JoinWithNodeFailure`.)
+public struct BootstrapFailure: Error, Sendable, Equatable {
+    public let step: BootstrapStep
+    /// What to go and do about it.
+    public let reason: String
+    /// The HTTP status, when the failing step was an HTTP call that answered.
+    public let status: Int?
+
+    public init(step: BootstrapStep, reason: String, status: Int? = nil) {
+        self.step = step
+        self.reason = reason
+        self.status = status
+    }
+}
+
+extension BootstrapFailure: LocalizedError {
+    public var errorDescription: String? { reason }
+}
+
+/// A relay to bootstrap through, or the step that stopped it.
+public enum ResolveRelayResult: Sendable, Equatable {
+    case resolved(InvitationRelay)
+    case failed(BootstrapFailure)
+
+    /// The relay, when one was resolved.
+    public var relay: InvitationRelay? {
+        if case .resolved(let relay) = self { return relay }
+        return nil
+    }
+
+    /// The failure, when there was one.
+    public var failure: BootstrapFailure? {
+        if case .failed(let failure) = self { return failure }
+        return nil
+    }
+}
+
+/// What presenting a signed join to one node came to.
+public enum JoinWithNodeResult: Sendable, Equatable {
+    /// The node took the call: `published` says whether it published the op.
+    case joined(published: Bool, relayUrl: String)
+    case failed(BootstrapFailure)
+}
+
+/// What ``AccountJoin/bootstrapFromInvitation(namespaceId:invitation:account:credential:keys:nonce:nodeURL:cloud:session:)``
+/// came to: a join to connect with, or the step that failed.
+public enum BootstrapResult: Sendable, Equatable {
+    case joined(JoinOutcome)
+    case failed(BootstrapFailure)
+
+    /// The join, when there was one.
+    public var outcome: JoinOutcome? {
+        if case .joined(let outcome) = self { return outcome }
+        return nil
+    }
+
+    /// The failure, when there was one.
+    public var failure: BootstrapFailure? {
+        if case .failed(let failure) = self { return failure }
+        return nil
+    }
+
+    /// The join, or the failure thrown.
+    public func get() throws -> JoinOutcome {
+        switch self {
+        case .joined(let outcome): return outcome
+        case .failed(let failure): throw failure
         }
+    }
+}
 
-        let named = routing.nodes.filter { node in
+/// Joining as an account (no node of its own). Port of mero-js
+/// `relay-from-invitation.ts`, `join-with-node.ts` and
+/// `bootstrap-from-invitation.ts`.
+///
+/// A node URL comes from the caller or from the cloud's routing for the
+/// namespace, intersected with the invitation's signed `admitters` — never
+/// from the invitation, signed or not: the inviter may be the attacker, and
+/// `admitter_addrs` sits outside the inviter's signature.
+public enum AccountJoin {
+    /// Resolve a relay to bootstrap through, from an invitation and nothing
+    /// else: the cloud's routing intersected with the signed `admitters` (an
+    /// empty list is the legacy admission-by-broadcast shape). `canAdmit` and
+    /// `servable` are advisory — a named node with an address is tried and the
+    /// node decides; `stale` says the attempt rests on advisory data.
+    /// (== mero-js `resolveRelayFromInvitation`.)
+    public static func resolveRelayFromInvitation(
+        namespaceId: String, admitters: [String],
+        routing: @Sendable (String) async throws -> CloudNamespaceRouting
+    ) async -> ResolveRelayResult {
+        let found: CloudNamespaceRouting
+        do {
+            found = try await routing(namespaceId)
+        } catch {
+            return .failed(
+                BootstrapFailure(
+                    step: .admittersLookup,
+                    reason: "The cloud could not be asked which nodes serve namespace \(namespaceId): "
+                        + "\(RelayClient.message(error)). Nothing is known about the invitation yet — this is the "
+                        + "lookup failing, not the invitation."))
+        }
+        guard !found.nodes.isEmpty else {
+            return .failed(
+                BootstrapFailure(
+                    step: .noNodes,
+                    reason: "The cloud lists no nodes serving this namespace, so there is no hosted node to be "
+                        + "admitted through. The namespace has no fleet assignment — whoever invited you is running "
+                        + "their own node, and admission has to go through a node the cloud routes to."))
+        }
+        let invited = Set(admitters.compactMap(normaliseAccount))
+        let named = found.nodes.filter { node in
             invited.isEmpty || normaliseAccount(node.account).map(invited.contains) == true
         }
         guard !named.isEmpty else {
-            throw AccountError.notSignedIn(
-                "\(routing.nodes.count) node(s) serve this namespace, but your invitation names none of them. "
-                    + "Ask for a fresh invitation.")
+            let count = found.nodes.count
+            return .failed(
+                BootstrapFailure(
+                    step: .notInvited,
+                    reason: "\(count) node\(count == 1 ? "" : "s") serve this namespace, but your invitation names "
+                        + "none of them. The signed admitter list is a snapshot from when the invitation was minted, "
+                        + "so a node assigned since is healthy and will still refuse the claim. Ask for a fresh "
+                        + "invitation."))
         }
+        return chooseAdmitter(named, namespaceId: namespaceId, servable: found.servable)
+    }
+
+    /// ``resolveRelayFromInvitation(namespaceId:admitters:routing:)`` against `cloud`.
+    public static func resolveRelayFromInvitation(
+        namespaceId: String, admitters: [String], cloud: CloudClient
+    ) async -> ResolveRelayResult {
+        await resolveRelayFromInvitation(namespaceId: namespaceId, admitters: admitters) {
+            try await cloud.getNamespaceRouting($0)
+        }
+    }
+
+    /// Of the named nodes, one that can admit and has an address — preferring
+    /// one that can also author, so one node serves both legs.
+    private static func chooseAdmitter(
+        _ named: [CloudNamespaceNode], namespaceId: String, servable: Bool
+    ) -> ResolveRelayResult {
         let usable = named.filter(\.canAdmit)
         let candidates = usable.isEmpty ? named : usable
         let addressable = candidates.filter { ($0.relayUrl ?? "").isEmpty == false }
         guard
             let chosen = addressable.first(where: \.canExecute) ?? addressable.first(where: \.fresh)
-                ?? addressable.first, var relayUrl = chosen.relayUrl
+                ?? addressable.first, let url = chosen.relayUrl
         else {
-            throw AccountError.notSignedIn(
-                "A node your invitation names can admit you, but the cloud knows no address for it yet. Try again shortly."
-            )
+            return .failed(
+                BootstrapFailure(
+                    step: .noRelayURL,
+                    reason: "A node your invitation names can admit you, but the cloud knows no address for it yet, "
+                        + "so there would be nothing to connect through afterwards. Try again shortly."))
         }
-        while relayUrl.hasSuffix("/") { relayUrl.removeLast() }
-        return InvitationRelay(
-            relayUrl: relayUrl,
-            admitUrl: chosen.admitUrl ?? "\(relayUrl)/admin-api/namespaces/\(namespaceId)/admit",
-            admitterAccount: chosen.account, writable: chosen.canExecute,
-            stale: !chosen.fresh || usable.isEmpty || !routing.servable)
+        let relayUrl = DelegatedAccounts.relayOrigin(url)
+        return .resolved(
+            InvitationRelay(
+                relayUrl: relayUrl, admitUrl: chosen.admitUrl ?? admitPath(relayUrl, namespaceId),
+                admitterAccount: chosen.account, writable: chosen.canExecute,
+                stale: !chosen.fresh || usable.isEmpty || !servable, peerId: chosen.peerId))
     }
 
-    /// Sign the join and `POST` it to `admitURL` (`/admin-api/namespaces/{ns}/admit`).
+    /// Pick the node to be admitted through, throwing the step that stopped it.
+    public static func resolveRelay(
+        namespaceId: String, invitation: SignedGroupOpenInvitation, cloud: CloudClient
+    ) async throws -> InvitationRelay {
+        let resolution = await resolveRelayFromInvitation(
+            namespaceId: namespaceId, admitters: invitation.invitation.admitters, cloud: cloud)
+        switch resolution {
+        case .resolved(let relay): return relay
+        case .failed(let failure): throw failure
+        }
+    }
+
+    /// Sign the membership op with the device key and present it to ONE named
+    /// node: `POST {admitURL ?? nodeURL/admin-api/namespaces/{ns}/admit}`
+    /// `{invitation, signedOp}`, unauthenticated — the joiner's signature is
+    /// the authorization. Never throws for an expected failure: a malformed op
+    /// is final (`sign`), an unreachable node a retry and a refusal names its
+    /// status (`admit`). (== mero-js `joinWithNode`.)
+    public static func joinWithNode(
+        nodeURL: String, admitURL: String? = nil, namespaceId: String, invitation: SignedGroupOpenInvitation,
+        account: String, credential: String, keys: DeviceKeys, nonce: UInt64, session: URLSession = .shared
+    ) async -> JoinWithNodeResult {
+        let relayUrl = DelegatedAccounts.relayOrigin(nodeURL)
+        let request: URLRequest
+        do {
+            let signedOp = try NamespaceOps.signMemberJoinOp(
+                namespaceId: namespaceId, member: account, invitation: invitation, credential: credential, keys: keys,
+                nonce: nonce)
+            guard let url = URL(string: admitURL ?? admitPath(relayUrl, namespaceId)) else {
+                throw AccountError.invalidInput("the admit URL is not a URL")
+            }
+            var built = URLRequest(url: url)
+            built.httpMethod = "POST"
+            built.timeoutInterval = 20
+            built.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            built.setValue("application/json", forHTTPHeaderField: "Accept")
+            built.httpBody = try MeroJSON.encode(AdmitJoinRequest(invitation: invitation, signedOp: signedOp))
+            request = built
+        } catch {
+            return .failed(
+                BootstrapFailure(
+                    step: .sign,
+                    reason: "The join op could not be signed, so nothing was sent: \(RelayClient.message(error))"))
+        }
+        do {
+            let (data, _) = try await AccountHTTP.sendRaw(request, session: session)
+            let body = try? MeroJSON.decode(JSONValue.self, from: data)
+            // A 2xx this client cannot read is still a node that took the
+            // call: reported as not published, which is exactly what is not known.
+            return .joined(published: body?["data"]?["published"]?.boolValue == true, relayUrl: relayUrl)
+        } catch MeroError.http(let http) {
+            return .failed(
+                BootstrapFailure(
+                    step: .admit, reason: explainAdmitFailure(http.status, http.bodyText ?? ""), status: http.status))
+        } catch {
+            return .failed(
+                BootstrapFailure(
+                    step: .admit,
+                    reason: "The admitter at \(nodeURL) could not be reached: \(RelayClient.message(error)). The "
+                        + "invitation is untouched — this is the node being unreachable, not a refusal."))
+        }
+    }
+
+    /// Sign the join and `POST` it to `admitURL`, throwing on failure: an
+    /// ``AccountError/intentRefused(reason:retryable:status:)`` for a refusal,
+    /// ``MeroError/network(_:)`` for an unreachable node,
+    /// ``AccountError/invalidInput(_:)`` for an op that could not be signed.
     public static func joinWithNode(
         admitURL: URL, namespaceId: String, invitation: SignedGroupOpenInvitation, account: String,
         credential: String, keys: DeviceKeys, nonce: UInt64, session: URLSession = .shared
     ) async throws -> Bool {
-        let signedOp = try NamespaceOps.signMemberJoinOp(
-            namespaceId: namespaceId, member: account, invitation: invitation, credential: credential, keys: keys,
-            nonce: nonce)
-        var request = URLRequest(url: admitURL)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 20
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpBody = try MeroJSON.encode(AdmitJoinRequest(invitation: invitation, signedOp: signedOp))
-        do {
-            let (data, _) = try await AccountHTTP.sendRaw(request, session: session)
-            let body = try? MeroJSON.decode(JSONValue.self, from: data)
-            return body?["data"]?["published"]?.boolValue == true
-        } catch MeroError.http(let http) {
-            throw AccountError.intentRefused(
-                reason: explainAdmitFailure(http.status, http.bodyText ?? ""), retryable: false, status: http.status)
+        let base = admitURL.absoluteString
+        let result = await joinWithNode(
+            nodeURL: base, admitURL: base, namespaceId: namespaceId, invitation: invitation, account: account,
+            credential: credential, keys: keys, nonce: nonce, session: session)
+        switch result {
+        case .joined(let published, _):
+            return published
+        case .failed(let failure):
+            switch (failure.step, failure.status) {
+            case (.admit, .some(let status)):
+                throw AccountError.intentRefused(reason: failure.reason, retryable: false, status: status)
+            case (.admit, .none):
+                throw MeroError.network(failure.reason)
+            default:
+                throw AccountError.invalidInput(failure.reason)
+            }
         }
     }
 
-    /// Resolve the admitting relay (unless `nodeURL` names one), then sign and
-    /// send the join.
+    /// Resolve the admitting relay (unless `nodeURL` names one — an
+    /// operator's, a local rig's; never one from the invitation), then sign
+    /// and send the join. Never throws: every failure comes back as the
+    /// ``BootstrapStep`` it stopped at. (== mero-js `bootstrapFromInvitation`.)
     public static func bootstrapFromInvitation(
         namespaceId: String, invitation: SignedGroupOpenInvitation, account: String, credential: String,
         keys: DeviceKeys, nonce: UInt64, nodeURL: String? = nil, cloud: CloudClient, session: URLSession = .shared
-    ) async throws -> JoinOutcome {
+    ) async -> BootstrapResult {
         var relay: InvitationRelay?
-        let admitURL: URL
+        var admitURL: String?
         let relayUrl: String
-        if var nodeURL {
-            while nodeURL.hasSuffix("/") { nodeURL.removeLast() }
-            relayUrl = nodeURL
-            admitURL = try AccountHTTP.url(nodeURL, "/admin-api/namespaces/\(namespaceId)/admit")
+        if let nodeURL {
+            relayUrl = DelegatedAccounts.relayOrigin(nodeURL)
         } else {
-            let resolved = try await resolveRelay(namespaceId: namespaceId, invitation: invitation, cloud: cloud)
-            relay = resolved
-            relayUrl = resolved.relayUrl
-            guard let url = URL(string: resolved.admitUrl) else {
-                throw AccountError.protocolViolation("the cloud named an admit URL that is not a URL")
+            // The signed list, read off the invitation itself: two sources for
+            // one fact is how an intersection ends up against the wrong list.
+            let resolution = await resolveRelayFromInvitation(
+                namespaceId: namespaceId, admitters: invitation.invitation.admitters, cloud: cloud)
+            switch resolution {
+            case .failed(let failure):
+                return .failed(failure)
+            case .resolved(let resolved):
+                relay = resolved
+                relayUrl = resolved.relayUrl
+                admitURL = resolved.admitUrl
             }
-            admitURL = url
         }
-        let published = try await joinWithNode(
-            admitURL: admitURL, namespaceId: namespaceId, invitation: invitation, account: account,
+        let joined = await joinWithNode(
+            nodeURL: relayUrl, admitURL: admitURL, namespaceId: namespaceId, invitation: invitation, account: account,
             credential: credential, keys: keys, nonce: nonce, session: session)
-        return JoinOutcome(published: published, relayUrl: relayUrl, relay: relay)
+        switch joined {
+        case .failed(let failure):
+            return .failed(failure)
+        case .joined(let published, _):
+            return .joined(JoinOutcome(published: published, relayUrl: relayUrl, relay: relay))
+        }
+    }
+
+    static func admitPath(_ relayUrl: String, _ namespaceId: String) -> String {
+        let segment =
+            namespaceId.addingPercentEncoding(
+                withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/?"))) ?? namespaceId
+        return "\(DelegatedAccounts.relayOrigin(relayUrl))/admin-api/namespaces/\(segment)/admit"
     }
 
     static func normaliseAccount(_ account: String?) -> String? {
@@ -243,11 +474,13 @@ public enum AccountJoin {
         let detail = body.isEmpty ? "" : ": \(body)"
         switch status {
         case 400:
-            return "The node refused the join as malformed (400)\(detail). An edited or re-serialised invitation "
-                + "fails here, as does a namespace id that is not the invitation's own group."
+            return "The node refused the join as malformed (400)\(detail). The signature covers the invitation "
+                + "exactly as sent, so an edited or re-serialised invitation fails here — as does a namespace id that "
+                + "is not the invitation's own group."
         case 403:
             return "The node refused to carry this join (403)\(detail). Either it is not in the invitation's signed "
-                + "admitters list, or the invitation was rejected as expired."
+                + "admitters list — being live and listed by the cloud is not the same thing — or the invitation "
+                + "itself was rejected as expired or not the inviter’s to issue."
         case 409:
             return "That node holds no device of its own, so it cannot endorse anyone (409)\(detail). Another "
                 + "admitter from the same invitation would work."

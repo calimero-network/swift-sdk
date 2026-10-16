@@ -266,17 +266,27 @@ public actor CloudSignIn {
 
     /// Redeem a namespace invitation as this account: resolve the admitting
     /// relay through the Cloud manager, sign the join, and send it. A relayless
-    /// session adopts the admitting relay.
+    /// session adopts the admitting relay, and the relay is recorded as the
+    /// namespace's (``DelegatedAccountStore/rememberRelay(account:relayURL:namespaceId:contextId:)``).
+    ///
+    /// Throws a ``BootstrapFailure`` naming the step that stopped it
+    /// (``BootstrapStep/noCredential`` when nobody is signed in).
     @discardableResult
     public func join(
         namespaceId: String, invitation: SignedGroupOpenInvitation, nodeURL: String? = nil
     ) async throws -> (session: CloudSession, outcome: JoinOutcome) {
-        guard var session = sessionStore.load() else { throw AccountError.notSignedIn("not signed in") }
+        guard var session = sessionStore.load() else {
+            throw BootstrapFailure(
+                step: .noCredential,
+                reason: "This device holds no enrolled account, so there is nothing to admit: sign in first.")
+        }
         let keys = deviceKeys()
         let outcome = try await AccountJoin.bootstrapFromInvitation(
             namespaceId: namespaceId, invitation: invitation, account: session.account,
             credential: session.credential, keys: keys, nonce: nonces.next(relay: "join:\(session.account)"),
-            nodeURL: nodeURL, cloud: cloudClient(keys: keys, credential: session.credential), session: urlSession)
+            nodeURL: nodeURL, cloud: cloudClient(keys: keys, credential: session.credential), session: urlSession
+        ).get()
+        delegatedStore.rememberRelay(account: session.account, relayURL: outcome.relayUrl, namespaceId: namespaceId)
         if session.relayUrl == nil {
             session.relayUrl = outcome.relayUrl
             session.note = nil
