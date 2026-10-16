@@ -96,6 +96,45 @@ public struct RpcClient: Sendable {
         return output
     }
 
+    private struct CallRequest<Params: Encodable>: Encodable {
+        let jsonrpc = "2.0"
+        let id = 1
+        let method: String
+        let params: Params
+    }
+
+    private struct CallResponse: Decodable {
+        let result: JSONValue?
+        let error: Response<JSONValue>.RPCErr?
+    }
+
+    /// Call any JSON-RPC method on `/jsonrpc` and return its `result` (`nil`
+    /// when the node sent none). A JSON-RPC `error` object throws
+    /// ``MeroError/rpc(_:)``, keeping the node's `type` and `data`.
+    /// (== mero-js `jsonRpcCall`.)
+    @discardableResult
+    public func call<Params: Encodable & Sendable>(_ method: String, params: Params) async throws -> JSONValue? {
+        let bodyData = try MeroJSON.encode(CallRequest(method: method, params: params))
+        let (data, _) = try await http.sendRaw(HttpRequest(path: "/jsonrpc", method: .post, body: .json(bodyData)))
+        let decoded: CallResponse
+        do {
+            decoded = try MeroJSON.decode(CallResponse.self, from: data)
+        } catch {
+            let snippet = String(decoding: data.prefix(200), as: UTF8.self)
+            throw MeroError.decoding("JSON-RPC response: \(snippet)")
+        }
+        if let err = decoded.error {
+            throw MeroError.rpc(
+                RpcError(
+                    code: err.code ?? -1,
+                    message: err.message ?? Self.describe(type: err.type, data: err.data) ?? "RPC error",
+                    type: err.type,
+                    data: err.data
+                ))
+        }
+        return decoded.result
+    }
+
     /// Execute, returning the output together with how it was carried.
     ///
     /// The shape mero-js's transport abstraction shares between a direct node

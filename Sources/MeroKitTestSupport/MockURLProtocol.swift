@@ -20,12 +20,19 @@ public final class MockURLProtocol: URLProtocol {
         /// state has moved on — which is the only way to reproduce a response
         /// that races a token rotation.
         public let delay: TimeInterval
+        /// Deliver the body but never finish the response, until the request
+        /// is cancelled — a long-lived stream (`/sse`) that stays open after
+        /// its first frames.
+        public let holdOpen: Bool
 
-        public init(status: Int, headers: [String: String], body: Data, delay: TimeInterval = 0) {
+        public init(
+            status: Int, headers: [String: String], body: Data, delay: TimeInterval = 0, holdOpen: Bool = false
+        ) {
             self.status = status
             self.headers = headers
             self.body = body
             self.delay = delay
+            self.holdOpen = holdOpen
         }
     }
 
@@ -94,6 +101,7 @@ public final class MockURLProtocol: URLProtocol {
         )!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: stub.body)
+        if stub.holdOpen { return }
         client?.urlProtocolDidFinishLoading(self)
     }
 }

@@ -13,6 +13,8 @@ public actor Mero {
     private let nodeKey: String
     /// Live SSE streams this instance started, cancelled by ``close()``.
     private let streams = SseStreamRegistry()
+    /// The shared ``sse`` and ``ws`` clients, made on first use.
+    private let shared = SharedEventClients()
 
     private var tokenData: TokenData?
     /// In-flight refresh, shared by concurrent 401s in this instance
@@ -89,11 +91,47 @@ public actor Mero {
         sseClient().nodeEvents(contextIds: contextIds, groupIds: groupIds)
     }
 
+    /// `AppVersionChanged` events of `contextIds`, parsed, on their own
+    /// auto-reconnecting stream. (== mero-js `onAppVersionChanged`.)
+    public nonisolated func appVersionChanges(
+        contextIds: [String]
+    ) -> AsyncThrowingStream<AppVersionChangedEvent, Error> {
+        sseClient().appVersionChanges(contextIds: contextIds)
+    }
+
+    /// Migration events of `groupIds` (namespace roots), typed, on their own
+    /// auto-reconnecting stream. (== mero-js `onMigrationEvent`.)
+    public nonisolated func migrationEvents(groupIds: [String]) -> AsyncThrowingStream<GroupMigrationEvent, Error> {
+        sseClient().migrationEvents(groupIds: groupIds)
+    }
+
+    /// This instance's one long-lived SSE connection (== mero-js
+    /// `MeroJs.events`): subscribe and unsubscribe ids while it runs, read
+    /// typed streams off it, and let presence share it. Not connected until
+    /// ``SseConnection/connect()`` (or a presence subscription) asks.
+    /// ``close()`` closes it.
+    public nonisolated var sse: SseConnection {
+        shared.sse { sseClient().connection() }
+    }
+
+    /// **Experimental** WebSocket event client (== mero-js `MeroJs.ws`,
+    /// `@experimental` there too). Prefer ``sse``. ``close()`` closes it.
+    public nonisolated var ws: WsClient {
+        shared.ws { WsClient(baseURL: config.baseURL, token: tokenProvider()) }
+    }
+
+    /// Ephemeral presence over ``rpc`` (`set_ephemeral`) and ``sse``.
+    /// (== mero-js `MeroJs.ephemeral`.)
+    public var ephemeral: EphemeralClient {
+        EphemeralClient(rpc: rpc, events: sse)
+    }
+
+    private nonisolated func tokenProvider() -> @Sendable () async -> String? {
+        { [weak self] in await self?.currentTokenData()?.accessToken }
+    }
+
     private nonisolated func sseClient() -> SseClient {
-        let provider: @Sendable () async -> String? = { [weak self] in
-            await self?.currentTokenData()?.accessToken
-        }
-        return SseClient(baseURL: config.baseURL, token: provider, session: session, registry: streams)
+        SseClient(baseURL: config.baseURL, token: tokenProvider(), session: session, registry: streams)
     }
 
     /// The transport in use (for advanced/custom callers).
@@ -305,11 +343,13 @@ public actor Mero {
 
     /// Close every live event stream this instance started
     /// (``events(contextIds:groupIds:)``, ``groupEvents(groupIds:)``,
-    /// ``nodeEvents(contextIds:groupIds:)``): each one's connection is
-    /// cancelled and its `for try await` loop ends normally. Streams opened
-    /// afterwards work as usual. (== mero-js `close`.)
+    /// ``nodeEvents(contextIds:groupIds:)`` and the typed ones), and the
+    /// shared ``sse`` and ``ws`` clients: each connection is cancelled and its
+    /// `for try await` loops end normally. Streams opened afterwards work as
+    /// usual. (== mero-js `close`.)
     public func close() {
         streams.cancelAll()
+        shared.closeAll()
     }
 
     // MARK: - SSO utilities (static)
@@ -331,5 +371,40 @@ public actor Mero {
         nodeUrl: String, options: AuthLoginOptions, stateStore: AuthLoginStateStore = .shared
     ) -> String {
         SsoLogin.buildAuthLoginUrl(nodeUrl: nodeUrl, options: options, stateStore: stateStore)
+    }
+}
+
+/// The lazily made, shared event clients of one ``Mero``. Thread-safe.
+final class SharedEventClients: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sseConnection: SseConnection?
+    private var wsClient: WsClient?
+
+    func sse(_ make: () -> SseConnection) -> SseConnection {
+        lock.lock()
+        defer { lock.unlock() }
+        if let sseConnection { return sseConnection }
+        let made = make()
+        sseConnection = made
+        return made
+    }
+
+    func ws(_ make: () -> WsClient) -> WsClient {
+        lock.lock()
+        defer { lock.unlock() }
+        if let wsClient { return wsClient }
+        let made = make()
+        wsClient = made
+        return made
+    }
+
+    /// Close both, keeping them for reuse (each may ``SseConnection/connect()`` again).
+    func closeAll() {
+        lock.lock()
+        let sse = sseConnection
+        let ws = wsClient
+        lock.unlock()
+        sse?.close()
+        ws?.close()
     }
 }
