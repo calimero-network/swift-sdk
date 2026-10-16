@@ -27,18 +27,43 @@ public struct MeroConfig: Sendable {
     public var timeout: TimeInterval
     /// Optional token store for persistence. Defaults to an in-memory store.
     public var tokenStore: (any TokenStore)?
+    /// Sign every request/response call (`auth`, `admin`, `rpc`) with
+    /// `X-Calimero-Proof`, instead of or beside a session. `nil` sends none.
+    /// (== mero-js `MeroJsConfig.requestProof`.)
+    ///
+    /// The node honours it only with `--delegated-access`; one without answers
+    /// `403`, distinct from the `401` a bad proof gets. The event streams
+    /// (`sse`, `ws`) still use the session; for proof-authorized SSE build an
+    /// ``SseConnection`` with an `authorize:` hook.
+    public var requestProof: RequestProofConfig?
 
     public init(
         baseURL: URL,
         credentials: Credentials? = nil,
         timeout: TimeInterval = 10,
-        tokenStore: (any TokenStore)? = nil
+        tokenStore: (any TokenStore)? = nil,
+        requestProof: RequestProofConfig? = nil
     ) {
         self.baseURL = baseURL
         self.credentials = credentials
         self.timeout = timeout
         self.tokenStore = tokenStore
+        self.requestProof = requestProof
     }
+}
+
+/// How a ``Mero`` signs each request (``MeroConfig/requestProof``).
+public enum RequestProofConfig: Sendable {
+    /// Mint proofs from a credential and a key (``createProofSigner(_:)``):
+    /// a session key with its login statement, or the device key itself.
+    case keys(ProofSignerOptions)
+    /// Your own signer, when the key must not reach the SDK at all — a
+    /// hardware token, an extension. Its value is sent verbatim; `nil` sends
+    /// no proof.
+    case custom(ProofCallback)
+    /// A per-request authorizer (``createProofAuthorizer(_:)``), whose headers
+    /// are merged into each request.
+    case authorizer(RequestAuthorizer)
 }
 
 /// A token bundle: access + refresh token and the access token's expiry.

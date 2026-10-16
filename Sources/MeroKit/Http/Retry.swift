@@ -96,16 +96,27 @@ public struct TransportHooks: Sendable {
     public var onTokenRefresh: (@Sendable (String) async -> Void)?
     /// Called when the token family is gone (`x-auth-error: token_reuse|token_revoked`).
     public var onAuthRevoked: (@Sendable () async -> Void)?
+    /// Sign each request: called per call with the method, the path and query
+    /// the node will see, and the exact body, and its `X-Calimero-Proof`
+    /// value sent. `nil` sends no proof. (== mero-js `getProof`.)
+    public var getProof: ProofCallback?
+    /// Per-request authorization: the headers it returns are merged into the
+    /// request (``createProofAuthorizer(_:)``). (== mero-js `authorizeRequest`.)
+    public var authorizeRequest: RequestAuthorizer?
 
     public init(
         getAuthToken: (@Sendable () async -> String?)? = nil,
         refreshToken: (@Sendable () async throws -> String)? = nil,
         onTokenRefresh: (@Sendable (String) async -> Void)? = nil,
-        onAuthRevoked: (@Sendable () async -> Void)? = nil
+        onAuthRevoked: (@Sendable () async -> Void)? = nil,
+        getProof: ProofCallback? = nil,
+        authorizeRequest: RequestAuthorizer? = nil
     ) {
         self.getAuthToken = getAuthToken
         self.refreshToken = refreshToken
         self.onTokenRefresh = onTokenRefresh
         self.onAuthRevoked = onAuthRevoked
+        self.getProof = getProof
+        self.authorizeRequest = authorizeRequest
     }
 }

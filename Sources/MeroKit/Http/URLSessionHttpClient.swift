@@ -15,6 +15,14 @@ private let terminalAuthErrors: Set<String> = ["token_reuse", "token_revoked"]
 /// bearer-token injection, reactive 401→refresh (single-flight, retried once),
 /// and terminal `x-auth-error` handling.
 ///
+/// **Request proofs.** With ``TransportHooks/getProof`` or
+/// ``TransportHooks/authorizeRequest`` set, each request is signed here, where
+/// its method, path and query and exact body are known, and carries
+/// `X-Calimero-Proof`. A request carrying a proof never follows a redirect
+/// (it would carry the header to a location it was not signed for): the `3xx`
+/// surfaces as ``MeroError/http(_:)`` with status `0`, and nothing is re-sent.
+/// (== mero-js `refuseProofRedirect`.)
+///
 /// Every request is sent **once**: there is no automatic retry on a network
 /// failure or a `5xx`, as in mero-js. A non-idempotent `POST`/`PUT`/`PATCH`/
 /// `DELETE` that failed in transit may already have run on the node; sending
@@ -72,10 +80,16 @@ public final class URLSessionHttpClient: HttpClient {
 
     public func download(_ req: HttpRequest, to fileURL: URL) async throws -> HeadResult {
         // Stream the body to disk rather than buffering in RAM (memory-safe for large blobs).
-        let urlRequest = buildURLRequest(req, bearer: await currentAuthToken())
-        let (tempURL, response) = try await session.download(for: urlRequest)
+        let urlRequest = try await authorized(buildURLRequest(req, bearer: await currentAuthToken()), body: req.body)
+        let proofAttached = carriesProof(urlRequest.allHTTPHeaderFields ?? [:])
+        let (tempURL, response) = try await session.download(
+            for: urlRequest, delegate: proofAttached ? ProofRedirectRefusal() : nil)
         let http = response as? HTTPURLResponse
         let head = HeadResult(status: http?.statusCode ?? 0, headers: lowercasedHeaders(http))
+        if proofAttached, let status = http?.statusCode, (300..<400).contains(status) {
+            try? FileManager.default.removeItem(at: tempURL)
+            throw proofRedirectError(url: urlRequest.url?.absoluteString ?? req.path, headers: head.headers)
+        }
         guard let status = http?.statusCode, (200..<300).contains(status) else {
             try? FileManager.default.removeItem(at: tempURL)
             let body = (try? Data(contentsOf: tempURL)).map { String(decoding: $0.prefix(65536), as: UTF8.self) }
@@ -100,12 +114,13 @@ public final class URLSessionHttpClient: HttpClient {
         // this request actually sent, not against whatever the token is by the
         // time the response comes back.
         let presentedToken = await currentAuthToken()
-        let urlRequest = buildURLRequest(req, bearer: presentedToken)
+        let urlRequest = try await authorized(buildURLRequest(req, bearer: presentedToken), body: req.body)
+        let proofAttached = carriesProof(urlRequest.allHTTPHeaderFields ?? [:])
 
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await performFetch(urlRequest, body: req.body)
+            (data, response) = try await performFetch(urlRequest, body: req.body, refuseRedirects: proofAttached)
         } catch let urlErr as URLError {
             throw MeroError.network(urlErr.localizedDescription)
         }
@@ -115,6 +130,9 @@ public final class URLSessionHttpClient: HttpClient {
         }
 
         let headers = lowercasedHeaders(http)
+        if proofAttached, (300..<400).contains(http.statusCode) {
+            throw proofRedirectError(url: urlRequest.url?.absoluteString ?? req.path, headers: headers)
+        }
         if (200..<300).contains(http.statusCode) {
             return (data, HeadResult(status: http.statusCode, headers: headers))
         }
@@ -163,11 +181,47 @@ public final class URLSessionHttpClient: HttpClient {
         throw MeroError.http(httpError)
     }
 
-    private func performFetch(_ request: URLRequest, body: HttpBody?) async throws -> (Data, URLResponse) {
+    private func performFetch(
+        _ request: URLRequest, body: HttpBody?, refuseRedirects: Bool
+    ) async throws -> (Data, URLResponse) {
+        let delegate: ProofRedirectRefusal? = refuseRedirects ? ProofRedirectRefusal() : nil
         if case .file(let fileURL, _) = body {
-            return try await session.upload(for: request, fromFile: fileURL)
+            return try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
         }
-        return try await session.data(for: request)
+        return try await session.data(for: request, delegate: delegate)
+    }
+
+    /// `request` with whatever the proof hooks add: the authorizer's headers,
+    /// then the `X-Calimero-Proof` from ``TransportHooks/getProof``. Signed
+    /// over the URL as it will be fetched and the exact body bytes.
+    private func authorized(_ request: URLRequest, body: HttpBody?) async throws -> URLRequest {
+        guard hooks.authorizeRequest != nil || hooks.getProof != nil, let url = request.url else { return request }
+        let proofRequest = ProofRequest(
+            method: request.httpMethod ?? "GET", path: signedPath(url), body: try Self.signableBody(body))
+        var request = request
+        if let authorizeRequest = hooks.authorizeRequest {
+            for (name, value) in try await authorizeRequest(proofRequest) {
+                request.setValue(value, forHTTPHeaderField: name)
+            }
+        }
+        if let getProof = hooks.getProof, let proof = try await getProof(proofRequest) {
+            request.setValue(proof, forHTTPHeaderField: requestProofHeader)
+        }
+        return request
+    }
+
+    /// The bytes a proof commits to. A file streamed from disk is refused:
+    /// signing it would mean reading bytes the upload then reads again, and a
+    /// guess would be a signature over bytes that never travelled.
+    static func signableBody(_ body: HttpBody?) throws -> Data {
+        switch body {
+        case .none: return Data()
+        case .json(let data): return data
+        case .data(let data, _): return data
+        case .file:
+            throw AccountError.invalidInput(
+                "a request-carried proof cannot commit to a file body: send the bytes as .data, or use a session")
+        }
     }
 
     /// The bearer to send, or nil for an unauthenticated request.
@@ -217,7 +271,18 @@ public final class URLSessionHttpClient: HttpClient {
         let base = baseURL.absoluteString
         let trimmedBase = base.hasSuffix("/") ? String(base.dropLast()) : base
         let joined = path.hasPrefix("/") ? "\(trimmedBase)\(path)" : "\(trimmedBase)/\(path)"
-        return URL(string: joined) ?? baseURL
+        guard let url = URL(string: joined) else { return baseURL }
+        return Self.withoutBareQuery(url)
+    }
+
+    /// Drop a bare trailing `?` (an empty query), so the URL signed and the
+    /// URL fetched are one string. (== mero-js `withoutBareQuery`.)
+    static func withoutBareQuery(_ url: URL) -> URL {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+            components.percentEncodedQuery?.isEmpty == true
+        else { return url }
+        components.percentEncodedQuery = nil
+        return components.url ?? url
     }
 
     private func lowercasedHeaders(_ response: HTTPURLResponse?) -> [String: String] {

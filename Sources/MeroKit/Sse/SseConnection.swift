@@ -52,7 +52,7 @@ public final class SseConnection: @unchecked Sendable {
     public static let subscriptionTimeout: TimeInterval = 10
 
     private let baseURL: URL
-    private let token: @Sendable () async -> String?
+    private let authorize: RequestAuthorizer
     private let session: URLSession
     public let backoff: ReconnectBackoff
     private let sleep: @Sendable (TimeInterval) async -> Void
@@ -76,20 +76,43 @@ public final class SseConnection: @unchecked Sendable {
         baseURL: URL, token: @escaping @Sendable () async -> String?, session: URLSession = .shared,
         backoff: ReconnectBackoff = .sse
     ) {
+        self.init(baseURL: baseURL, authorize: bearerAuthorizer(token), session: session, backoff: backoff)
+    }
+
+    /// A connection authorized per request — a device certificate signing a
+    /// request proof (``createProofAuthorizer(_:)``) instead of a bearer
+    /// token. The stream and every subscription POST are signed; a request
+    /// carrying `X-Calimero-Proof` never follows a redirect. (== mero-js
+    /// `SseClient({ authorize })`.)
+    public convenience init(
+        baseURL: URL, authorize: @escaping RequestAuthorizer, session: URLSession = .shared,
+        backoff: ReconnectBackoff = .sse
+    ) {
         self.init(
-            baseURL: baseURL, token: token, session: session, backoff: backoff, sleep: sleepSeconds,
+            baseURL: baseURL, authorize: authorize, session: session, backoff: backoff, sleep: sleepSeconds,
             random: { Double.random(in: 0..<1) }, now: { Date() })
     }
 
-    init(
+    convenience init(
         baseURL: URL, token: @escaping @Sendable () async -> String?, session: URLSession,
+        backoff: ReconnectBackoff, sleep: @escaping @Sendable (TimeInterval) async -> Void,
+        random: @escaping @Sendable () -> Double, now: @escaping @Sendable () -> Date,
+        postTimeout: TimeInterval = SseConnection.subscriptionTimeout
+    ) {
+        self.init(
+            baseURL: baseURL, authorize: bearerAuthorizer(token), session: session, backoff: backoff, sleep: sleep,
+            random: random, now: now, postTimeout: postTimeout)
+    }
+
+    init(
+        baseURL: URL, authorize: @escaping RequestAuthorizer, session: URLSession,
         backoff: ReconnectBackoff, sleep: @escaping @Sendable (TimeInterval) async -> Void,
         random: @escaping @Sendable () -> Double, now: @escaping @Sendable () -> Date,
         postTimeout: TimeInterval = SseConnection.subscriptionTimeout
     ) {
         self.postTimeout = postTimeout
         self.baseURL = baseURL
-        self.token = token
+        self.authorize = authorize
         self.session = session
         self.backoff = backoff
         self.sleep = sleep
@@ -340,18 +363,24 @@ public final class SseConnection: @unchecked Sendable {
     /// One connection: open the stream, re-subscribe on `connect`, dispatch
     /// events until the stream ends or the server sends `close`.
     private func runOnce(generation current: Int, attempt: inout Int) async throws {
-        guard let accessToken = await token() else { throw MeroError.noCredentials }
-
-        // The bearer goes in the header, like every other call. Core still
+        // The credential (a bearer token, or a request proof) goes in a
+        // header, like every other call. For a token, core still
         // accepts `?token=` on `/sse` (it is the one place a browser
         // `EventSource` needs it), but a token in a URL ends up in proxy logs.
-        var request = URLRequest(url: baseURL.appendingPathComponent("sse"))
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        let url = baseURL.appendingPathComponent("sse")
+        var request = URLRequest(url: url)
+        let authorization = try await authorize(ProofRequest(method: "GET", path: signedPath(url)))
+        for (name, value) in authorization { request.setValue(value, forHTTPHeaderField: name) }
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 3600  // long-lived stream
+        let proofAttached = carriesProof(authorization)
 
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await session.bytes(
+            for: request, delegate: proofAttached ? ProofRedirectRefusal() : nil)
         guard let http = response as? HTTPURLResponse else { throw MeroError.network("SSE connect failed") }
+        if proofAttached, (300..<400).contains(http.statusCode) {
+            throw proofRedirectError(url: url.absoluteString, headers: Self.headers(http))
+        }
         guard http.statusCode == 200 else {
             throw Self.failure(status: http.statusCode, headers: Self.headers(http), url: request.url)
         }
@@ -460,21 +489,28 @@ public final class SseConnection: @unchecked Sendable {
     // MARK: - Subscription POST
 
     private func postSubscription(method: String, _ ids: SubscriptionChange, sessionId: String) async throws {
-        guard let accessToken = await token() else { throw MeroError.noCredentials }
-        var request = URLRequest(url: baseURL.appendingPathComponent("sse/subscription"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = postTimeout
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.httpBody = try JSONSerialization.data(
+        let url = baseURL.appendingPathComponent("sse/subscription")
+        let body = try JSONSerialization.data(
             withJSONObject: SseClient.subscriptionBody(
                 sessionId: sessionId, contextIds: ids.contextIds, groupIds: ids.groupIds, method: method))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = postTimeout
+        let authorization = try await authorize(ProofRequest(method: "POST", path: signedPath(url), body: body))
+        for (name, value) in authorization { request.setValue(value, forHTTPHeaderField: name) }
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        let proofAttached = carriesProof(authorization)
         let session = self.session
         let sent = request
         let answer = try await withTimeout(postTimeout, "SSE \(method)") { () -> SubscriptionAnswer in
-            let (_, response) = try await session.data(for: sent)
+            let (_, response) = try await session.data(
+                for: sent, delegate: proofAttached ? ProofRedirectRefusal() : nil)
             guard let http = response as? HTTPURLResponse else { throw MeroError.network("SSE \(method) failed") }
             return SubscriptionAnswer(status: http.statusCode, headers: Self.headers(http))
+        }
+        if proofAttached, (300..<400).contains(answer.status) {
+            throw proofRedirectError(url: url.absoluteString, headers: answer.headers)
         }
         guard (200..<300).contains(answer.status) else {
             throw Self.failure(status: answer.status, headers: answer.headers, url: request.url)
@@ -598,5 +634,14 @@ struct PresenceBook {
             data["ageMs"] = .number(base + elapsed)
             return .object(data)
         }
+    }
+}
+
+/// The bearer-token authorizer every token-based SSE client uses: the access
+/// token in `Authorization`, or ``MeroError/noCredentials`` when there is none.
+func bearerAuthorizer(_ token: @escaping @Sendable () async -> String?) -> RequestAuthorizer {
+    { _ in
+        guard let accessToken = await token() else { throw MeroError.noCredentials }
+        return ["Authorization": "Bearer \(accessToken)"]
     }
 }

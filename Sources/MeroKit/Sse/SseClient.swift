@@ -165,7 +165,7 @@ final class SseStreamRegistry: @unchecked Sendable {
 /// ```
 public final class SseClient: @unchecked Sendable {
     private let baseURL: URL
-    private let token: @Sendable () async -> String?
+    private let authorize: RequestAuthorizer
     private let session: URLSession
     private let registry: SseStreamRegistry?
     private let backoff: ReconnectBackoff
@@ -178,13 +178,32 @@ public final class SseClient: @unchecked Sendable {
         self.init(baseURL: baseURL, token: token, session: session, registry: nil, backoff: backoff)
     }
 
-    init(
+    /// A client whose streams are authorized per request — a request proof
+    /// from ``createProofAuthorizer(_:)`` instead of a bearer token.
+    public convenience init(
+        baseURL: URL, authorize: @escaping RequestAuthorizer, session: URLSession = .shared,
+        backoff: ReconnectBackoff = .sse
+    ) {
+        self.init(baseURL: baseURL, authorize: authorize, session: session, registry: nil, backoff: backoff)
+    }
+
+    convenience init(
         baseURL: URL, token: @escaping @Sendable () async -> String?, session: URLSession,
         registry: SseStreamRegistry?, backoff: ReconnectBackoff = .sse,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = sleepSeconds
     ) {
+        self.init(
+            baseURL: baseURL, authorize: bearerAuthorizer(token), session: session, registry: registry,
+            backoff: backoff, sleep: sleep)
+    }
+
+    init(
+        baseURL: URL, authorize: @escaping RequestAuthorizer, session: URLSession,
+        registry: SseStreamRegistry?, backoff: ReconnectBackoff = .sse,
+        sleep: @escaping @Sendable (TimeInterval) async -> Void = sleepSeconds
+    ) {
         self.baseURL = baseURL
-        self.token = token
+        self.authorize = authorize
         self.session = session
         self.registry = registry
         self.backoff = backoff
@@ -196,7 +215,7 @@ public final class SseClient: @unchecked Sendable {
     /// ``SseConnection/subscribe(contextIds:groupIds:)`` on it.
     public func connection() -> SseConnection {
         SseConnection(
-            baseURL: baseURL, token: token, session: session, backoff: backoff, sleep: sleep,
+            baseURL: baseURL, authorize: authorize, session: session, backoff: backoff, sleep: sleep,
             random: { Double.random(in: 0..<1) }, now: { Date() })
     }
 

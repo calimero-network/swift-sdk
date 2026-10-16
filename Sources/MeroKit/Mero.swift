@@ -28,7 +28,9 @@ public actor Mero {
                 guard let self else { throw MeroError.noRefreshToken }
                 return try await self.performTokenRefresh().accessToken
             },
-            onAuthRevoked: { [weak self] in await self?.clearToken() }
+            onAuthRevoked: { [weak self] in await self?.clearToken() },
+            getProof: proofCallback,
+            authorizeRequest: proofAuthorizer
         )
         return URLSessionHttpClient(
             baseURL: config.baseURL,
@@ -42,6 +44,10 @@ public actor Mero {
         self.init(config: config, session: .shared)
     }
 
+    /// The ``MeroConfig/requestProof`` signer, resolved once at construction.
+    private let proofCallback: ProofCallback?
+    private let proofAuthorizer: RequestAuthorizer?
+
     /// Designated initializer allowing a custom `URLSession` (used by tests to
     /// inject a `MockURLProtocol`-backed session).
     public init(config: MeroConfig, session: URLSession) {
@@ -49,6 +55,23 @@ public actor Mero {
         self.tokenStore = config.tokenStore ?? MemoryTokenStore()
         self.session = session
         self.nodeKey = TokenData.nodeKey(for: config.baseURL)
+        switch config.requestProof {
+        case .none:
+            proofCallback = nil
+            proofAuthorizer = nil
+        case .keys(let options):
+            // A key that cannot sign is reported on the first request instead,
+            // since `init` does not throw.
+            let signer = Result { try createProofSigner(options) }
+            proofCallback = { request in try await signer.get()(request) }
+            proofAuthorizer = nil
+        case .custom(let callback):
+            proofCallback = callback
+            proofAuthorizer = nil
+        case .authorizer(let authorizer):
+            proofCallback = nil
+            proofAuthorizer = authorizer
+        }
         // Restore tokens from the store if this node issued them.
         self.tokenData = Self.boundTokens(in: self.tokenStore, nodeKey: self.nodeKey)
     }
