@@ -36,14 +36,7 @@ public struct CapturedInvitation: Identifiable {
     /// invitation has spent its automatic attempts: it is still handed over,
     /// so a retry is one tap, but it stops re-firing on every launch.
     public let autoJoin: Bool
-    private let ack: @MainActor () -> Void
-
-    init(token: String, params: [String: String], autoJoin: Bool, ack: @escaping @MainActor () -> Void) {
-        self.token = token
-        self.params = params
-        self.autoJoin = autoJoin
-        self.ack = ack
-    }
+    let ack: @MainActor () -> Void
 
     public var id: String { token }
 
