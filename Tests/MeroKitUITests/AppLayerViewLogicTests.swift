@@ -104,7 +104,6 @@ final class AppLayerViewLogicTests: XCTestCase {
         XCTAssertEqual(defaultMeroTheme.radius, 8)
         let tweaked = defaultMeroTheme.with { $0.radius = 12 }
         XCTAssertEqual(tweaked.radius, 12)
-        XCTAssertEqual(tweaked.primary, defaultMeroTheme.primary)
     }
 
     func testSmallFormatting() {

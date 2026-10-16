@@ -486,8 +486,8 @@ public final class MeroClient: ObservableObject {
     private func makeNodeMero(_ url: String) -> Mero {
         if let mero, connection == nil { Task { await mero.close() } }
         let base = URL(string: url) ?? URL(fileURLWithPath: "/")
-        let config = MeroConfig(baseURL: base, timeout: config.timeout, tokenStore: makeTokenStore())
-        let made = session.map { Mero(config: config, session: $0) } ?? Mero(config: config)
+        let nodeConfig = MeroConfig(baseURL: base, timeout: self.config.timeout, tokenStore: makeTokenStore())
+        let made = session.map { Mero(config: nodeConfig, session: $0) } ?? Mero(config: nodeConfig)
         mero = made
         return made
     }

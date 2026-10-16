@@ -221,10 +221,12 @@ final class InviteRedemptionTests: XCTestCase {
         confirm: Bool = false, enabled: Bool = true, redeem: InviteRedemption.Redeem? = nil,
         onJoined: ((String, String?) -> Void)? = nil
     ) -> InviteRedemption {
-        InviteRedemption(
-            parse: invitationFlowParse,
-            redeem: redeem ?? { .joined(namespaceId: $0.namespaceId, teamName: $0.teamName) }, confirm: confirm,
-            onJoined: onJoined, enabled: enabled, capture: capture, justJoined: justJoined)
+        let standard: InviteRedemption.Redeem = { parsed in
+            RedeemOutcome.joined(namespaceId: parsed.namespaceId, teamName: parsed.teamName)
+        }
+        return InviteRedemption(
+            parse: invitationFlowParse, redeem: redeem ?? standard, confirm: confirm, onJoined: onJoined,
+            enabled: enabled, capture: capture, justJoined: justJoined)
     }
 
     func testJoiningThenJoinedReportsTheNamespaceOnce() async {
