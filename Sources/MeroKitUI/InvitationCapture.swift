@@ -148,6 +148,8 @@ public func buildInviteLink(
 ) -> String {
     var base = host
     while base.hasSuffix("/") { base.removeLast() }
+    // A bare scheme (`calimero:/`, `calimero://`) keeps its `//`.
+    if base.hasSuffix(":") { base += "/" }
     let pathAllowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
     let segment = { (text: String) in text.addingPercentEncoding(withAllowedCharacters: pathAllowed) ?? text }
     var pairs: [(String, String)] = [(invitationParam, token)]
@@ -355,19 +357,28 @@ public final class InvitationCapture: ObservableObject {
         var params = intent.params
         params[invitationParam] = token
         let nonce = stored.nonce
+        // The ack is durable work on the store and the ledger, so it holds
+        // them itself: an invitation outlives the capture that delivered it
+        // (a relaunch makes a new one over the same defaults).
+        let store = self.store
+        let defaults = self.defaults
+        let ledgerKey = attemptsKey
         let captured = CapturedInvitation(
             token: token, params: params, autoJoin: spendAttempt(token),
-            ack: { [weak self] in self?.acked(token: token, nonce: nonce) })
+            ack: { [weak self] in
+                Self.forgetAttempts(token, defaults: defaults, key: ledgerKey)
+                store.ack(nonce)
+                self?.acked(token: token)
+            })
         deliver(captured)
         return true
     }
 
-    private func acked(token: String, nonce: String) {
-        forgetAttempts(token)
+    /// The in-memory side of an ack (the store and the ledger are done by the ack itself).
+    private func acked(token: String) {
         // Acked before any listener took it (declined while logged out): it
         // must not be replayed to the redemption that subscribes after login.
         if buffered?.token == token { buffered = nil }
-        store.ack(nonce)
         if current?.token == token { setCurrent(nil) }
     }
 
@@ -387,15 +398,23 @@ public final class InvitationCapture: ObservableObject {
 
     // MARK: - Attempt ledger
 
-    private func readAttempts() -> [String: Int] {
-        guard let data = defaults.data(forKey: attemptsKey),
+    private nonisolated static func readAttempts(defaults: UserDefaults, key: String) -> [String: Int] {
+        guard let data = defaults.data(forKey: key),
             let parsed = try? JSONDecoder().decode([String: Int].self, from: data)
         else { return [:] }
         return parsed
     }
 
+    private nonisolated static func writeAttempts(_ attempts: [String: Int], defaults: UserDefaults, key: String) {
+        if let data = try? JSONEncoder().encode(attempts) { defaults.set(data, forKey: key) }
+    }
+
+    private func readAttempts() -> [String: Int] {
+        Self.readAttempts(defaults: defaults, key: attemptsKey)
+    }
+
     private func writeAttempts(_ attempts: [String: Int]) {
-        if let data = try? JSONEncoder().encode(attempts) { defaults.set(data, forKey: attemptsKey) }
+        Self.writeAttempts(attempts, defaults: defaults, key: attemptsKey)
     }
 
     /// Count this launch's attempt; whether it is still within the cap.
@@ -408,10 +427,10 @@ public final class InvitationCapture: ObservableObject {
         return true
     }
 
-    private func forgetAttempts(_ token: String) {
-        var attempts = readAttempts()
+    private nonisolated static func forgetAttempts(_ token: String, defaults: UserDefaults, key: String) {
+        var attempts = readAttempts(defaults: defaults, key: key)
         guard attempts.removeValue(forKey: token) != nil else { return }
-        writeAttempts(attempts)
+        writeAttempts(attempts, defaults: defaults, key: key)
     }
 
     /// The attempts recorded for `token`. For tests and diagnostics.

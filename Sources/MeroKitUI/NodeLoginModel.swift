@@ -93,11 +93,11 @@ public final class NodeLoginModel: ObservableObject {
         return nil
     }
 
-    /// `https://` added when no scheme is given.
+    /// `https://` added when no scheme is given. Another scheme (`ftp://…`)
+    /// is kept, so validation refuses it rather than reading `ftp` as a host.
     static func normalized(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmed.lowercased()
-        return lower.hasPrefix("http://") || lower.hasPrefix("https://") ? trimmed : "https://\(trimmed)"
+        return trimmed.contains("://") ? trimmed : "https://\(trimmed)"
     }
 
     static func trimmed(_ url: String) -> String {
