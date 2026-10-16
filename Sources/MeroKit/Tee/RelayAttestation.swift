@@ -112,7 +112,7 @@ public func attestRelayNodeKey(_ options: AttestRelayNodeKeyOptions) async throw
                 "the relay answered with a MOCK quote, which proves nothing about the hardware")
         }
     } else if let verify = options.verify {
-        let collateral = try data["collateral"].flatMap(RelayAttestation.collateral)
+        let collateral = try data["collateral"].flatMap(RelayAttestation.typedCollateral)
         let accepted = try await verify.verify(
             TransportQuoteArgs(
                 quoteB64: quoteB64, nonce: Hex.encode(nonce),
@@ -133,7 +133,7 @@ public func attestRelayNodeKey(_ options: AttestRelayNodeKeyOptions) async throw
 
 extension RelayAttestation {
     /// The collateral a relay sent, typed; `nil` for JSON `null`.
-    static func collateral(_ json: JSONValue) throws -> DcapCollateral? {
+    static func typedCollateral(_ json: JSONValue) throws -> DcapCollateral? {
         if json == .null { return nil }
         return try DcapCollateral(json: json)
     }
@@ -267,7 +267,7 @@ public struct DcapRelayKeyVerifier: RelayKeyVerifier {
                     "the relay answered with a MOCK quote, which proves nothing about the hardware")
             }
         } else {
-            let collateral = try attestation.collateral.flatMap(RelayAttestation.collateral)
+            let collateral = try attestation.collateral.flatMap(RelayAttestation.typedCollateral)
             let accepted = try await verifierFor(attestation.relayURL).verify(
                 TransportQuoteArgs(
                     quoteB64: attestation.quoteB64, nonce: attestation.nonce,
