@@ -93,9 +93,11 @@ public struct CloudConnection: Sendable {
         self.mero = mero
         self.nodeKey = nodeKey
         self.readNote = readNote
-        self.presence = presence ?? relay.map { relay in
-            RelayPresenceClient(relay: relay, events: { mero?.sse })
-        }
+        self.presence =
+            presence
+            ?? relay.map { relay in
+                RelayPresenceClient(relay: relay, events: { mero?.sse })
+            }
     }
 }
 
