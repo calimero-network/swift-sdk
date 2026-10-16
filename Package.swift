@@ -10,6 +10,10 @@ let package = Package(
     products: [
         .library(name: "MeroKit", targets: ["MeroKit"]),
         .library(name: "MeroKitUI", targets: ["MeroKitUI"]),
+        // Test doubles for apps' own tests: `FakeNode` (a stateful fake node) and
+        // `MockURLProtocol`. Depend on it from a test target only — it is not part
+        // of `MeroKit`. (== the Kotlin SDK's `mero-testkit`.)
+        .library(name: "MeroKitTestSupport", targets: ["MeroKitTestSupport"]),
         .executable(name: "MeroExample", targets: ["MeroExample"]),
     ],
     targets: [
@@ -37,7 +41,8 @@ let package = Package(
             ]
         ),
         // Reusable test doubles: a URLProtocol stub + a stateful fake node
-        // (nock/msw analog). Shared by every test target below.
+        // (nock/msw analog). Shared by every test target below, and shipped as
+        // the `MeroKitTestSupport` product for apps' own tests.
         .target(
             name: "MeroKitTestSupport",
             dependencies: ["MeroKit"]
