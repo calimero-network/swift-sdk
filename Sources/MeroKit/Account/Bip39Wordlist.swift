@@ -1,4 +1,3 @@
-
 /// The BIP39 English wordlist (port of mero-js `account/wordlist.ts`).
 ///
 /// Vendored because MeroKit ships with no dependencies, and a recovery phrase
