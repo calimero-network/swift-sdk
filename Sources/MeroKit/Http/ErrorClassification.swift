@@ -205,11 +205,11 @@ private func classify(_ error: AccountError) -> ClassifiedError {
         return ClassifiedError(kind: ErrorKind(status: status), status: status, message: message)
     case .invalidInput, .credentialRejected, .stateMismatch, .protocolViolation:
         return ClassifiedError(kind: .invalid, status: nil, message: message)
-    case .enrolmentDeclined, .linkDeclined:
+    case .enrolmentDeclined, .linkDeclined, .notForAccount:
         return ClassifiedError(kind: .forbidden, status: nil, message: message)
     case .notSignedIn:
         return ClassifiedError(kind: .unauthorized, status: nil, message: message)
-    case .relayKeyUnavailable, .invitationNotClaimable, .cloudNotReady:
+    case .relayKeyUnavailable, .invitationNotClaimable, .cloudNotReady, .noRelay:
         return ClassifiedError(kind: .unavailable, status: nil, message: message)
     }
 }

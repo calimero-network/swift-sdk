@@ -275,20 +275,27 @@ public struct CloudClient: Sendable {
 
     // MARK: - HA for a founded namespace
 
-    /// What to tell a person for each `enable-ha` refusal the cloud names. Every
-    /// one leaves the namespace founded; only hosting was refused.
+    /// What an app can tell a person whose account the cloud cannot place.
+    /// (== mero-js `HA_ACCOUNT_NOT_LINKED_MESSAGE`.)
+    public static let haAccountNotLinkedMessage =
+        "link this account to your cloud user in the wallet so the cloud can host this namespace on its fleet"
+
+    /// What to tell a person for each `enable-ha` refusal the cloud names, keyed
+    /// by its code. Every one leaves the namespace founded; only hosting was
+    /// refused. (== mero-js `HA_REFUSAL_MESSAGES`.)
     public static let haRefusalMessages: [String: String] = [
-        "account_not_linked":
-            "Link this account to your cloud user in the wallet so invitees can find this namespace.",
+        "account_not_linked": haAccountNotLinkedMessage,
         "account_linked_to_several_users":
-            "This account is linked to more than one cloud user, so the cloud cannot tell whose plan hosts the "
-            + "namespace: unlink it from all but one in the wallet.",
+            "this account is linked to more than one cloud user, so the cloud cannot tell whose plan hosts the "
+            + "namespace: unlink it from all but one in the wallet",
         "ha_request_pending":
-            "Another namespace of this account is still waiting to be hosted; the cloud hosts one new namespace at "
-            + "a time without a cloud sign-in.",
-        "unknown_relay": "The cloud does not run the relay this namespace was founded on, so it cannot host it.",
+            "another namespace of this account is still waiting to be hosted; the cloud hosts one new namespace at "
+            + "a time without a cloud sign-in. Sign in to the cloud and turn off hosting for the waiting namespace, "
+            + "or wait until it is hosted",
+        "unknown_relay": "the cloud does not run the relay this namespace was founded on, so it cannot host it",
         "relay_not_dialable":
-            "The relay this namespace was founded on has not reported its address to the cloud yet; try again shortly.",
+            "the relay this namespace was founded on has not reported its address to the cloud yet; try enabling "
+            + "hosting again shortly",
     ]
 
     /// Statuses whose `{"error": code}` names an ``AccountError/haRefused(code:status:body:)``.
