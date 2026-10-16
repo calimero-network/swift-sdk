@@ -349,8 +349,10 @@ public enum DelegatedAccounts {
     /// each in the map, once each.
     public static func knownRelays(_ session: DelegatedSession, store: DelegatedAccountStore = .shared) -> [String] {
         let map = store.relayMap(account: session.account)
-        let all = [session.relayUrl].compactMap { $0 } + map.namespaces.keys.sorted().compactMap { map.namespaces[$0] }
-            + map.contexts.keys.sorted().compactMap { map.contexts[$0] }
+        let first = [session.relayUrl].compactMap { $0 }
+        let byNamespace = map.namespaces.keys.sorted().compactMap { map.namespaces[$0] }
+        let byContext = map.contexts.keys.sorted().compactMap { map.contexts[$0] }
+        let all = first + byNamespace + byContext
         var seen = Set<String>()
         return all.filter { !$0.isEmpty }.map(relayOrigin).filter { seen.insert($0).inserted }
     }
