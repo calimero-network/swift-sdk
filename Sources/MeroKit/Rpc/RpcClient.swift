@@ -10,17 +10,32 @@ public struct MigrateMyEntriesSummary: Codable, Sendable, Equatable {
 public enum RpcTransportKind: String, Sendable, Equatable {
     /// Straight to a node's `/jsonrpc`.
     case node
+    /// Through a relay, as a warranted intent (or a session query for a read).
+    case relay
 }
 
-/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:)``.
+/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:)``,
+/// and of any ``ExecuteTransport``. (== mero-js `ExecuteResult`.)
 public struct RpcExecuteResult<T: Sendable>: Sendable {
+    /// Exactly what `execute` would have returned.
     public let returns: T
+    /// Which transport ran it.
     public let transport: RpcTransportKind
-    public init(returns: T, transport: RpcTransportKind) {
+    /// The context's scope root after the run, hex — relay writes only.
+    ///
+    /// `nil` on the node transport because JSON-RPC `execute` does not report
+    /// it, and on a relay read because nothing was written. `nil` therefore
+    /// means "unknown here", never "nothing changed".
+    public let rootHash: String?
+
+    public init(returns: T, transport: RpcTransportKind, rootHash: String? = nil) {
         self.returns = returns
         self.transport = transport
+        self.rootHash = rootHash
     }
 }
+
+extension RpcExecuteResult: Equatable where T: Equatable {}
 
 /// JSON-RPC 2.0 client for contract `execute` calls. (== mero-js `rpc/index.ts`.)
 ///

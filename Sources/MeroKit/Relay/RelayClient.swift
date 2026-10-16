@@ -279,6 +279,10 @@ public struct RelayClient: PresenceRelay {
     /// This device's signing key, hex: the `author` its presence statements name.
     public var authorKey: String { keys.signPublicKey }
 
+    /// The device keys this client signs with: the same device authors and
+    /// observes (``RelayObserver``).
+    var deviceKeys: DeviceKeys { keys }
+
     /// Sign one presence statement with the device key and post it to the
     /// relay (`POST /admin-api/contexts/{ctx}/presence-intents`). `state` is
     /// the encoded slice, or `nil` to retract.
