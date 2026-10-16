@@ -83,16 +83,27 @@ public struct CloudConnection: Sendable {
     /// resent every 2.5 s while set, read off ``mero``'s ``Mero/sse``.
     /// `nil` when relayless.
     public let presence: RelayPresenceClient?
+    /// The signed-in cloud API (namespaces, HA, linking, sign-out), when the
+    /// connection came from ``connectCloud(_:)``; `nil` from ``CloudSignIn``.
+    public let cloud: CloudClient?
+    /// The owned namespace writes land in (``connectCloud(_:)`` only).
+    public let namespace: CloudNamespace?
+    /// What the cloud reported about the chosen relay (``connectCloud(_:)`` only).
+    public let relayInfo: CloudRelay?
 
     public init(
         session: CloudSession, relay: RelayClient?, mero: Mero?, nodeKey: String?, readNote: String?,
-        presence: RelayPresenceClient? = nil
+        presence: RelayPresenceClient? = nil, cloud: CloudClient? = nil, namespace: CloudNamespace? = nil,
+        relayInfo: CloudRelay? = nil
     ) {
         self.session = session
         self.relay = relay
         self.mero = mero
         self.nodeKey = nodeKey
         self.readNote = readNote
+        self.cloud = cloud
+        self.namespace = namespace
+        self.relayInfo = relayInfo
         self.presence =
             presence
             ?? relay.map { relay in
@@ -231,37 +242,10 @@ public actor CloudSignIn {
     /// — once the relay's node key is established — a Bearer ``Mero`` for
     /// admin reads and events.
     public func connect(_ session: CloudSession) async -> CloudConnection {
-        guard let relayUrl = session.relayUrl else {
-            return CloudConnection(session: session, relay: nil, mero: nil, nodeKey: nil, readNote: session.note)
-        }
-        let keys = deviceKeys()
-        let mero: Mero?
-        let nodeKey: String?
-        var readNote: String?
-        do {
-            let key = try await RelayNodeKey.attest(
-                relayURL: relayUrl, verifier: config.relayKeyVerifier, session: urlSession)
-            let tokens = try await RelayLogin.login(
-                relayURL: relayUrl, nodeKey: key, credential: session.credential, keys: keys,
-                audience: config.audience, clientName: config.clientName, session: urlSession)
-            guard let base = URL(string: relayUrl) else { throw AccountError.invalidInput("bad relay URL") }
-            let client = Mero(config: MeroConfig(baseURL: base, tokenStore: tokenStore), session: urlSession)
-            await client.setTokenData(tokens)
-            mero = client
-            nodeKey = key
-        } catch {
-            mero = nil
-            nodeKey = nil
-            readNote =
-                "Writes work; reads and live events are off until the relay's session is established: "
-                + "\((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-        }
-        let tokenSource = mero
-        let relay = RelayClient(
-            relayURL: relayUrl, authorAccount: session.account, authorProof: session.credential, keys: keys,
-            nonces: nonces, executorAccount: session.executorAccount, ttlSeconds: config.warrantTTLSeconds,
-            tokenProvider: { await tokenSource?.currentTokenData()?.accessToken }, session: urlSession)
-        return CloudConnection(session: session, relay: relay, mero: mero, nodeKey: nodeKey, readNote: readNote)
+        await CloudConnection.open(
+            session, nodeKey: nil,
+            context: RelaySessionContext(
+                config: config, keys: deviceKeys(), tokenStore: tokenStore, nonces: nonces, urlSession: urlSession))
     }
 
     // MARK: - Join
