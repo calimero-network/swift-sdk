@@ -16,7 +16,7 @@ public final class SealedURLProtocol: URLProtocol, @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var transports: [String: SealedTransport] = [:]
 
-    private var task: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
 
     /// Route requests under `transport`'s base URL through it.
     public static func register(_ transport: SealedTransport) {
@@ -60,7 +60,7 @@ public final class SealedURLProtocol: URLProtocol, @unchecked Sendable {
     public override func startLoading() {
         let request = self.request
         let client = SealedProtocolClient(self)
-        task = Task {
+        loadTask = Task {
             do {
                 guard let url = request.url, let transport = SealedURLProtocol.transport(for: url) else {
                     let named = request.url?.absoluteString ?? "a request with no URL"
@@ -81,7 +81,7 @@ public final class SealedURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     public override func stopLoading() {
-        task?.cancel()
+        loadTask?.cancel()
     }
 }
 

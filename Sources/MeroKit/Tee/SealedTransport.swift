@@ -348,12 +348,15 @@ public actor SealedTransport {
     }
 
     /// Seal one request under the session's next request id. (== mero-js `sealRequest`.)
-    static func sealRequest(_ session: SealedSession, head: SealedRequestHead, body: Data) throws -> SealedEnvelope {
+    static func sealRequest(
+        _ session: SealedSession, head: SealedRequestHead, body: Data
+    ) throws -> SealedFrameEnvelope {
         let requestId = session.nextRequestId()
         let header = session.header(requestId)
         let sealed = try AES.GCM.seal(
             head.inner(body), using: session.requestKey, nonce: try nonce(requestId, 0), authenticating: header)
-        return SealedEnvelope(requestId: requestId, header: header, envelope: header + sealed.ciphertext + sealed.tag)
+        return SealedFrameEnvelope(
+            requestId: requestId, header: header, envelope: header + sealed.ciphertext + sealed.tag)
     }
 
     static func exchange(
@@ -577,7 +580,7 @@ struct SealedURLParts {
 }
 
 /// One sealed request: its id, its header (the AAD of every frame), and the bytes posted.
-struct SealedEnvelope {
+struct SealedFrameEnvelope {
     let requestId: UInt64
     let header: Data
     let envelope: Data
