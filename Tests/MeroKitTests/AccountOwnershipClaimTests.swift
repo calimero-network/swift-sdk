@@ -139,7 +139,7 @@ final class AccountOwnershipClaimTests: XCTestCase {
         }
     }
 
-    func testMatchesTheDeviceKeysFormByteForByte() async throws {
+    func testMatchesTheDeviceKeysForm() async throws {
         let keys = try DeviceKeys(
             signSecret: try Hex.decode(secret, label: "s", bytes: 32), kemSecret: Data(repeating: 1, count: 32))
         var fields = AccountHaClaim.ClaimFields(
@@ -152,7 +152,13 @@ final class AccountOwnershipClaimTests: XCTestCase {
         let viaKeys = try AccountHaClaim.sign(
             namespaceId: namespaceId, accountId: accountId, salt: salt, credential: credential, keys: keys,
             nowMs: nowMs, nonce: String(repeating: "0", count: 32))
-        XCTAssertEqual(viaSigner, viaKeys)
+        // CryptoKit's Ed25519 is randomized: the claims match byte for byte,
+        // and both signatures verify.
+        XCTAssertEqual(viaSigner.signedPayload, viaKeys.signedPayload)
+        XCTAssertEqual(viaSigner.kind, viaKeys.kind)
+        XCTAssertEqual(viaSigner.credential, viaKeys.credential)
+        XCTAssertTrue(try verifies(viaSigner))
+        XCTAssertTrue(try verifies(viaKeys))
     }
 
     func testCannotStandInForTheSessionClaim() async throws {

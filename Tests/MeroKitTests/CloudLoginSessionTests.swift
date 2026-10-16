@@ -79,6 +79,13 @@ final class CloudLoginSessionTests: XCTestCase {
         rig.on("GET", "/api/cloud/me/namespaces/\(ns)/relays", json: body)
     }
 
+    /// Whether `signature` (standard base64) is the root's over `domain ‖ nonce`.
+    private func rootSigned(_ signature: String, by publicKey: String, domain: String, nonce: String) throws -> Bool {
+        Ed25519.verify(
+            publicKey: try Hex.decode(publicKey, label: "pk", bytes: 32),
+            signature: try XCTUnwrap(Data(base64Encoded: signature)), message: Data((domain + nonce).utf8))
+    }
+
     // MARK: - Sign-in
 
     func testDefaultsToTheManagerAPI() async throws {
@@ -215,14 +222,21 @@ final class CloudLoginSessionTests: XCTestCase {
 
         XCTAssertEqual(session.sessionToken, "session.jwt.value")
         XCTAssertTrue(cloud.isSignedIn)
-        let posted = try XCTUnwrap(rig.requests("POST", "/api/auth/account").first)
-        XCTAssertEqual(
-            posted.json,
-            [
-                "root_public_key": .string(loginRootPublicKey), "nonce": "test-login-nonce-abc",
-                "signature": .string(loginSignature),
-            ])
-        XCTAssertNil(posted.json?["account_id"], "the cloud derives the account from the key")
+        let posted = try XCTUnwrap(rig.requests("POST", "/api/auth/account").first?.json)
+        XCTAssertEqual(posted["root_public_key"]?.stringValue, loginRootPublicKey)
+        XCTAssertEqual(posted["nonce"], "test-login-nonce-abc")
+        XCTAssertNil(posted["account_id"], "the cloud derives the account from the key")
+        // CryptoKit's Ed25519 is randomized: mdma's own signature pins the
+        // domain, and ours verifies over the same bytes.
+        let signature = try XCTUnwrap(posted["signature"]?.stringValue)
+        let login = "calimero.mdma.account-login.v1\u{0}"
+        XCTAssertTrue(
+            try rootSigned(loginSignature, by: loginRootPublicKey, domain: login, nonce: "test-login-nonce-abc"))
+        XCTAssertTrue(try rootSigned(signature, by: loginRootPublicKey, domain: login, nonce: "test-login-nonce-abc"))
+        XCTAssertFalse(
+            try rootSigned(
+                signature, by: loginRootPublicKey, domain: "calimero.mdma.account-link.v1\u{0}",
+                nonce: "test-login-nonce-abc"))
         XCTAssertTrue(rig.seen.allSatisfy { $0.headers["authorization"] == nil })
     }
 
@@ -544,14 +558,15 @@ final class CloudLoginSessionTests: XCTestCase {
         let link = try await client(token: "stored-token").linkAccount(.secret(linkRootSecret))
         XCTAssertEqual(
             link, CloudAccountLink(accountId: linkAccount, linkedAt: "2026-01-01T00:00:00", alreadyLinked: false))
-        let expected = try await signAccountLink(AccountLinkInput(rootSecret: linkRootSecret, nonce: "challenge-1"))
-        let posted = try XCTUnwrap(rig.requests("POST", "/api/cloud/me/accounts").first)
-        XCTAssertEqual(
-            posted.json,
-            [
-                "account_id": .string(linkAccount), "root_public_key": .string(linkRootPublicKey),
-                "nonce": "challenge-1", "signature": .string(expected),
-            ])
+        let posted = try XCTUnwrap(rig.requests("POST", "/api/cloud/me/accounts").first?.json)
+        XCTAssertEqual(posted["account_id"]?.stringValue, linkAccount)
+        XCTAssertEqual(posted["root_public_key"]?.stringValue, linkRootPublicKey)
+        XCTAssertEqual(posted["nonce"], "challenge-1")
+        let signature = try XCTUnwrap(posted["signature"]?.stringValue)
+        XCTAssertNotNil(Data(base64Encoded: signature), "standard base64")
+        XCTAssertTrue(
+            try rootSigned(
+                signature, by: linkRootPublicKey, domain: "calimero.mdma.account-link.v1\u{0}", nonce: "challenge-1"))
         for seen in rig.seen {
             XCTAssertFalse(String(decoding: seen.body, as: UTF8.self).contains(linkRootSecret))
             XCTAssertFalse(seen.url.absoluteString.contains(linkRootSecret))

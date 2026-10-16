@@ -312,9 +312,15 @@ final class CloudLinkFlowTests: XCTestCase {
         XCTAssertEqual(body["root_public_key"]?.stringValue, grantRootPublicKey)
         XCTAssertNil(body["account_id"])
         XCTAssertNil(body["email"])
-        let expected = try await signAccountLink(AccountLinkInput(rootSecret: grantRootSecret, nonce: "grant.one"))
-        XCTAssertEqual(body["signature"]?.stringValue, expected)
-        XCTAssertNotEqual(sent.first?.json?["signature"], sent.last?.json?["signature"])
+        // The grant is the nonce, signed in the account-link domain.
+        for (request, grant) in zip(sent, ["grant.one", "grant.two"]) {
+            let signature = try XCTUnwrap(request.json?["signature"]?.stringValue)
+            let ok = Ed25519.verify(
+                publicKey: try Hex.decode(grantRootPublicKey, label: "pk", bytes: 32),
+                signature: try XCTUnwrap(Data(base64Encoded: signature)),
+                message: Data("calimero.mdma.account-link.v1\u{0}\(grant)".utf8))
+            XCTAssertTrue(ok, grant)
+        }
 
         do {
             _ = try await cloud.linkAccountWithGrant(grant: "spent.token", rootSecret: grantRootSecret)
