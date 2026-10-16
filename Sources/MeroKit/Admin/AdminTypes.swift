@@ -987,8 +987,16 @@ public struct CreateNamespaceResponseData: Codable, Sendable {
     public let namespaceId: String
     /// What the id was derived from. `nil` on a node that predates derived ids.
     public let founding: NamespaceFounding?
-    public init(namespaceId: String, founding: NamespaceFounding? = nil) {
+    /// An account's founding only (``AccountAdmin``): whether the cloud agreed
+    /// to host the namespace (HA). A node never sends it.
+    public let haEnabled: Bool?
+    /// Why ``haEnabled`` is `false`, in words a person can act on.
+    public let haError: String?
+    public init(
+        namespaceId: String, founding: NamespaceFounding? = nil, haEnabled: Bool? = nil, haError: String? = nil
+    ) {
         self.namespaceId = namespaceId; self.founding = founding
+        self.haEnabled = haEnabled; self.haError = haError
     }
 }
 
