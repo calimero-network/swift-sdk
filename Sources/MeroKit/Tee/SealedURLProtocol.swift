@@ -104,7 +104,22 @@ private struct SealedProtocolClient: @unchecked Sendable {
     }
 
     func failed(_ error: Error) {
-        owner.client?.urlProtocol(owner, didFailWithError: error)
+        owner.client?.urlProtocol(owner, didFailWithError: Self.carryingMessage(error))
+    }
+
+    /// `error` as an `NSError` that keeps its message. On Apple platforms
+    /// `URLSession` rebuilds a protocol's error from its domain, code and
+    /// `userInfo`, which drops the Swift value and with it a
+    /// `LocalizedError`'s description ("MeroKit.TeeTrustError error 1"), so
+    /// the message is written into `userInfo` and the original kept as the
+    /// underlying error.
+    static func carryingMessage(_ error: Error) -> Error {
+        guard !(error is URLError), let message = (error as? LocalizedError)?.errorDescription else { return error }
+        let bridged = error as NSError
+        var info = bridged.userInfo
+        info[NSLocalizedDescriptionKey] = message
+        info[NSUnderlyingErrorKey] = bridged
+        return NSError(domain: bridged.domain, code: bridged.code, userInfo: info)
     }
 }
 
