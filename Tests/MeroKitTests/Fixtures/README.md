@@ -84,3 +84,21 @@ clean diff. What matters is the **key set** and the shape of each value.
 A diff against the committed file is itself the signal: if a field appeared or
 changed shape, that is a wire change to handle, not a fixture to overwrite
 quietly.
+
+## TEE fixtures (`tee/`)
+
+Copied verbatim from mero-js `src/sealed/fixtures/` and
+`src/agent-gate/fixtures/`, so the Swift port is pinned to the same inputs as
+the JavaScript one:
+
+- `mero-tee-v2.3.86.*`, `mero-tee-v2.3.87.*`: real mero-tee node releases as
+  the release workflow published them — `published-mrtds.json`, its cosign
+  bundle and its detached `.sig` — plus a copy with one byte changed
+  (`tampered`) and the same release's `release-provenance.json` (signed by the
+  node workflow, but not a measurements file).
+- `mero-kms-v2.3.87.kms-attestation-policy.json*`: a real mero-kms policy and
+  its bundle (signed by the KMS workflow, `role: "kms"`).
+- `tdx_quote.bin`, `tdx_quote_collateral.json`: dcap-qvl's sample TDX quote and
+  the Intel-signed collateral for it, valid on 2025-06-27.
+- `rust-sealed-bundle.json`: an HPKE bundle mero-agent-gate (Rust, the `hpke`
+  crate) sealed.
