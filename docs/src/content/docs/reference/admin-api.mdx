@@ -159,6 +159,7 @@ rotates.
 | `rescopeDevice(_ deviceId: String, request: RescopeDeviceRequest) -> RescopeDeviceResponseData` | `PUT /account/devices/{deviceId}/scope` |
 | `labelDevice(_ deviceId: String, request: LabelDeviceRequest) -> LabelDeviceResponseData` | `PUT /account/devices/{deviceId}/label` |
 | `revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) -> RevokeDeviceResponseData` | `POST /namespaces/{namespaceId}/account/revoke` |
+| `listNamespaceRevokedDevices(_ namespaceId: String) -> NamespaceRevokedDevices` | `GET /namespaces/{namespaceId}/revoked-devices` — `revokedDevices` + `withdrawnSlots`, no `{ data }` envelope; `403` unless this node holds an account bound in the namespace |
 | `linkAccountDevice(_ namespaceId: String, request: LinkAccountDeviceRequest) -> LinkAccountDeviceResponseData` | `POST /namespaces/{namespaceId}/account/link-device` |
 | `signWithAccountRoot(_ request: AccountSignWithRootRequest) -> AccountSignWithRootResponseData` | `POST /account/sign-with-root` |
 | `sealToAccount(_ groupId: String, account: String, request: SealToAccountRequest) -> SealedEnvelope` | `POST /groups/{groupId}/accounts/{account}/seal` |

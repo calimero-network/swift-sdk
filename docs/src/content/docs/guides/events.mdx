@@ -80,11 +80,10 @@ to close the SSE connection:
 task.cancel()   // closes the connection
 ```
 
-<Aside type="caution">
-  `mero.close()` and `mero.logout()` do **not** stop an in-flight event stream.
-  Track the `Task` you started the loop in and cancel it on teardown (for
-  example in SwiftUI, start the loop in `.task { }` so the framework cancels it
-  when the view disappears).
+<Aside type="note">
+  `mero.close()` and `mero.logout()` end every event stream the instance
+  started. For a stream tied to one screen, still start the loop in `.task { }`
+  so SwiftUI cancels it when the view disappears.
 </Aside>
 
 ## In SwiftUI

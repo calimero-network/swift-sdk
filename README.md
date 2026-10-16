@@ -81,6 +81,19 @@ targets: [
 
 Or in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
 
+For your own tests, the `MeroKitTestSupport` product ships the SDK's test
+doubles — `FakeNode` (a stateful fake node: login, refresh, revoke, logout,
+JSON-RPC) and `MockURLProtocol`. Add it to a test target only:
+
+```swift
+.testTarget(name: "MyAppTests", dependencies: [
+    "MyApp",
+    .product(name: "MeroKitTestSupport", package: "swift-sdk"),
+]),
+```
+
+It is SPM-only, like `MeroKitUI`; the CocoaPods spec ships `MeroKit` alone.
+
 ## Sign in with Calimero Cloud (mobile)
 
 Mobile apps sign in with **Calimero Cloud** only: the person approves this
@@ -156,6 +169,14 @@ if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
 }
 ```
 
+`parseAuthCallback` accepts only a callback for a login `buildAuthLoginUrl`
+began (a single-use `auth_state` in the callback URL, alive 10 minutes); tokens
+nobody asked for are ignored. Pass the same `AuthLoginStateStore.keychain()` to
+both calls if the callback can arrive after a relaunch.
+
+**Find a local node** (development): `await NodeDiscovery.discoverLocalNodes()`
+probes `localhost` ports 2428/2429/2528/2529 and returns the healthy ones.
+
 ### 3. Call a contract (JSON-RPC)
 
 ```swift
@@ -184,7 +205,16 @@ let task = Task {
         await reload()
     }
 }
-// task.cancel() closes the stream.
+// task.cancel() closes the stream; mero.close() closes every stream it started.
+
+// Typed group events (membership, migration), or both kinds on one stream:
+for try await event in mero.groupEvents(groupIds: [groupId]) { print(event.kind) }
+for try await event in mero.nodeEvents(contextIds: [contextId], groupIds: [groupId]) {
+    switch event {
+    case .context(let e): print(e.contextId)
+    case .group(let g): print(g.groupId)
+    }
+}
 ```
 
 ### 6. Log out
@@ -206,6 +236,12 @@ await mero.logout() // clears the token bundle from memory and the store
 - **Terminal errors force re-login.** `x-auth-error: token_reuse | token_revoked`
   is never retried — it surfaces as `MeroError.authRevoked` and the token bundle
   is cleared.
+- **Tokens are bound to their node.** The persisted bundle names the node that
+  issued it (`TokenData.nodeOrigin`); a bundle for another node is ignored.
+- **No automatic retries.** Each request is sent once, so a write is never
+  repeated behind your back. Wrap idempotent calls in `withRetry { … }` to retry
+  network/5xx/429 failures with backoff, and use `classifyError(error)` to turn
+  any failure into a `kind` + `retryable` + the node's own message.
 
 ## Frontend (`MeroKitUI`)
 
@@ -254,8 +290,10 @@ swift run MeroExample                       # full online flow: auth → identit
 
 The suite is a Swift test pyramid:
 
-- **Unit tests** (`Tests/MeroKitTests`) — JWT/token parsing, JSONValue, SSO, capabilities,
-  retry, and per-method admin request-shape checks.
+- **Unit tests** (`Tests/MeroKitTests`) — JWT/token parsing, JSONValue, SSO (and its
+  single-use login state), token node binding, capabilities and presets, error
+  classification, retry, node discovery, typed event streams, and per-method admin
+  request-shape checks.
 - **Mocked end-to-end** (`FakeNode` + `EndToEndMockTests`) — a stateful in-memory node
   (the Swift analog of nock/msw) drives whole journeys: login → refresh mid-flight →
   concurrent single-flight refresh → revoked-family re-login → logout. No node needed.

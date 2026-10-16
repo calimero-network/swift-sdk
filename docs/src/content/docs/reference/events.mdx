@@ -37,10 +37,46 @@ let task = Task {
 task.cancel()   // closes the SSE stream
 ```
 
-<Aside type="caution">
-  `mero.close()` / `mero.logout()` do **not** stop an active stream — its
-  lifetime is owned by the `Task`. Always cancel that `Task` yourself.
+<Aside type="note">
+  `mero.close()` (and `mero.logout()`) ends every stream the instance started;
+  the `for try await` loop finishes normally. Cancelling the `Task` closes one
+  stream.
 </Aside>
+
+## `mero.groupEvents(groupIds:)` / `mero.nodeEvents(contextIds:groupIds:)`
+
+Typed streams, like the Kotlin SDK's `groupEvents` / `nodeEvents`:
+
+```swift
+nonisolated func groupEvents(groupIds: [String]) -> AsyncThrowingStream<GroupEvent, Error>
+nonisolated func nodeEvents(
+    contextIds: [String], groupIds: [String]
+) -> AsyncThrowingStream<NodeEvent, Error>
+
+public struct GroupEvent: Sendable, Equatable {
+    public let groupId: String     // hex
+    public let kind: String        // "MemberAdded", "MemberRemoved", "MigrationCompleted", ...
+    public let payload: JSONValue  // the raw `result` JSON
+}
+
+public enum NodeEvent: Sendable {
+    case context(ContextEvent)
+    case group(GroupEvent)
+    public var contextEvent: ContextEvent { get }  // the untyped form `events` yields
+}
+```
+
+```swift
+for try await event in mero.nodeEvents(contextIds: [chat], groupIds: [team]) {
+    switch event {
+    case .context(let e): await reloadMessages(e.contextId)
+    case .group(let g) where g.kind == "MemberAdded": await reloadMembers(g.groupId)
+    case .group: break
+    }
+}
+```
+
+`groupEvents` subscribes no contexts and yields only group events.
 
 ## `ContextEvent`
 
@@ -85,8 +121,15 @@ public final class SseClient: @unchecked Sendable {
     public func events(
         contextIds: [String], groupIds: [String] = []
     ) -> AsyncThrowingStream<ContextEvent, Error>
+    public func groupEvents(groupIds: [String]) -> AsyncThrowingStream<GroupEvent, Error>
+    public func nodeEvents(
+        contextIds: [String], groupIds: [String]
+    ) -> AsyncThrowingStream<NodeEvent, Error>
 }
 ```
+
+A standalone `SseClient` is not tracked by any `Mero`, so `mero.close()` does
+not end its streams.
 
 <Aside type="note">
   The stream uses a long-lived `URLSession.bytes(for:)` request. Don't back it

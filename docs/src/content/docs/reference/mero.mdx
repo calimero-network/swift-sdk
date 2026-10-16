@@ -64,19 +64,29 @@ func setTokenData(_ data: TokenData)          // set directly; derives expiresAt
 func setTokenData(from callback: AuthCallbackResult)  // from a parsed SSO callback
 func clearToken()                             // drop the bundle + clear the store
 func logout() async                           // POST /auth/logout (best-effort), clearToken() + close()
-func close()                                  // release long-lived actor resources
+func close()                                  // end every event stream this instance started
 ```
+
+**Tokens are bound to their node.** The copy `Mero` persists carries
+`TokenData.nodeOrigin` — the node's origin plus path prefix
+(`TokenData.nodeKey(for:)`, e.g. `https://host.example/node1`) — and a stored
+bundle tagged for another node, or not tagged at all, is ignored: one Keychain
+item shared by instances pointed at different nodes never sends node A's tokens
+to node B (== mero-js `TokenData.node_origin`). `nodeOrigin` is optional, so a
+bundle persisted by an earlier release still decodes, but it names no node and
+is not restored: **sign in once after upgrading.**
 
 <Aside type="note">
   All of the above are actor-isolated — call them with `await`
   (e.g. `let ok = await mero.isAuthenticated`).
 </Aside>
 
-<Aside type="caution">
-  `close()` (and `logout()`) do **not** stop an in-flight
-  [`events(contextIds:)`](/reference/events/) stream — the stream's lifetime is
-  owned by the `Task` you consume it in. Cancel that `Task` to close the SSE
-  connection.
+<Aside type="note">
+  `close()` (and so `logout()`) ends every live
+  [`events` / `groupEvents` / `nodeEvents`](/reference/events/) stream this
+  instance started: the connection is cancelled and the `for try await` loop
+  ends normally. Streams opened afterwards work as usual. Cancelling the
+  consuming `Task` still closes one stream on its own.
 </Aside>
 
 ## SSO statics
@@ -84,9 +94,20 @@ func close()                                  // release long-lived actor resour
 Synchronous, non-throwing, and also available as free helpers on `SsoLogin`:
 
 ```swift
-static func parseAuthCallback(_ url: String) -> AuthCallbackResult?
-static func buildAuthLoginUrl(nodeUrl: String, options: AuthLoginOptions) -> String
+static func parseAuthCallback(
+  _ url: String,
+  options: ParseAuthCallbackOptions = ParseAuthCallbackOptions(),  // allowUnsolicited: false
+  stateStore: AuthLoginStateStore = .shared
+) -> AuthCallbackResult?
+static func buildAuthLoginUrl(
+  nodeUrl: String, options: AuthLoginOptions, stateStore: AuthLoginStateStore = .shared
+) -> String
 ```
+
+`buildAuthLoginUrl` begins a single-use login in `stateStore` and puts its
+`auth_state` in the callback URL; `parseAuthCallback` returns `nil` for a
+callback that does not carry a pending state (see
+[authentication → hosted SSO](/get-started/authentication/#hosted-sso-deep-link)).
 
 See [authentication → hosted SSO](/get-started/authentication/#hosted-sso-deep-link).
 

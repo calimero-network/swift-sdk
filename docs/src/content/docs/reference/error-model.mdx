@@ -138,20 +138,81 @@ see an error if the refresh *itself* fails:
   accidentally replay a consumed refresh token and revoke the whole family.
 </Aside>
 
+## Classifying a failure
+
+`classifyError(_:)` answers the two questions every caller asks of a failed
+request — what kind of failure is this, and would doing it again later help?
+(port of mero-js `classifyError`):
+
+```swift
+do {
+  _ = try await mero.admin.getContexts()
+} catch {
+  let failure = classifyError(error)
+  switch failure.kind {
+  case .conflict: show("That invitation has expired.")      // 409
+  case .unavailable: retryLater()                           // 503/504: no peer online yet
+  case .unreachable: show("Can't reach the node.")          // MeroError.network / URLError
+  default: show(failure.message)                            // the node's own words
+  }
+}
+```
+
+`ClassifiedError` carries `kind: ErrorKind`, `status: Int?` (`0` for a
+transport failure), `retryable: Bool` and `message` — the node's explanation
+(`HTTPError.explanation`: the body's `error`, `error.message` or `detail`)
+without the `HTTP <status>` prefix.
+
+| Status | `ErrorKind` | `retryable` |
+|---|---|---|
+| 400, other 4xx | `.invalid` | no |
+| 401 | `.unauthorized` | yes (after signing in again) |
+| 403 | `.forbidden` | no |
+| 404 | `.notFound` | yes (may not have synced yet) |
+| 409 | `.conflict` | no |
+| 410 | `.gone` | no |
+| 413 | `.tooLarge` | no |
+| 429 | `.rateLimited` | yes |
+| 503, 504 | `.unavailable` | yes |
+| other 5xx | `.server` | yes |
+| 0 / `MeroError.network` / `URLError` | `.unreachable` | yes |
+| anything else | `.unknown` | yes |
+
+`AccountError`s are mapped too: `intentRefused` and `haRefused` by their
+status (a nonce refusal stays retryable), `invalidInput` / `credentialRejected`
+/ `stateMismatch` / `protocolViolation` → `.invalid`, `enrolmentDeclined` →
+`.forbidden`, `notSignedIn` → `.unauthorized`, `relayKeyUnavailable` /
+`invitationNotClaimable` → `.unavailable`.
+
 ## Retries & timeouts
 
 Each request has a per-request timeout of `MeroConfig.timeout` (default **10s**).
-The retry engine is internal (not caller-invokable), but it's worth knowing what
-it does: up to **3 attempts** with exponential backoff (base 250 ms, ±20%
-jitter). It retries transient failures only — network errors, HTTP `5xx`/`429`,
-and `URLError` timeouts / connection loss / DNS failures. It never retries `4xx`
-(including `401`/`403`) or `MeroError.authRevoked`. A `401 token_expired` is
-handled separately by the refresh path below, not by this retry loop.
+
+**The transport sends every request once.** There is no automatic retry, as in
+mero-js: a `POST`/`PUT`/`PATCH`/`DELETE` that timed out or got a `5xx` may
+already have run on the node, and sending it again can repeat the write. (Until
+this release every request — writes included — was retried up to 3 times.) A
+`401 token_expired` is still handled by the refresh path below: one refresh,
+one replay with the new token.
+
+Retrying is opt-in, with `withRetry` (== mero-js `withRetry`) around a call you
+know is idempotent:
+
+```swift
+let contexts = try await withRetry(attempts: 3) { _ in
+  try await mero.admin.getContexts()
+}
+```
+
+It makes up to `attempts` attempts with exponential backoff (base 250 ms, ±20%
+jitter), waiting longer when an HTTP failure carries `Retry-After` (seconds or an
+HTTP date, capped at 60 s). It retries transient failures only (`isRetryable(_:)`)
+— network errors, HTTP `5xx`/`429`, and `URLError` timeouts / connection loss /
+DNS failures — never `4xx` (including `401`/`403`) or `MeroError.authRevoked`.
 
 ## Transport
 
-The retry engine above lives inside the transport and isn't part of the public
-API. The public transport surface:
+The public transport surface:
 
 ```swift
 public protocol HttpClient: Sendable {

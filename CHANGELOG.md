@@ -2,6 +2,62 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: mero-js parity
+
+### Breaking
+
+- **SSO callbacks must answer a login this app began.** `buildAuthLoginUrl`
+  now records a random, single-use `auth_state` (alive 10 minutes) in an
+  `AuthLoginStateStore` and adds it to the callback URL's query;
+  `parseAuthCallback` returns `nil` for a callback without a pending state, and
+  consumes the state so a replay is refused (port of mero-js 25.3.2). Before,
+  any URL with `#access_token=…` was adopted — anyone who could open the app
+  could choose its session. Build the login URL with `buildAuthLoginUrl` before
+  parsing; for a callback that can arrive after a relaunch, pass the same
+  `AuthLoginStateStore.keychain()` (or any `AnyValueStore<PendingAuthLogins>`)
+  to both calls. A host that injects tokens itself can pass
+  `ParseAuthCallbackOptions(allowUnsolicited: true)`.
+- **The login URL is form-encoded as mero-js encodes it**: `callback-url`,
+  `permissions` and `registry-url` are percent-encoded (`myapp%3A%2F%2Fcb`),
+  byte-identical with `URLSearchParams`.
+- **Stored tokens are bound to their node.** `Mero` persists the bundle with
+  `TokenData.nodeOrigin` (origin + path prefix, `TokenData.nodeKey(for:)`) and
+  ignores a stored bundle for another node — or one with no `node_origin`,
+  i.e. every bundle saved by an earlier release. **Sign in once after
+  upgrading.** `nodeOrigin` is optional, so old bundles still decode.
+- **The transport no longer retries.** Every request — a `POST`/`PUT`/`PATCH`/
+  `DELETE` included — used to be sent up to three times on a network error or
+  `5xx`/`429`, which could repeat a write that had already run. It is now sent
+  once, as in mero-js; `401 token_expired` still drives one refresh and one
+  replay. Wrap idempotent calls in the now-public `withRetry` to retry.
+- `Mero.close()` now ends the event streams the instance started (it was a
+  no-op), and so does `logout()`, which calls it.
+
+### Added
+
+- `withRetry(attempts:sleep:_:)` and `isRetryable(_:)` are public: opt-in
+  backoff retry (base 250 ms, ±20% jitter) that honours `Retry-After`.
+- `classifyError(_:) -> ClassifiedError` (`kind: ErrorKind`, `status`,
+  `retryable`, `message`) over `MeroError`, `HTTPError`, `AccountError` and
+  `URLError`, plus `HTTPError.explanation` (port of mero-js `classifyError`).
+- `CapabilityPresets` (`none`, `joinOnly`, `contributor`, `collaborator` = 0,
+  4, 7, 231; `byName`), `Capabilities.capMask(_:)` (names and/or bits via
+  `CapabilityRef`; throws on an unknown name), `Capabilities.capNames(_:)`,
+  `Capabilities.all`, `Capabilities.bit(named:)`.
+- `NodeDiscovery`: `defaultLocalNodePorts`, `localNodeURL(port:)`,
+  `nodeEndpoint(_:path:)`, `probeNodeHealth(_:timeout:session:)` and
+  `discoverLocalNodes(ports:timeout:session:)` (parallel, per-probe timeout,
+  cancellable) — port of mero-js `nodeDiscovery.ts`.
+- Typed event streams, like the Kotlin SDK: `Mero.groupEvents(groupIds:)` →
+  `GroupEvent`, `Mero.nodeEvents(contextIds:groupIds:)` → `NodeEvent`
+  (`.context` / `.group`); the same on `SseClient`.
+- `AdminApi.listNamespaceRevokedDevices(_:)` → `NamespaceRevokedDevices`
+  (`GET /admin-api/namespaces/:id/revoked-devices`) and `AuthApi.getLoginPage()`
+  (`GET /auth/login`), both served by core.
+- `MeroKitTestSupport` is a library product, so apps can use `FakeNode` and
+  `MockURLProtocol` in their own tests. It is not part of `MeroKit`, and the
+  podspec does not ship it.
+
 ## Unreleased: Calimero Cloud sign-in
 
 ### Breaking

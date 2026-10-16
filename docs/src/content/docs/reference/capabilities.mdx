@@ -34,7 +34,7 @@ public enum Capabilities {
 ```
 
 <Aside type="caution">
-  Bits 9 and above are unassigned and reserved for future core releases — do
+  Bits 10 and above are unassigned and reserved for future core releases — do
   **not** repurpose them for application data.
 </Aside>
 
@@ -44,7 +44,51 @@ public enum Capabilities {
 static func hasCap(_ mask: UInt32, _ cap: UInt32) -> Bool     // every bit of cap set?
 static func withCap(_ mask: UInt32, _ cap: UInt32) -> UInt32  // mask with cap set
 static func withoutCap(_ mask: UInt32, _ cap: UInt32) -> UInt32 // mask with cap cleared
+
+// By mero-js name ("CAN_CREATE_CONTEXT", …):
+static let all: [(name: String, bit: UInt32)]                 // every assigned bit, in bit order
+static func bit(named name: String) -> UInt32?
+static func capMask(_ caps: CapabilityRef...) throws -> UInt32 // names and/or bits; throws on an unknown name
+static func capNames(_ mask: UInt32) -> [String]              // assigned bits set in mask, in bit order
 ```
+
+`CapabilityRef` is a name (`.name("CAN_INVITE_MEMBERS")`, or a string literal)
+or raw bits (`.bits(...)`, or an integer literal):
+
+```swift
+try Capabilities.capMask("CAN_CREATE_CONTEXT", "CAN_INVITE_MEMBERS")            // 3
+try Capabilities.capMask(.bits(CapabilityPresets.contributor), "CAN_CREATE_SUBGROUP")  // 39
+Capabilities.capNames(CapabilityPresets.collaborator)
+// ["CAN_CREATE_CONTEXT", "CAN_INVITE_MEMBERS", "CAN_JOIN_OPEN_SUBGROUPS",
+//  "CAN_CREATE_SUBGROUP", "CAN_DELETE_SUBGROUP", "CAN_MANAGE_VISIBILITY"]
+```
+
+A typo is an error (`AccountError.invalidInput("unknown capability: …")`), not
+a silent `0`.
+
+## Presets
+
+Ready-made masks (== mero-js `CAPABILITY_PRESETS`), so an app names the default
+it gives members instead of passing a bare number:
+
+| `CapabilityPresets.` | Value | Bits |
+| --- | --- | --- |
+| `none` | 0 | — |
+| `joinOnly` | 4 | join Open subgroups: what a namespace starts with |
+| `contributor` | 7 | create contexts, invite members, join Open subgroups |
+| `collaborator` | 231 | `contributor` + create/delete subgroups + manage visibility (mero-chat's member default) |
+
+`CapabilityPresets.byName` maps the mero-js names (`NONE`, `JOIN_ONLY`,
+`CONTRIBUTOR`, `COLLABORATOR`) to these.
+
+<Aside type="tip">
+  A namespace's default mask is copied into a non-admin member's row when they
+  join, and a namespace starts without `canCreateContext`. Set a default
+  (`setDefaultCapabilities` with `CapabilityPresets.contributor`, say) or every
+  invited member is unable to create a context until an admin grants it by hand.
+  No preset includes `canAuthorOnBehalf`; grant that deliberately with
+  `grantAuthorship`.
+</Aside>
 
 ## Example
 
