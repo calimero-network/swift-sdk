@@ -95,6 +95,21 @@ final class AppLayerNode: @unchecked Sendable {
         }
     }
 
+    private var joins: [String] = []
+
+    /// The join paths posted, in order.
+    var joinPaths: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return joins
+    }
+
+    private func record(_ path: String) {
+        lock.lock()
+        joins.append(path)
+        lock.unlock()
+    }
+
     var migrationReads: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -129,6 +144,12 @@ final class AppLayerNode: @unchecked Sendable {
             return json(["data": [:]])
         case "/admin-api/contexts":
             return json(["data": ["contexts": contextList]])
+        case let other where other.hasPrefix("/admin-api/namespaces/") && other.hasSuffix("/join"):
+            record(other)
+            return json(["data": ["namespaceId": "ns1", "memberIdentity": "m1"]])
+        case let other where other.hasPrefix("/admin-api/contexts/") && other.hasSuffix("/join"):
+            record(other)
+            return json(["data": ["contextId": "c1", "memberPublicKey": "k1"]])
         case let other where other.hasSuffix("/migration-status"):
             lock.lock()
             migrationCalls += 1
