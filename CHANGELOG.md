@@ -98,6 +98,63 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 - `MeroKitTestSupport` is a library product, so apps can use `FakeNode` and
   `MockURLProtocol` in their own tests. It is not part of `MeroKit`, and the
   podspec does not ship it.
+- **Signers** (port of mero-js `signer.ts`): the `Signer` protocol (public key
+  + `sign(_:)`), `SeedSigner`, `signerFromSecret(_:label:)`,
+  `resolveSigner(_:_:label:)`. Every new signing entry point takes a hex secret
+  or a `Signer`, never both.
+- **Account roots** (port of mero-js `account/account.ts` + `wordlist.ts`):
+  `bip39EnglishWordlist` (pinned to its canonical SHA-256),
+  `generateAccountRoot()`, `accountRootFromPhrase(_:)`,
+  `accountRootFromSecret(_:)` — the 24 words are BIP39 *entropy* used as the
+  Ed25519 seed, no PBKDF2 or BIP32, exactly as mero-js;
+  `createAccountRootSigner(vault:)`, `accountRootSignerFromPhrase(_:vault:)`,
+  `loadAccountRootSigner(from:)` over a `RootSeedVault`
+  (`KeychainRootSeedVault`: `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`,
+  never synchronized; `MemoryRootSeedVault`) whose `VaultRootSigner` reads the
+  seed per signature and never returns it; `RootSource`, `resolveRoot(_:)`,
+  `resolveRootPair(rootSecret:signer:)`; `signAccountLink(_:)` /
+  `signAccountLogin(_:)` (mdma's domains, standard base64). Types
+  `AccountRoot`, `RecoverableAccountRoot`, `AccountRootSigner`,
+  `NewAccountRootSigner`, `ResolvedRoot`, `AccountLinkInput`, `AccountLoginInput`.
+- **Owner-op root proofs** (port of mero-js `owner-op.ts`, pinned to core's
+  `owner_op.rs` and `root_guarded_vectors_are_stable` vectors): `OwnerOpKind`
+  (raw value = the signed byte), `OwnerOpPlane`, `OwnerOp`,
+  `transferOwnershipOp`, `groupDeleteOp`, `adminChangedOp`,
+  `teeAuthoringPolicyOp`, `teeAdmissionPolicyOp`, `teeReleaseAdmissionPolicyOp`,
+  `ownerOpDigest`, `ownerOpSigningPayload`, `signOwnerOpProof(_:)`
+  (`OwnerOpProofInput`, handoff `chain` and `keyEpoch`), `rootGuardedOpBytes`.
+- **The SDK mints `rootProof` itself**: `AdminApi.transferOwnership(_:newOwner:root:)`,
+  `changeNamespaceAdmin(_:newAdmin:root:)`, `ownerDeleteGroup(_:root:)`,
+  `setTeeAuthoringPolicy(_:allowedMrtd:root:)`, `disableTeeAuthoringPolicy(_:root:)`
+  and `setTeeAdmissionPolicy(_:request:root:)` read `namespaceId` and
+  `ownerOpCounter`, build the op the node builds and send its proof
+  (`ownerOpTarget(_:plane:)`, `signRootProof(_:op:root:)`,
+  `SetTeeAdmissionPolicyRequest.ownerOp()`, `normalizeTeeReleaseVersion`). The
+  raw-`rootProof` forms are unchanged.
+- **Device scopes** (port of mero-js `device-scope.ts`, core vectors):
+  `signDeviceScope(_:)`, `deviceScopePayload`, `DeviceScopeInput`, and
+  `AdminApi.linkAccountDevice(_:credential:scope:)`, which signs the scope.
+  `rescopeDevice` is unchanged: core signs that scope on the root's own node.
+- **Request proofs** (port of mero-js `request/*`, `request-proof/*`, pinned to
+  core's `request_wire_fixture.rs` / `proof_auth.rs`): `requestBodyHash`,
+  `signRequest` (`RequestSigInput`), `callerProof` (`CallerProofInput`),
+  `createProofSigner` (`ProofSignerOptions`, 120 s), `signRequestProof`
+  (`RequestProofInput`, 300 s), `requestProofHeader` (`X-Calimero-Proof`),
+  `createProofAuthorizer(_:)` (`ProofCredential`), `signedPath(_:)`,
+  `carriesProof(_:)`, `ProofRequest`, `ProofCallback`, `RequestAuthorizer`.
+  `MeroConfig.requestProof` (`RequestProofConfig`: `.keys`, `.custom`,
+  `.authorizer`) and `TransportHooks.getProof` / `.authorizeRequest` sign every
+  `auth`/`admin`/`rpc` request over the URL fetched and its exact body. **A
+  request carrying a proof never follows a redirect**: the `3xx` surfaces as
+  `MeroError.http` with status `0` and is not re-sent (as mero-js
+  `refuseProofRedirect`). A file body cannot be signed and is refused.
+  `SseConnection(baseURL:authorize:)` and `SseClient(baseURL:authorize:)` sign
+  the stream and every subscription `POST`, with the same redirect refusal.
+
+### Changed
+
+- `URLSessionHttpClient` drops a bare trailing `?` from a request URL (as
+  mero-js `withoutBareQuery`), so the URL signed and the URL fetched agree.
 
 ## Unreleased: Calimero Cloud sign-in
 

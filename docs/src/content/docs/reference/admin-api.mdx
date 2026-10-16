@@ -292,6 +292,15 @@ take an optional `rootProof`: hex borsh of an
 current `ownerOpCounter` (both from `getGroupInfo`). Omit it on a node that holds
 the owner's account root; never send `""`.
 
+Each also has a form that takes the account root (`root: RootSource`, plus
+`keyEpoch` and `chain` for a handed-off root) and mints the proof itself:
+`transferOwnership(_:newOwner:root:)`, `ownerDeleteGroup(_:root:)`,
+`changeNamespaceAdmin(_:newAdmin:root:)`, `setTeeAuthoringPolicy(_:allowedMrtd:root:)`,
+`disableTeeAuthoringPolicy(_:root:)` and `setTeeAdmissionPolicy(_:request:root:)`.
+`ownerOpTarget(_:plane:)` and `signRootProof(_:op:root:)` expose the steps, and
+`linkAccountDevice(_:credential:scope:)` signs a device scope. See
+[Signing owner ops](/guides/signing-owner-ops/).
+
 | Refusal | Status |
 | --- | --- |
 | Proof required, signer unbound, wrong account | `403` |

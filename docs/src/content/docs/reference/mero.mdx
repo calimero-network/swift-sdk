@@ -127,10 +127,20 @@ public struct MeroConfig: Sendable {
   public var credentials: Credentials?
   public var timeout: TimeInterval          // default 10
   public var tokenStore: (any TokenStore)?  // nil → in-memory
+  public var requestProof: RequestProofConfig?  // sign each request (X-Calimero-Proof)
   public init(baseURL: URL, credentials: Credentials? = nil,
-              timeout: TimeInterval = 10, tokenStore: (any TokenStore)? = nil)
+              timeout: TimeInterval = 10, tokenStore: (any TokenStore)? = nil,
+              requestProof: RequestProofConfig? = nil)
+}
+
+public enum RequestProofConfig: Sendable {
+  case keys(ProofSignerOptions)        // createProofSigner: credential + session/device key
+  case custom(ProofCallback)           // your own signer; nil sends no proof
+  case authorizer(RequestAuthorizer)   // createProofAuthorizer: headers merged per request
 }
 ```
+
+See [Request proofs](/get-started/authentication/#request-proofs-no-session).
 
 ### `Credentials`
 

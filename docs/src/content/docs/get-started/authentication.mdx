@@ -300,6 +300,52 @@ if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
 `context_identity`, `node_url`) and returns `nil` if no access token is present
 or the callback answers no pending login. Both SSO helpers are `static` on `Mero`.
 
+## Request proofs (no session)
+
+A keyholder can skip the session entirely: the device key signs **each
+request**, and the certificate its account signed says whose key that is. The
+node verifies both from the `X-Calimero-Proof` header with no store read
+(core `proof_auth.rs`), which is how a relay serves a caller it has never seen.
+The node honours it only with `--delegated-access`; one without answers `403`,
+distinct from the `401` a bad proof gets.
+
+```swift
+// Mint proofs from the device key and its certificate.
+let mero = Mero(config: MeroConfig(
+    baseURL: relayURL,
+    requestProof: .keys(ProofSignerOptions(credential: certificateHex, signerSecret: keys.deviceSecret))))
+
+// Or a three-link chain: a session key under a device-signed login statement.
+//   .keys(ProofSignerOptions(credential: cert, session: statementHex, signerSecret: sessionKeyHex))
+// Or your own signer, when the key must not reach the SDK: .custom { request in … }
+// Or an authorizer: .authorizer(try createProofAuthorizer(ProofCredential(credential: cert, keys: keys)))
+```
+
+Every `auth`, `admin` and `rpc` call is then signed over its method, its path
+**and query** exactly as sent (`signedPath(_:)`), and its exact body
+(`requestBodyHash`). Each signature is valid for a short window (120 s for
+`.keys`, 300 s for a `ProofCredential`) — that window is what bounds replay.
+A file upload (`HttpBody.file`) cannot be signed; send bytes, or use a session.
+
+A request carrying a proof **never follows a redirect**: it would carry the
+header to a location it was not signed for. The `3xx` surfaces as
+`MeroError.http` with status `0` ("Redirect Not Followed"), and nothing is
+re-sent.
+
+The event streams are long-lived connections, not requests, so `Mero.sse`
+still uses the session. For a proof-authorized stream, build the connection
+with an authorizer — the stream and every subscription `POST` are signed:
+
+```swift
+let sse = SseConnection(baseURL: relayURL, authorize: try createProofAuthorizer(credential))
+sse.connect()
+```
+
+The pieces are public: `signRequest` (a borsh `RequestSig`), `callerProof`
+(concatenates the links), `createProofSigner`, `signRequestProof`,
+`createProofAuthorizer`, and `requestProofHeader`. They are pinned to core's
+`request_wire_fixture.rs`.
+
 ## Find a local node
 
 A development or desktop node answers `GET /admin-api/health` unauthenticated.

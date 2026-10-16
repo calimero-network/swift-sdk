@@ -265,6 +265,20 @@ await mero.logout() // clears the token bundle from memory and the store
   repeated behind your back. Wrap idempotent calls in `withRetry { … }` to retry
   network/5xx/429 failures with backoff, and use `classifyError(error)` to turn
   any failure into a `kind` + `retryable` + the node's own message.
+- **Request proofs instead of a session.** `MeroConfig(requestProof:)` signs
+  every call with the device key (`X-Calimero-Proof`, core `proof_auth.rs`); a
+  request carrying a proof never follows a redirect. See
+  [Request proofs](https://calimero-network.github.io/swift-sdk/get-started/authentication/#request-proofs-no-session).
+
+## Holding the account root
+
+For a nodeless account, or a root kept on the device: `generateAccountRoot()` /
+`accountRootFromPhrase(_:)` (24 BIP39 words that *are* the Ed25519 seed),
+`createAccountRootSigner(vault: KeychainRootSeedVault())` (a `Signer` that never
+hands the seed out), `signAccountLink` / `signAccountLogin` for Calimero Cloud,
+`signDeviceScope`, and root proofs for owner-level governance
+(`admin.transferOwnership(groupId, newOwner:, root:)` and friends,
+`signOwnerOpProof`). All pinned to core's vectors.
 
 ## Frontend (`MeroKitUI`)
 
