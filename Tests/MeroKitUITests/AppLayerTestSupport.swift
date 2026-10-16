@@ -120,7 +120,7 @@ final class AppLayerNode: @unchecked Sendable {
         MockURLProtocol.setHandler { [self] req in handle(req) }
     }
 
-    private func json(_ object: Any, status: Int = 200) -> MockURLProtocol.Stub {
+    private func json(_ object: [String: Any], status: Int = 200) -> MockURLProtocol.Stub {
         .init(
             status: status, headers: ["Content-Type": "application/json"],
             body: (try? JSONSerialization.data(withJSONObject: object)) ?? Data())
@@ -133,7 +133,7 @@ final class AppLayerNode: @unchecked Sendable {
         case "/auth/validate":
             return .init(status: bearer == "Bearer good" ? 200 : 401, headers: [:], body: Data())
         case "/auth/logout":
-            return json(["data": ["success": true]])
+            return json(["data": ["success": true] as [String: Any]])
         case "/sse":
             if sse == .permissionDenied {
                 return .init(status: 403, headers: ["x-auth-error": "permission_denied"], body: Data())
@@ -141,7 +141,7 @@ final class AppLayerNode: @unchecked Sendable {
             let frame = "data: {\"type\":\"connect\",\"session_id\":\"s1\"}\n\n"
             return .init(status: 200, headers: [:], body: Data(frame.utf8), holdOpen: true)
         case "/sse/subscription":
-            return json(["data": [:]])
+            return json(["data": [String: Any]()])
         case "/admin-api/contexts":
             return json(["data": ["contexts": contextList]])
         case let other where other.hasPrefix("/admin-api/namespaces/") && other.hasSuffix("/join"):
@@ -159,8 +159,8 @@ final class AppLayerNode: @unchecked Sendable {
                 "rollup": [
                     "migrated": 1, "inProgress": 0, "unknown": 0, "failed": 0, "total": 1, "allMigrated": true,
                     "membersPendingSignature": 0,
-                ],
-                "members": [],
+                ] as [String: Any],
+                "members": [Any](),
             ])
         default:
             return .init(status: 404, headers: [:], body: Data())
@@ -168,7 +168,7 @@ final class AppLayerNode: @unchecked Sendable {
     }
 
     static func context(_ id: String, app: String) -> [String: Any] {
-        ["id": id, "applicationId": app, "contextStateHash": "h", "dagHeads": []]
+        ["id": id, "applicationId": app, "contextStateHash": "h", "dagHeads": [Any]()]
     }
 }
 

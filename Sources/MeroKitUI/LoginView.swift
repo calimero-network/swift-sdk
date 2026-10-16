@@ -1,4 +1,5 @@
 #if canImport(SwiftUI)
+import MeroKit
 import SwiftUI
 
 /// Sign-in, bound to ``MeroClient``: a **Cloud** tab — one "Continue with
@@ -264,10 +265,7 @@ public struct NodeLoginPanel: View {
         TextField("https://your-node-url.calimero.network", text: $model.customURL)
             .textFieldStyle(.roundedBorder)
             .disableAutocorrection(true)
-            #if os(iOS)
-            .textInputAutocapitalization(.never)
-            .keyboardType(.URL)
-            #endif
+            .nodeURLKeyboard()
             .onSubmit { Task { await connect() } }
             .accessibilityIdentifier("nodeUrlInput")
     }
@@ -291,6 +289,18 @@ public struct NodeLoginPanel: View {
     private func connect() async {
         guard model.canConnect, let target = await model.resolveTarget() else { return }
         await client.connectToNode(target, callback: callback)
+    }
+}
+
+extension View {
+    /// A URL keyboard with no autocapitalisation on iOS; unchanged elsewhere.
+    @ViewBuilder
+    func nodeURLKeyboard() -> some View {
+        #if os(iOS)
+        self.textInputAutocapitalization(.never).keyboardType(.URL)
+        #else
+        self
+        #endif
     }
 }
 #endif
