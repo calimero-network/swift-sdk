@@ -59,7 +59,7 @@ final class AuthCallbackStateTests: XCTestCase {
     }
 
     func testRefusesALoginBegunTooLongAgo() throws {
-        let clock = TestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let clock = AuthStateClock(Date(timeIntervalSince1970: 1_700_000_000))
         let store = AuthLoginStateStore(now: { clock.now })
         let back = try callback(for: beginLogin(store))
         clock.advance(11 * 60)
@@ -67,7 +67,7 @@ final class AuthCallbackStateTests: XCTestCase {
     }
 
     func testAcceptsWithinTheLifetime() throws {
-        let clock = TestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let clock = AuthStateClock(Date(timeIntervalSince1970: 1_700_000_000))
         let store = AuthLoginStateStore(now: { clock.now })
         let back = try callback(for: beginLogin(store))
         clock.advance(9 * 60)
@@ -102,7 +102,7 @@ final class AuthCallbackStateTests: XCTestCase {
     }
 
     func testKeepsAtMostTwentyPendingLogins() {
-        let clock = TestClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let clock = AuthStateClock(Date(timeIntervalSince1970: 1_700_000_000))
         let store = AuthLoginStateStore(now: { clock.now })
         let first = store.begin()
         for _ in 0..<AuthLoginStateStore.maxPending {
@@ -170,7 +170,7 @@ final class AuthCallbackStateTests: XCTestCase {
 }
 
 /// A settable clock for lifetime tests.
-final class TestClock: @unchecked Sendable {
+final class AuthStateClock: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Date
 
