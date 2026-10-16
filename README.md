@@ -3,7 +3,8 @@
 Native Swift SDK for building iOS apps against a **remote** [Calimero](https://calimero.network)
 node. It's a faithful port of [`@calimero-network/mero-js`](https://github.com/calimero-network/mero-js)'s
 wire contract — auth + token refresh, JSON-RPC contract calls, the admin API,
-SSO deep-link login, and live SSE events — in idiomatic `async/await` Swift, with
+SSO deep-link login, live SSE events (and an experimental WebSocket client) and
+ephemeral presence — in idiomatic `async/await` Swift, with
 an optional SwiftUI layer (`MeroKitUI`).
 
 The device is a **thin client**: it never runs a node. Every capability is an
@@ -215,6 +216,28 @@ for try await event in mero.nodeEvents(contextIds: [contextId], groupIds: [group
     case .group(let g): print(g.groupId)
     }
 }
+
+// One long-lived connection whose subscriptions change while it runs, with
+// typed events (mero.ws is the experimental WebSocket equivalent):
+let sse = mero.sse
+sse.connect()
+try await sse.subscribe(contextIds: [contextId], groupIds: [namespaceId])
+for try await migration in sse.migrationEvents() { print(migration.kind) }
+```
+
+Reconnects wait 3 s, doubling to 30 s (±20%) while the node stays unreachable.
+
+### Presence
+
+```swift
+struct Typing: Codable, Sendable { let typing: Bool }
+let ephemeral = await mero.ephemeral
+try await ephemeral.set(contextId: contextId, state: Typing(typing: true))
+for try await entry in ephemeral.subscribe(contextId: contextId, as: Typing.self) {
+    print(entry.author, entry.state as Any, entry.removed)
+}
+// A Cloud account publishes through its relay, device-signed and resent every 2.5 s:
+try await connection.presence?.set(contextId: contextId, state: Typing(typing: true))
 ```
 
 ### 6. Log out

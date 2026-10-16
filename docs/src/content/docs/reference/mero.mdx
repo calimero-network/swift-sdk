@@ -37,12 +37,17 @@ transport:
 | `mero.admin` | `AdminApi` | contexts, apps, namespaces, groups, blobs, TEE — [reference](/reference/admin-api/) |
 | `mero.rpc` | `RpcClient` | execute WASM methods — [reference](/reference/rpc/) |
 | `mero.http` | `any HttpClient` | the transport in use (advanced) |
+| `mero.ephemeral` | `EphemeralClient` | presence: `set_ephemeral` + subscribe — [guide](/guides/presence/) |
+| `mero.sse` | `SseConnection` | the instance's one long-lived SSE connection (`nonisolated`) — [reference](/reference/events/#sseconnection) |
+| `mero.ws` | `WsClient` | **experimental** WebSocket events (`nonisolated`) — [reference](/reference/events/#wsclient-experimental) |
 
 Plus one method, not an accessor:
 
 | Method | Returns | Description |
 | --- | --- | --- |
 | `mero.events(contextIds:)` | `AsyncThrowingStream<ContextEvent, Error>` | live SSE events — [reference](/reference/events/) |
+| `mero.appVersionChanges(contextIds:)` | `AsyncThrowingStream<AppVersionChangedEvent, Error>` | typed `AppVersionChanged` events |
+| `mero.migrationEvents(groupIds:)` | `AsyncThrowingStream<GroupMigrationEvent, Error>` | typed migration events |
 
 ## Authentication
 
@@ -84,7 +89,8 @@ is not restored: **sign in once after upgrading.**
 <Aside type="note">
   `close()` (and so `logout()`) ends every live
   [`events` / `groupEvents` / `nodeEvents`](/reference/events/) stream this
-  instance started: the connection is cancelled and the `for try await` loop
+  instance started, and closes the shared `sse` and `ws` clients (presence
+  streams included): the connection is cancelled and the `for try await` loop
   ends normally. Streams opened afterwards work as usual. Cancelling the
   consuming `Task` still closes one stream on its own.
 </Aside>

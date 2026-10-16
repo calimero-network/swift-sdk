@@ -54,6 +54,47 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 - `AdminApi.listNamespaceRevokedDevices(_:)` → `NamespaceRevokedDevices`
   (`GET /admin-api/namespaces/:id/revoked-devices`) and `AuthApi.getLoginPage()`
   (`GET /auth/login`), both served by core.
+- **`SseConnection`**, one long-lived SSE connection (port of mero-js
+  `SseClient`; `Mero.sse` is the instance's shared one):
+  `subscribe(contextIds:groupIds:)` / `unsubscribe(...)` on the live session
+  (`POST /sse/subscription`, 10 s timeout, only the ids that changed),
+  `isSubscribed`, re-subscription of every remembered id after a reconnect
+  before `.connect(sessionId:)` is announced, `updates()` / `events()` /
+  `on(_:)`, and `presenceSeed(_:)`. `SseClient`'s per-call streams now run on
+  it, and `SseClient.connection()` hands one out. A `401` naming
+  `token_revoked` / `token_reuse` is now terminal too, like a `403`; other
+  refused connects surface as `MeroError.http` (they were `.network`).
+- **`ReconnectBackoff`** replaces the fixed 3 s SSE reconnect: 3 s first (as
+  mero-js's `reconnectDelayMs`), doubling to 30 s while reconnects keep
+  failing, ±20% jitter, reset once a stream opens. `.fixed(3)` is mero-js's
+  flat delay; `SseClient`/`SseConnection` take `backoff:`.
+- **Typed events**: `AppVersionChangedEvent`, `GroupMembershipEvent`
+  (`MembershipChangeKind`), `GroupMigrationEvent` with `MigrationStartedData`,
+  `MigrationProgressData`, `CascadeProgressData`, `MigrationCompletedData`
+  (core's field names); `ContextEvent.appVersionChanged`, `.data`,
+  `GroupEvent.membership`, `.migration`, `.data`; streams
+  `appVersionChanges`, `migrationEvents`, `membershipEvents` and handlers
+  `onAppVersionChanged` / `onMigrationEvent` on `SseConnection`, plus
+  `Mero`/`SseClient` `appVersionChanges(contextIds:)` and
+  `migrationEvents(groupIds:)`.
+- **`WsClient`** (experimental, as in mero-js; `Mero.ws`): `GET /ws?token=`,
+  `subscribe`/`unsubscribe` messages, re-subscribe after reconnect, backoff
+  1 s · 2ⁿ ≤ 30 s, over a `WebSocketTransport`/`WebSocketConnector`
+  abstraction (`URLSessionWebSocketConnector` by default).
+- **Ephemeral presence**: `Mero.ephemeral` → `EphemeralClient`
+  (`set(contextId:state:codec:)` via JSON-RPC `set_ephemeral`,
+  `subscribe(contextId:codec:)`), `Codec` / `JSONCodec`, `EphemeralEntry`
+  (`author`, `account`, `state`, `removed`, `ageMs`), `presenceStream(_:...)`
+  seeded from the connection's kept presence. `RpcClient.call(_:params:)` for
+  any JSON-RPC method.
+- **Relay presence**: `PresenceStatement` (`calimero/presence/1` statement
+  bytes and `stateHash`, pinned to core's vector; `signedIntent`),
+  `RelayClient.presenceIntent(contextId:state:seq:sentAtMs:)` (signs with the
+  device key), `AdminApi.postPresenceIntent(_:state:seq:sentAtMs:keys:authorProof:)`,
+  and `RelayPresenceClient` (resends every 2.5 s, `set(nil)` retracts,
+  `close()`), on every relay `CloudConnection` as `presence`.
+- `MockURLProtocol.Stub(holdOpen:)` keeps a response open after its body — a
+  live `/sse` in tests.
 - `MeroKitTestSupport` is a library product, so apps can use `FakeNode` and
   `MockURLProtocol` in their own tests. It is not part of `MeroKit`, and the
   podspec does not ship it.

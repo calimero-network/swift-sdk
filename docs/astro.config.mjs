@@ -64,6 +64,7 @@ export default defineConfig({
             'guides/contexts-and-apps',
             'guides/executing-methods',
             'guides/events',
+            'guides/presence',
             'guides/groups-and-governance',
             'guides/blobs',
             'guides/swiftui-frontend',
