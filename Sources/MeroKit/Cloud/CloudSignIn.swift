@@ -14,15 +14,20 @@ public struct CloudConfig: Sendable {
     public var audience: LoginAudience
     /// `client_name` on the relay token request (defaults to the relay URL).
     public var clientName: String?
-    /// Decides whether to trust a relay's attested node key.
+    /// Decides whether to trust a relay's attested node key: by its DCAP
+    /// quote and signed release (``DcapRelayKeyVerifier``) unless told otherwise.
     public var relayKeyVerifier: any RelayKeyVerifier
     /// Warrant lifetime.
     public var warrantTTLSeconds: UInt64
+    /// Seal the delegated calls to a hosted relay to its attested TD
+    /// (``DelegatedEnvironment/sealRelays``).
+    public var sealRelays: Bool
 
     public init(
         walletURL: URL = DeviceEnrolment.defaultWalletURL, cloudBaseURL: URL = CloudClient.defaultBaseURL,
         audience: LoginAudience = .current, clientName: String? = nil,
-        relayKeyVerifier: any RelayKeyVerifier = TLSRelayKeyVerifier(), warrantTTLSeconds: UInt64 = 300
+        relayKeyVerifier: any RelayKeyVerifier = DcapRelayKeyVerifier(), warrantTTLSeconds: UInt64 = 300,
+        sealRelays: Bool = true
     ) {
         self.walletURL = walletURL
         self.cloudBaseURL = cloudBaseURL
@@ -30,6 +35,7 @@ public struct CloudConfig: Sendable {
         self.clientName = clientName
         self.relayKeyVerifier = relayKeyVerifier
         self.warrantTTLSeconds = warrantTTLSeconds
+        self.sealRelays = sealRelays
     }
 }
 

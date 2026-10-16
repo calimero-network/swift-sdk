@@ -470,7 +470,8 @@ final class GovernanceOpsTests: XCTestCase {
             account: cb.account, device: cb.device, credential: cb.credential, relayUrl: relay,
             executorAccount: rep("33"))
         let signIn = CloudSignIn(
-            config: CloudConfig(cloudBaseURL: cloud, relayKeyVerifier: PinnedRelayKeyVerifier(nodeKey: rep("77"))),
+            config: CloudConfig(
+                cloudBaseURL: cloud, relayKeyVerifier: PinnedRelayKeyVerifier(nodeKey: rep("77")), sealRelays: false),
             keyStore: .memory(keys), sessionStore: .memory(session), nonces: MemoryWarrantNonceStore(),
             urlSession: MockURLProtocol.makeSession(), delegatedStore: .memory())
         return (signIn, session)

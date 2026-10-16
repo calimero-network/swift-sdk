@@ -49,6 +49,16 @@ public struct ConnectCloudOptions: Sendable {
     public var urlSession: URLSession
     /// Per-request timeout for the cloud calls.
     public var timeout: TimeInterval
+    /// Seal every call to the relay to its attested TEE, verified with this
+    /// — for example ``createSignedReleaseVerifier(_:)``, or
+    /// ``createQuoteVerifier(_:)`` with the measurements you trust. The
+    /// warrant and the method's arguments (and the relay login, its reads and
+    /// events) then reach only the relay's TD, not whatever terminates TLS in
+    /// front of it, and the relay is one this client checked itself rather
+    /// than one the cloud vouched for. Calls to the cloud are not sealed;
+    /// they carry no intent. Without it, calls to the relay are plain HTTPS.
+    /// (== mero-js `ConnectCloudOptions.seal`.)
+    public var seal: (any TransportQuoteVerifier)?
 
     public init(
         authorAccount: String, authorProof: String, keys: DeviceKeys, config: CloudConfig = CloudConfig(),
@@ -56,8 +66,10 @@ public struct ConnectCloudOptions: Sendable {
         sessionStore: AnyValueStore<CloudLoginSession>? = nil,
         onSession: (@Sendable (CloudLoginSession?) -> Void)? = nil, namespaceId: String? = nil,
         nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(), relayNodeKey: String? = nil,
-        tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10
+        tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10,
+        seal: (any TransportQuoteVerifier)? = nil
     ) {
+        self.seal = seal
         self.config = config
         self.sessionToken = sessionToken
         self.googleIdToken = googleIdToken
@@ -94,14 +106,18 @@ public struct ConnectCloudWithAccountOptions: Sendable {
     public var tokenStore: any TokenStore
     public var urlSession: URLSession
     public var timeout: TimeInterval
+    /// As ``ConnectCloudOptions/seal``.
+    public var seal: (any TransportQuoteVerifier)?
 
     public init(
         root: RootSource, authorProof: String, keys: DeviceKeys, authorAccount: String? = nil,
         config: CloudConfig = CloudConfig(), sessionStore: AnyValueStore<CloudLoginSession>? = nil,
         onSession: (@Sendable (CloudLoginSession?) -> Void)? = nil, namespaceId: String? = nil,
         nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(), relayNodeKey: String? = nil,
-        tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10
+        tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10,
+        seal: (any TransportQuoteVerifier)? = nil
     ) {
+        self.seal = seal
         self.root = root
         self.authorAccount = authorAccount
         self.authorProof = authorProof
@@ -151,7 +167,7 @@ public func connectCloudWithAccount(_ options: ConnectCloudWithAccountOptions) a
         authorAccount: options.authorAccount ?? resolved.accountId, authorProof: options.authorProof,
         keys: options.keys, config: options.config, namespaceId: options.namespaceId, nonces: options.nonces,
         relayNodeKey: options.relayNodeKey, tokenStore: options.tokenStore, urlSession: options.urlSession,
-        timeout: options.timeout)
+        timeout: options.timeout, seal: options.seal)
     return try await CloudConnection.connect(through: cloud, connect)
 }
 
@@ -163,7 +179,22 @@ struct RelaySessionContext: Sendable {
     let keys: DeviceKeys
     let tokenStore: any TokenStore
     let nonces: any WarrantNonceStore
+    /// For the attestation, which is never sealed.
     let urlSession: URLSession
+    /// For everything else sent to the relay: `urlSession`, or the relay's sealed session.
+    let relaySession: URLSession
+
+    init(
+        config: CloudConfig, keys: DeviceKeys, tokenStore: any TokenStore, nonces: any WarrantNonceStore,
+        urlSession: URLSession, relaySession: URLSession? = nil
+    ) {
+        self.config = config
+        self.keys = keys
+        self.tokenStore = tokenStore
+        self.nonces = nonces
+        self.urlSession = urlSession
+        self.relaySession = relaySession ?? urlSession
+    }
 }
 
 extension CloudConnection {
@@ -202,10 +233,10 @@ extension CloudConnection {
             }
             let tokens = try await RelayLogin.login(
                 relayURL: relayUrl, nodeKey: key, credential: session.credential, keys: context.keys,
-                audience: config.audience, clientName: config.clientName, session: context.urlSession)
+                audience: config.audience, clientName: config.clientName, session: context.relaySession)
             guard let base = URL(string: relayUrl) else { throw AccountError.invalidInput("bad relay URL") }
             let client = Mero(
-                config: MeroConfig(baseURL: base, tokenStore: context.tokenStore), session: context.urlSession)
+                config: MeroConfig(baseURL: base, tokenStore: context.tokenStore), session: context.relaySession)
             await client.setTokenData(tokens)
             mero = client
             nodeKey = key
@@ -220,7 +251,7 @@ extension CloudConnection {
         let relay = RelayClient(
             relayURL: relayUrl, authorAccount: session.account, authorProof: session.credential, keys: context.keys,
             nonces: context.nonces, executorAccount: session.executorAccount, ttlSeconds: config.warrantTTLSeconds,
-            tokenProvider: { await tokenSource?.currentTokenData()?.accessToken }, session: context.urlSession)
+            tokenProvider: { await tokenSource?.currentTokenData()?.accessToken }, session: context.relaySession)
         return CloudConnection(session: session, relay: relay, mero: mero, nodeKey: nodeKey, readNote: readNote)
     }
 
@@ -238,9 +269,16 @@ extension CloudConnection {
             device: (try? DeviceCertificates.parse(options.authorProof))?.device ?? "",
             credential: options.authorProof, relayUrl: relayInfo.relayUrl,
             executorAccount: relayInfo.executorAccount)
+        // Only the relay is sealed: a sealed transport is bound to one node and
+        // refuses any other URL, and the cloud calls above carry no intent.
+        var sealed: URLSession?
+        if let verifier = options.seal, let relayUrl = relayInfo.relayUrl, let base = URL(string: relayUrl) {
+            let transport = try SealedTransport.attested(baseURL: base, verifier: verifier, session: options.urlSession)
+            sealed = transport.urlSession()
+        }
         let context = RelaySessionContext(
             config: options.config, keys: options.keys, tokenStore: options.tokenStore, nonces: options.nonces,
-            urlSession: options.urlSession)
+            urlSession: options.urlSession, relaySession: sealed)
         let opened = await open(session, nodeKey: options.relayNodeKey ?? relayInfo.nodeKey, context: context)
         return CloudConnection(
             session: opened.session, relay: opened.relay, mero: opened.mero, nodeKey: opened.nodeKey,

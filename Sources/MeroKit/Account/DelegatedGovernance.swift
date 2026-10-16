@@ -236,14 +236,16 @@ extension DelegatedAccounts {
         return namespaceId
     }
 
-    /// A relay client for these calls: the author's credential and whatever
-    /// nonces the call needs.
+    /// A relay client for these calls: the author's credential, whatever
+    /// nonces the call needs, and the relay's sealed transport
+    /// (``relayTransportSession(_:env:)``).
     static func relayClient(
         _ session: DelegatedSession, relayURL: String, nonces: any WarrantNonceStore, env: DelegatedEnvironment
     ) -> RelayClient {
         RelayClient(
             relayURL: relayURL, authorAccount: session.account, authorProof: session.credential, keys: session.keys,
-            nonces: nonces, ttlSeconds: env.warrantTTLSeconds, session: env.urlSession, timeout: env.timeout)
+            nonces: nonces, ttlSeconds: env.warrantTTLSeconds, session: relayTransportSession(relayURL, env: env),
+            timeout: env.timeout)
     }
 
     /// The `init` arguments as the JSON the route takes, from the bytes a caller may hold.

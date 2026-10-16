@@ -42,7 +42,7 @@ enum DelegatedFixture {
         DelegatedEnvironment(
             store: store, nonces: MemoryWarrantNonceStore(), urlSession: MockURLProtocol.makeSession(),
             relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), cloudBaseURL: cloud,
-            audience: .codeSigningId("network.calimero.test"), sleep: { _ in })
+            audience: .codeSigningId("network.calimero.test"), sleep: { _ in }, sealRelays: false)
     }
 
     /// `GET /admin-api/contexts/{ctx}/intents`: what a warrant must name.

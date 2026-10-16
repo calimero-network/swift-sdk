@@ -587,7 +587,7 @@ final class CloudSignInTests: XCTestCase {
         let signIn = CloudSignIn(
             config: CloudConfig(
                 cloudBaseURL: cloud, audience: .codeSigningId("network.calimero.test"),
-                relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true)),
+                relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(keys), sessionStore: sessions, nonces: nonces, urlSession: MockURLProtocol.makeSession(),
             delegatedStore: .memory())
         return (signIn, sessions)

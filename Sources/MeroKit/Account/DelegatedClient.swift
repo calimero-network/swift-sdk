@@ -101,7 +101,7 @@ extension DelegatedAccounts {
     /// no response, a non-2xx one, or a cancelled wait.
     static func isTransportFailure(_ error: Error) -> Bool {
         switch error {
-        case is URLError, is CancellationError:
+        case is URLError, is CancellationError, is RelayKeyTransportError:
             return true
         case let error as MeroError:
             switch error {
@@ -144,18 +144,22 @@ extension DelegatedAccounts {
         _ = contextId
         guard let relayUrl = session.relayUrl else { return nil }
         let nodeKey = env.store.pinnedRelayNodeKey(relayURL: relayUrl)
+        // Every request sealed to the relay's attested TD: intents, admin
+        // reads, queries, the login and events.
+        let transport = relayTransportSession(relayUrl, env: env)
         let relay = RelayClient(
             relayURL: relayUrl, authorAccount: session.account, authorProof: session.credential, keys: session.keys,
-            nonces: env.nonces, ttlSeconds: env.warrantTTLSeconds, session: env.urlSession, timeout: env.timeout)
+            nonces: env.nonces, ttlSeconds: env.warrantTTLSeconds, session: transport, timeout: env.timeout)
         var sessionToken: (@Sendable () async -> String?)?
         if let nodeKey {
-            let minted = DelegatedRelaySession(session: session, relayURL: relayUrl, nodeKey: nodeKey, env: env)
+            let minted = DelegatedRelaySession(
+                session: session, relayURL: relayUrl, nodeKey: nodeKey, env: env, transport: transport)
             sessionToken = { await minted.token() }
         }
         let config = RelayTransportConfig(
             relay: relay, sessionToken: sessionToken,
             observe: RelayObserveConfig(nodeKey: nodeKey, audience: env.audience, clientName: env.clientName),
-            proof: ProofCredential(credential: session.credential, keys: session.keys), urlSession: env.urlSession,
+            proof: ProofCredential(credential: session.credential, keys: session.keys), urlSession: transport,
             timeout: env.timeout)
         let attested = nodeKey != nil || RelayNodeKey.isLoopback(relayUrl)
         return try MeroTransportClient(.relay(config), readsThroughQuery: nodeKey != nil, inertEvents: !attested)
@@ -232,14 +236,19 @@ actor DelegatedRelaySession {
     private let relayURL: String
     private let nodeKey: String
     private let env: DelegatedEnvironment
+    /// Sealed to the relay's TD: the token is the session, and TLS ends outside it.
+    private let transport: URLSession
     private var accessToken: String?
     private var pending: Task<String?, Never>?
 
-    init(session: DelegatedSession, relayURL: String, nodeKey: String, env: DelegatedEnvironment) {
+    init(
+        session: DelegatedSession, relayURL: String, nodeKey: String, env: DelegatedEnvironment, transport: URLSession
+    ) {
         self.session = session
         self.relayURL = relayURL
         self.nodeKey = nodeKey
         self.env = env
+        self.transport = transport
     }
 
     func token() async -> String? {
@@ -252,10 +261,11 @@ actor DelegatedRelaySession {
         let relayURL = self.relayURL
         let nodeKey = self.nodeKey
         let env = self.env
+        let transport = self.transport
         let task = Task<String?, Never> {
             try? await RelayLogin.login(
                 relayURL: relayURL, nodeKey: nodeKey, credential: session.credential, keys: session.keys,
-                audience: env.audience, clientName: env.clientName, session: env.urlSession, timeout: env.timeout
+                audience: env.audience, clientName: env.clientName, session: transport, timeout: env.timeout
             ).accessToken
         }
         pending = task

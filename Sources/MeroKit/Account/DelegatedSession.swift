@@ -261,20 +261,27 @@ public struct DelegatedEnvironment: Sendable {
     public var timeout: TimeInterval
     /// How ``DelegatedAccounts/learnRelayNodeKey(_:env:)`` waits between attempts.
     public var sleep: @Sendable (TimeInterval) async -> Void
+    /// Seal everything sent to a hosted relay to its attested TD
+    /// (``DelegatedAccounts/relayTransportSession(_:env:)``). On by default,
+    /// as in mero-js; a loopback relay (a dev rig) is never sealed.
+    public var sealRelays: Bool
 
+    /// `relayKeyVerifier` defaults to a ``DcapRelayKeyVerifier`` over `urlSession`.
     public init(
         store: DelegatedAccountStore = .shared, nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(),
-        urlSession: URLSession = .shared, relayKeyVerifier: any RelayKeyVerifier = TLSRelayKeyVerifier(),
+        urlSession: URLSession = .shared, relayKeyVerifier: (any RelayKeyVerifier)? = nil,
         cloudBaseURL: URL = CloudClient.defaultBaseURL, audience: LoginAudience = .current, clientName: String? = nil,
         warrantTTLSeconds: UInt64 = 300, timeout: TimeInterval = 15,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1_000_000_000))
-        }
+        },
+        sealRelays: Bool = true
     ) {
         self.store = store
         self.nonces = nonces
         self.urlSession = urlSession
-        self.relayKeyVerifier = relayKeyVerifier
+        self.relayKeyVerifier = relayKeyVerifier ?? DcapRelayKeyVerifier(session: urlSession)
+        self.sealRelays = sealRelays
         self.cloudBaseURL = cloudBaseURL
         self.audience = audience
         self.clientName = clientName
@@ -291,7 +298,7 @@ public struct DelegatedEnvironment: Sendable {
         self.init(
             store: store, nonces: nonces, urlSession: urlSession, relayKeyVerifier: config.relayKeyVerifier,
             cloudBaseURL: config.cloudBaseURL, audience: config.audience, clientName: config.clientName,
-            warrantTTLSeconds: config.warrantTTLSeconds)
+            warrantTTLSeconds: config.warrantTTLSeconds, sealRelays: config.sealRelays)
     }
 }
 

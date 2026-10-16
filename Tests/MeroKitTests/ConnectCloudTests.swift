@@ -118,6 +118,32 @@ final class ConnectCloudTests: XCTestCase {
         XCTAssertEqual(bearers, ["Bearer session-1"])
     }
 
+    /// With `seal`, the relay is attested by this client and the intent
+    /// never crosses in the clear: here the verifier refuses the relay's
+    /// quote, so the write fails before anything but the attestation reached
+    /// the relay. The cloud calls stay plain; they carry no intent.
+    func testAttestsAndSealsToTheRelayWhenAskedAndSendsNoIntentInTheClear() async throws {
+        serve(namespaces: [namespaceRow(ns)], relays: [readyRelay()])
+        serveRelayWrites()
+        rig.on(
+            "POST", "/admin-api/tee/attest",
+            json: #"{"data":{"quoteB64":"AA==","transportPublicKey":"\#(String(repeating: "11", count: 32))"}}"#)
+        var sealed = options()
+        sealed.seal = AnyTransportQuoteVerifier { _ in false }
+        let connection = try await connectCloud(sealed)
+        defer { SealedURLProtocol.unregisterAll() }
+        do {
+            _ = try await connection.execute(contextId: context, method: "set", argsJson: ["key": "k"])
+            XCTFail("a relay whose quote is refused must not be written to")
+        } catch {
+            let message = error.localizedDescription
+            XCTAssertTrue(message.contains("did not verify"), message)
+        }
+        XCTAssertFalse(rig.requests("POST", "/admin-api/tee/attest").isEmpty)
+        XCTAssertFalse(rig.seen.contains { $0.url.path.contains("/intents") })
+        XCTAssertFalse(rig.requests("GET", "/api/cloud/me/namespaces").isEmpty)
+    }
+
     func testExchangesAGoogleIdTokenWhenNoSessionTokenIsHeld() async throws {
         rig.on(
             "POST", "/api/auth/google",
