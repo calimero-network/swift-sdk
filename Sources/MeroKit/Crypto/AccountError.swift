@@ -19,7 +19,8 @@ public enum AccountError: Error, Sendable, Equatable {
     /// The person declined at the wallet, or the wallet refused the request.
     case enrolmentDeclined(String)
 
-    /// The enrolment answers a request this app did not make (`state` mismatch).
+    /// A wallet or cloud callback answers a request this app did not make (its
+    /// `state` is not one this app began, or was already spent).
     case stateMismatch
 
     /// The relay's node key could not be established. Reads and events need it;
@@ -45,6 +46,15 @@ public enum AccountError: Error, Sendable, Equatable {
     /// Nobody a claimant could reach would admit them with this invitation, so
     /// none was minted. `reason` is `not-hosted` or `no-named-node`.
     case invitationNotClaimable(namespaceId: String, reason: String)
+
+    /// The signed-in cloud account cannot write yet, and the message says
+    /// what to go and do: it owns no namespace (or several, and none was
+    /// named), HA is off, no relay is assigned yet, or none relays.
+    case cloudNotReady(String)
+
+    /// The person declined linking an account at the cloud, or the cloud
+    /// refused the link request.
+    case linkDeclined(String)
 }
 
 extension AccountError: LocalizedError {
@@ -54,7 +64,7 @@ extension AccountError: LocalizedError {
         case .credentialRejected(let m): return "Credential rejected: \(m)"
         case .enrolmentDeclined(let m): return m
         case .stateMismatch:
-            return "This enrolment answers a request this app did not make — the state it carries is not the one sent."
+            return "This callback answers a request this app did not make — the state it carries is not one it sent."
         case .relayKeyUnavailable(let m): return "Relay node key unavailable: \(m)"
         case .intentRefused(let reason, _, let status): return "Relay refused the intent (HTTP \(status)): \(reason)"
         case .protocolViolation(let m): return m
@@ -66,6 +76,8 @@ extension AccountError: LocalizedError {
                     + "relay in it. Link this account to your cloud user in the wallet and enable HA, then invite."
                 : "Nobody could claim an invitation to \(ns): the cloud routes to none of the relays or admins it "
                     + "would name as admitters."
+        case .cloudNotReady(let m): return m
+        case .linkDeclined(let m): return m
         }
     }
 }

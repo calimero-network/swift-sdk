@@ -147,9 +147,10 @@ extension HTTPError {
 /// - ``AccountError``: a refusal that carries a status (`intentRefused`,
 ///   `haRefused`) by that status, the rest by what they mean — a malformed
 ///   input or an unverifiable credential is ``ErrorKind/invalid``, a declined
-///   enrolment ``ErrorKind/forbidden``, a missing session
-///   ``ErrorKind/unauthorized``, an unestablished relay key or an invitation
-///   nobody can claim yet ``ErrorKind/unavailable``.
+///   enrolment or link ``ErrorKind/forbidden``, a missing session
+///   ``ErrorKind/unauthorized``, an unestablished relay key, an invitation
+///   nobody can claim yet or a cloud account not ready to write
+///   ``ErrorKind/unavailable``.
 /// - Everything else (``MeroError/rpc(_:)``, decoding failures, …) is
 ///   ``ErrorKind/unknown`` and retryable, with its description.
 public func classifyError(_ error: Error) -> ClassifiedError {
@@ -204,11 +205,11 @@ private func classify(_ error: AccountError) -> ClassifiedError {
         return ClassifiedError(kind: ErrorKind(status: status), status: status, message: message)
     case .invalidInput, .credentialRejected, .stateMismatch, .protocolViolation:
         return ClassifiedError(kind: .invalid, status: nil, message: message)
-    case .enrolmentDeclined:
+    case .enrolmentDeclined, .linkDeclined:
         return ClassifiedError(kind: .forbidden, status: nil, message: message)
     case .notSignedIn:
         return ClassifiedError(kind: .unauthorized, status: nil, message: message)
-    case .relayKeyUnavailable, .invitationNotClaimable:
+    case .relayKeyUnavailable, .invitationNotClaimable, .cloudNotReady:
         return ClassifiedError(kind: .unavailable, status: nil, message: message)
     }
 }
