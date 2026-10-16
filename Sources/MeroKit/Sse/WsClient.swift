@@ -271,10 +271,12 @@ public final class WsClient: @unchecked Sendable {
                 },
                 finish: { error in continuation.finish(throwing: error) })
             let id = self.locked { self.listeners.add(listener) }
-            continuation.onTermination = { [weak self] _ in
-                self?.locked { self?.listeners.remove(id) }
-            }
+            continuation.onTermination = { [weak self] _ in self?.removeListener(id) }
         }
+    }
+
+    private func removeListener(_ id: Int) {
+        locked { listeners.remove(id) }
     }
 
     // MARK: - Run loop
