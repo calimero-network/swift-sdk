@@ -162,23 +162,14 @@ enum DcapPki {
                 nextUpdate = try Der.time(field)
                 index += 1
             }
-            var serials: [[UInt8]] = []
-            var hasExtensions = false
-            var critical: String?
+            var revoked = RevokedEntries()
             if let field = next(), field.tag == DerTag.sequence {
-                for entry in try Der.children(field, strict: true) {
-                    let parts = try Der.children(try Der.expect(entry, DerTag.sequence, "A revoked certificate"))
-                    serials.append(try Der.expect(parts.first, DerTag.integer, "A revoked serial").contents)
-                    if parts.count > 2 {
-                        let found = try extensionList(parts[2])
-                        hasExtensions = hasExtensions || !found.isEmpty
-                        if critical == nil, let id = found.first(where: { $0.critical })?.id {
-                            critical = "Unsupported critical CRL entry extension: \(id)"
-                        }
-                    }
-                }
+                revoked = try revokedEntries(field)
                 index += 1
             }
+            let serials = revoked.serials
+            var hasExtensions = revoked.hasExtensions
+            var critical = revoked.critical
             if let field = next(), field.tag == DerTag.context0 {
                 guard let list = try Der.children(field).first else { throw TeeTrustError("empty extensions") }
                 let found = try extensionList(list)
@@ -209,6 +200,29 @@ enum DcapPki {
         guard algorithmsMatch else { throw TeeTrustError("CRL signature algorithm mismatch") }
         if let critical = flags.critical { throw TeeTrustError(critical) }
         return parsed.crl
+    }
+
+    /// What a CRL's `revokedCertificates` list holds: each serial, whether any
+    /// entry carries extensions, and the first critical entry extension found.
+    struct RevokedEntries {
+        var serials: [[UInt8]] = []
+        var hasExtensions = false
+        var critical: String?
+    }
+
+    private static func revokedEntries(_ field: DerElement) throws -> RevokedEntries {
+        var revoked = RevokedEntries()
+        for entry in try Der.children(field, strict: true) {
+            let parts = try Der.children(try Der.expect(entry, DerTag.sequence, "A revoked certificate"))
+            revoked.serials.append(try Der.expect(parts.first, DerTag.integer, "A revoked serial").contents)
+            guard parts.count > 2 else { continue }
+            let found = try extensionList(parts[2])
+            revoked.hasExtensions = revoked.hasExtensions || !found.isEmpty
+            if revoked.critical == nil, let id = found.first(where: { $0.critical })?.id {
+                revoked.critical = "Unsupported critical CRL entry extension: \(id)"
+            }
+        }
+        return revoked
     }
 
     /// The extensions in a DER `Extensions` list: each one's id and whether it is critical.
