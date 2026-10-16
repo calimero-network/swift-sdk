@@ -340,8 +340,70 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   X25519 + HKDF-SHA256 + ChaCha20-Poly1305 on CryptoKit, opening a bundle the
   gate sealed); `verifySignedAgentPolicy`, `agentQuoteVerifier`
   (`AgentPolicy`), `TeeTrust.kmsReleaseSigner`.
+- **MeroKitUI: the mero-react app layer** (port of `mero-react/src`).
+  - Provider state on `MeroClient` (`MeroProvider`/`useMero`):
+    `MeroProviderConfig` (`AppMode` `multiContext`/`admin`, deprecated
+    `singleContext`; `packageName`, `packageVersion`, `registryURL`,
+    `cloudBaseURL`, `allowedNodeURLs`), `permissions(for:)`
+    (`getPermissionsForMode`), `connectToNode(_:callbackScheme:)` /
+    `handleAuthCallback(_:)` (the node's login page in the system auth sheet;
+    the callback's `node_url` checked by `NodeTrust.resolveTrustedNodeURL`, its
+    tokens adopted only when `TokenAdoption.resolve` says so),
+    `restore()` / `restoreNodeSession()` (`/auth/validate`, judged on a token
+    the transport rotated), `connectWithAccount(_:)`, `isDelegated`, `can`
+    (`MeroCapabilities`), `admin` (`NodeAdmin` / `AccountAdmin`), `transport`,
+    `readAdmin`, `isOnline` over the node's SSE stream (logout on a revoked
+    token family or `403 permission_denied`, recovery on `401`),
+    `applicationId` (resolved from the registry or the account's contexts for
+    an account), `contextId` / `contextIdentity`, `selectContext(_:identity:)`,
+    `app`, and a `logout()` that clears everything. `MeroAppStorage` keeps the
+    node URL, token node URL and ids in `UserDefaults` under mero-react's keys.
+  - Hooks: `AsyncResource` (latest request wins, reset on input change,
+    re-bound on session change) and `AsyncMutation` (`failure`,
+    `throwOnError`); reads `contexts(applicationId:)`, `applicationContexts`,
+    `contextGroup`, `groupInfo`, `groupMembers`, `groupContexts`, `subgroups`,
+    `defaultCapabilities`, `subgroupVisibility`, `teeAdmissionPolicy`,
+    `groupUpgradeStatus`, `groupMetadata`, `memberMetadata`, `contextMetadata`,
+    `namespaces`, `namespace`, `nodeIdentity`, `namespacesForApplication`,
+    `namespaceGroups`, `blobInfo` (`isBlobNotFound`); writes `ContextActions`
+    (incl. `createPrivateContext`, `resyncContext`), `JoinActions` (incl.
+    `redeem`), `GroupActions` (members, roles, capabilities, visibility, TEE
+    admission, reparent, detach, legacy invitations, `joinGroup`),
+    `MetadataActions`, `NamespaceActions`, `UpgradeActions`
+    (`installFromRegistry`), `BlobActions`, `GroupCapabilities`; live
+    `ContextExecutor`, `EventSubscription`, `ContextDiscovery`,
+    `EphemeralPresence` (authoritative replay, self filtering, throttled
+    `setPresence`, `ageOf`), `MigrationEventsWatcher`, `MigrationStatusModel`
+    (SSE, `defaultMigrationPollInterval` 5 s fallback), `AppVersionModel`,
+    `LatestVersionModel`, `GroupAppVersionModel`, `MyAuthoredMigrationModel`,
+    `BlobFileModel` (bytes and a temporary file, removed with the model).
+  - Invitations: `InvitationCapture` (`prime`, `handle(_:)` for `onOpenURL`,
+    `capture(raw:)`, `onInvitation`, `peek`, `subscribe`; persisted until
+    acked, deduplicated by mero-platform's FNV-1a nonce, foreign slugs acked
+    and dropped, `maxAutoJoinAttempts` per app key) with
+    `primeInvitationCapture`, `onInvitation`, `peekInvitation`,
+    `subscribeInvitation`, `invitationFromRaw`, `buildInviteLink`,
+    `urlWithoutInvitation`; `InviteRedemption`, `describeInviteFailure`,
+    `JustJoinedNamespaces`, `JoinSync`, `JoinInvitation`
+    (`isFinalInvitationError`), `DelegatedBootstrap`, `AccountEnrolment`,
+    `isReturningFromWallet`.
+  - Views: `ConnectButton`, `LoginView` tabs (`LoginModalTab`, `NodeLoginPanel`
+    over `NodeLoginModel`, `AccountSignInPanel`), `MigrationPendingBanner`,
+    `MigrationAdminPanel`, `InvitationDialog` (`invitationReadyDelay`),
+    `InvitationGate`, `JoinSyncBanner`, `CalimeroLogo` / `CalimeroLogoShape`,
+    and `MeroTheme` (`defaultMeroTheme`, `.meroTheme(_:)`).
+  - Not ported: `useNamespaceIdentity` (core no longer serves the route), the
+    browser-only `isDesktopWindow`, and `MigrationStatus.fleetCompletedAt`,
+    which MeroKit's `MigrationStatus` does not decode yet.
 
 ### Changed
+
+- `LoginView` offers a **Node** tab beside the Cloud one (pass `tabs: [.cloud]`
+  for the Cloud sign-in alone) and draws from the environment's `MeroTheme`;
+  the Cloud tab is still the default, with the same identifiers.
+- `MeroRootView` restores a stored node session after the Cloud one, adopts
+  SSO callbacks from `onOpenURL`, and captures invitation links.
+- `MeroClient.logout()` also clears `MeroAppStorage`.
 
 - `URLSessionHttpClient` drops a bare trailing `?` from a request URL (as
   mero-js `withoutBareQuery`), so the URL signed and the URL fetched agree.

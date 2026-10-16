@@ -75,6 +75,7 @@ export default defineConfig({
             'guides/agent-gate',
             'guides/blobs',
             'guides/swiftui-frontend',
+            'guides/swiftui-app-layer',
           ],
         },
         {

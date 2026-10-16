@@ -5,7 +5,7 @@ node. It's a faithful port of [`@calimero-network/mero-js`](https://github.com/c
 wire contract — auth + token refresh, JSON-RPC contract calls, the admin API,
 SSO deep-link login, live SSE events (and an experimental WebSocket client) and
 ephemeral presence — in idiomatic `async/await` Swift, with
-an optional SwiftUI layer (`MeroKitUI`).
+an optional SwiftUI layer (`MeroKitUI`) that ports mero-react's app layer.
 
 The device is a **thin client**: it never runs a node. Every capability is an
 HTTP(S) call to a remote node's endpoints.
@@ -355,9 +355,34 @@ struct MyApp: App {
 `MeroClient` is an `@MainActor ObservableObject` exposing `isAuthenticated`,
 `signInWithCloud(callbackScheme:)`, `handleEnrolmentCallback(_:)`, the session
 (`account`, `relayURL`, `isSignedInWithoutRelay`, `connection`),
-`runSampleRpc(...)`, `logout()`, and friendly error text. `LoginView` is a single
-"Continue with Calimero" button (accessibility ids `loginTitle`,
-`cloudSignInButton`, `loginError`, and `loginButton` on the sign-in panel).
+`runSampleRpc(...)`, `logout()`, and friendly error text. `LoginView` has a
+**Cloud** tab ("Continue with Calimero"; accessibility ids `loginTitle`,
+`cloudSignInButton`, `loginError`, `loginButton`) and a **Node** tab (local
+node discovery plus a URL field).
+
+The rest of mero-react is here too, as SwiftUI view models and views:
+
+- **Provider state** — `MeroProviderConfig` (`AppMode`, package, registry,
+  `allowedNodeURLs`), `connectToNode(_:callbackScheme:)` with the SSO callback
+  checked by `NodeTrust` and adopted by `TokenAdoption`, `connectWithAccount`,
+  `isDelegated`, `can` (`MeroCapabilities`), `admin` (`NodeAdmin` /
+  `AccountAdmin`), `transport`, `isOnline` over the node's event stream,
+  `applicationId` / `contextId` / `contextIdentity`, `MeroAppStorage`.
+- **Hooks** — `AsyncResource` reads (`client.contexts()`, `groupInfo`,
+  `groupMembers`, `namespaces`, `nodeIdentity`, metadata, blob info, …) and
+  `AsyncMutation` write families (`ContextActions`, `JoinActions`,
+  `GroupActions`, `MetadataActions`, `NamespaceActions`, `UpgradeActions`,
+  `BlobActions`), plus `ContextExecutor`, `EventSubscription`,
+  `EphemeralPresence`, `ContextDiscovery`, `MigrationStatusModel`,
+  `AppVersionModel`, `LatestVersionModel`, `GroupAppVersionModel`,
+  `MyAuthoredMigrationModel` and `BlobFileModel`.
+- **Invitations** — `InvitationCapture` (`onOpenURL` links, persisted until
+  acked), `InviteRedemption`, `InvitationDialog`, `InvitationGate`, `JoinSync` /
+  `JoinSyncBanner`, `JoinInvitation`, `DelegatedBootstrap`, `buildInviteLink`.
+- **Views** — `ConnectButton`, `MigrationPendingBanner`, `MigrationAdminPanel`,
+  `CalimeroLogo`, and `MeroTheme` (`defaultMeroTheme`, `.meroTheme(_:)`).
+
+See the [SwiftUI app layer](https://calimero-network.github.io/swift-sdk/guides/swiftui-app-layer/) guide.
 
 A full SwiftUI sample app lives in `Examples/MeroSampleApp`: Cloud sign-in, a
 chat example running on the relay, and an explorer for every SDK method, in the

@@ -66,7 +66,7 @@ struct MyApp: App {
       <text x="150" y="188" fill="#f0883e" font-size="9">false</text>
       <rect x="70" y="200" width="220" height="60" rx="8" fill="#58a6ff14" stroke="#58a6ff50" />
       <text x="180" y="224" text-anchor="middle" fill="#58a6ff" font-size="11.5" font-weight="600">LoginView</text>
-      <text x="180" y="241" text-anchor="middle" fill="#9aa4b2" font-size="9">node URL · username · password</text>
+      <text x="180" y="241" text-anchor="middle" fill="#9aa4b2" font-size="9">Cloud tab · Node tab</text>
       <text x="180" y="253" text-anchor="middle" fill="#9aa4b2" font-size="9">→ signInWithCloud(...)</text>
     </g>
 
@@ -145,8 +145,8 @@ All three are `public` `View`s that read the `MeroClient` from
 
 | View | Purpose |
 | --- | --- |
-| `MeroRootView(callbackScheme:)` | restores a stored session; routes `LoginView` ⇄ `HomeView`; handles `onOpenURL` |
-| `LoginView(callbackScheme:)` | one "Continue with Calimero" button → `client.signInWithCloud(...)` |
+| `MeroRootView(callbackScheme:)` | restores a stored session (Cloud, else the stored node); routes `LoginView` ⇄ `HomeView`; handles `onOpenURL` (SSO and enrolment callbacks, invitation links) |
+| `LoginView(callbackScheme:)` | a Cloud tab ("Continue with Calimero" → `client.signInWithCloud(...)`) and a Node tab (discovered local nodes or a URL → `client.connectToNode(...)`) |
 | `HomeView(demoContextId:demoMethod:)` | signed-in screen: session info, demo RPC, logout |
 
 <Aside type="note">
@@ -155,3 +155,7 @@ All three are `public` `View`s that read the `MeroClient` from
   `WebAuthenticating` that answers without a browser. A full SwiftUI sample — plus XCUITest UI tests
   against an in-app mock backend — lives in `Examples/MeroSampleApp`.
 </Aside>
+
+The rest of mero-react — provider state, hooks as view models, invitations,
+`ConnectButton`, the migration views and `MeroTheme` — is in the
+[SwiftUI app layer](/guides/swiftui-app-layer/) guide.
