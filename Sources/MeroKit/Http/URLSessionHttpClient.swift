@@ -13,7 +13,13 @@ private let terminalAuthErrors: Set<String> = ["token_reuse", "token_revoked"]
 
 /// `URLSession`-backed ``HttpClient`` implementing the mero-js transport contract:
 /// bearer-token injection, reactive 401→refresh (single-flight, retried once),
-/// terminal `x-auth-error` handling, and backoff retry on network/5xx.
+/// and terminal `x-auth-error` handling.
+///
+/// Every request is sent **once**: there is no automatic retry on a network
+/// failure or a `5xx`, as in mero-js. A non-idempotent `POST`/`PUT`/`PATCH`/
+/// `DELETE` that failed in transit may already have run on the node; sending
+/// it again could repeat the write. Wrap idempotent calls in ``withRetry(attempts:sleep:_:)``
+/// to opt in.
 public final class URLSessionHttpClient: HttpClient {
     private let baseURL: URL
     private let session: URLSession
@@ -54,9 +60,7 @@ public final class URLSessionHttpClient: HttpClient {
     }
 
     public func sendRaw(_ req: HttpRequest) async throws -> (Data, HeadResult) {
-        try await withRetry { _ in
-            try await self.attempt(req, allowRefresh: true)
-        }
+        try await attempt(req, allowRefresh: true)
     }
 
     public func head(_ path: String, headers: [String: String]) async throws -> HeadResult {
