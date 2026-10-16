@@ -51,7 +51,7 @@ final class OwnerOpTests: XCTestCase {
         return (body, try! Hex.decodeUnsized(String(hex.suffix(128)), label: "signature"))
     }
 
-    private func payload(digest: Data, counter: UInt64) throws -> Data {
+    private func transferPayload(digest: Data, counter: UInt64) throws -> Data {
         try ownerOpSigningPayload(
             account: Self.account, namespaceId: Self.namespace, groupId: Self.group, kind: .transferOwnership,
             opDigest: digest, counter: counter, keyEpoch: 0)
@@ -72,7 +72,7 @@ final class OwnerOpTests: XCTestCase {
     }
 
     func testSigningPayloadIsCores() throws {
-        let payload = try payload(digest: ownerOpDigest(Self.handBuilt.bytes), counter: 3)
+        let payload = try transferPayload(digest: ownerOpDigest(Self.handBuilt.bytes), counter: 3)
         XCTAssertEqual(Hex.encode(payload), "a0855fcab12a8f8000345a0f25658f87d7650da170c50924be55fa780ca345a8")
         // core's own signature over it verifies against what is computed here.
         let pinned = split(Self.wholeProof).signature
@@ -87,7 +87,7 @@ final class OwnerOpTests: XCTestCase {
                 counter: 3))
         XCTAssertEqual(proof.count, Self.wholeProof.count)
         XCTAssertEqual(split(proof).body, split(Self.wholeProof).body)
-        let payload = try payload(digest: ownerOpDigest(Self.handBuilt.bytes), counter: 3)
+        let payload = try transferPayload(digest: ownerOpDigest(Self.handBuilt.bytes), counter: 3)
         let rootKey = try Hex.decode(Self.rootPublicKey, label: "root", bytes: 32)
         XCTAssertTrue(Ed25519.verify(publicKey: rootKey, signature: split(proof).signature, message: payload))
     }
@@ -138,7 +138,7 @@ final class OwnerOpTests: XCTestCase {
         let guarded = Hex.encode(try rootGuardedOpBytes(transfer, rootProof: proof))
         XCTAssertEqual(split(guarded).body, split(Self.guardedTransfer).body)
         // core's pinned signature is over the payload computed here.
-        let payload = try payload(digest: ownerOpDigest(transfer.bytes), counter: 5)
+        let payload = try transferPayload(digest: ownerOpDigest(transfer.bytes), counter: 5)
         let rootKey = try Hex.decode(Self.rootPublicKey, label: "root", bytes: 32)
         XCTAssertTrue(
             Ed25519.verify(publicKey: rootKey, signature: split(Self.guardedTransfer).signature, message: payload))
