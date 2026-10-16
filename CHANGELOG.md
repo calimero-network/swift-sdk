@@ -51,6 +51,21 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 - `CloudSignIn.foundNamespace` attests the founding relay now, even when its
   key is known: the founding relay holds the namespace's keys.
 - `CloudClient.haRefusalMessages` takes mero-js's wording (`HA_REFUSAL_MESSAGES`).
+- **Relay node keys are verified by quote.** The default `RelayKeyVerifier`
+  (`CloudConfig`, `DelegatedEnvironment`, `RelayNodeKey.attest`) is now
+  `DcapRelayKeyVerifier`: the relay's TDX quote is verified on the device
+  against Intel's root and the signed mero-tee release the relay names
+  (`locked-read-only`, at least 2.3.99), as mero-js does. A hosted relay
+  answering a mock quote, or a quote of an untrusted image, no longer yields a
+  key; a loopback relay's mock still does. Pass `TLSRelayKeyVerifier()` for
+  the old TLS-only check.
+- **Delegated sessions seal a hosted relay** (`DelegatedEnvironment.sealRelays`,
+  `CloudConfig.sealRelays`, both `true` by default): the delegated client,
+  its relay login and delegated governance go through
+  `DelegatedAccounts.relayTransportSession(_:env:)`, sealed to the relay's
+  attested TD. Set `sealRelays: false` for a plain rig.
+  `DelegatedEnvironment(relayKeyVerifier:)` is now optional (`nil` = the
+  default verifier over its `urlSession`).
 
 ### Added
 
@@ -273,6 +288,59 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   `AccountJoin.resolveRelayFromInvitation`, `joinWithNode(nodeURL:admitURL:…)`
   (`ResolveRelayResult`, `JoinWithNodeResult`) and `InvitationRelay.peerId`.
 
+- **TEE trust** (port of mero-js `src/sealed/verify.ts`, `release.ts`,
+  `sigstore.ts`, `sigstore-trust-root.ts`, `x509.ts`, and of `@phala/dcap-qvl`'s
+  `verify`): `Dcap.verify(_:collateral:nowSecs:)` (`DcapCollateral`,
+  `DcapVerifiedReport`, `DcapReport`, `TdReport10`, `TdReport15`,
+  `SgxEnclaveReport`, `DcapVerify`) — Intel's PCK chain, CRLs and revocation,
+  TCB info, QE identity, the QE report and the quote's signatures, on
+  CryptoKit's P-256/P-384 ECDSA and an internal DER/X.509 reader;
+  `createQuoteVerifier(_:)` (`QuoteVerifierOptions`, `QuoteVerifier`,
+  `TrustedMeasurements`), `trustedMeasurementsFromReleases(_:profile:allowDebugProfile:)`
+  (`PublishedMrtds`, `PublishedProfile`, `TrustedReleaseOptions`),
+  `TeeTrust.productionProfile`; the `TransportQuoteVerifier` protocol
+  (`TransportQuoteArgs`, `AnyTransportQuoteVerifier`); `TeeTrustError`.
+- **Signed node releases**: `Sigstore.verifyCosignBundle` with the embedded
+  `Sigstore.fulcioAuthorities` / `Sigstore.rekorLogs` (`SignerIdentity`),
+  `verifySignedNodeRelease`, `fetchNodeRelease`, `nodeReleaseVersionFromImage`,
+  `fetchNodeReleaseVersion`, `cloudNodeReleaseUrl`, `trustSignedRelease`
+  (`TrustSignedReleaseOptions`), `createSignedReleaseVerifier`
+  (`SignedReleaseVerifierOptions`, `SignedReleaseVerifier`),
+  `createSignedReleaseSealedFetch` (`SignedReleaseSealedFetchOptions`,
+  `NodeReleaseSource`), `TeeTrust.nodeReleaseSigner`,
+  `TeeTrust.defaultReleaseMirror`. Pinned to real mero-tee 2.3.86/2.3.87
+  releases (`Fixtures/tee/`).
+- **Sealed transport** (port of mero-js `sealed.ts` / `noise.ts`, pinned to
+  core's `sealed.rs` vectors): `SealedTransport` (`handshakePath`,
+  `sealedPath`, `contentType`; `send(_:)` streaming `SealedResponse`,
+  `data(for:)`, `urlSession(configuration:)` over `SealedURLProtocol`, URLs
+  outside the base refused, one session for concurrent requests,
+  `unknown_session` reopened, `busy` retried, re-attest on restart),
+  `TransportKeySource`, `SealedTransport.attested(baseURL:verifier:…)` (mero-js
+  `createAttestedSealedFetch`), `fetchAttestedTransportKey(_:verifier:…)`
+  (`TransportAttestation`), `transportKeyBinding(_:_:)`,
+  `StaleTransportKeyError`, `SealedTransportError`.
+  `ConnectCloudOptions.seal` / `ConnectCloudWithAccountOptions.seal` seal the
+  relay. `DelegatedAccounts.relayTransportSession(_:env:)` /
+  `forgetRelaySealing()` (mero-js `relayTransportFetch`), with the
+  `sealed_route_unguarded` fallback for logged-in calls.
+- **Relay node-key attestation** (port of mero-js `relay-attestation/*`):
+  `attestRelayNodeKey(_:)` (`AttestRelayNodeKeyOptions`, `AttestedNodeKey`),
+  `attestKeyBinding(_:)`, `reportDataOf(_:)`, `DcapRelayKeyVerifier`
+  (`trustedRelayProfile`, `minRelayRelease`, `signedReleaseVerifier(relayURL:…)`),
+  `RelayKeyTransportError` (an unreachable relay or mirror is `.unavailable`).
+- **Private agents** (port of mero-js `src/agent-gate/*`, against
+  mero-agent-gate's `protocol.rs`): `attestAgent`, `checkOwner`,
+  `provisionAgent`, `releaseAgent` (`AttestAgentOptions`,
+  `ProvisionAgentOptions`, `ReleaseAgentOptions`, `VerifiedAgent`,
+  `ProvisionedAgent`), `generateOwnerKey` / `ownerPublicKey` (`OwnerKey`),
+  `validateAgentId`, `agentKeyBinding`, `provisionInfo`,
+  `AgentGate.attestDomain` / `.provisionInfoDomain`, `AgentGateError`;
+  `hpkeSealAuth` / `hpkeOpenAuth` (`HpkeSealed`: RFC 9180 Auth mode,
+  X25519 + HKDF-SHA256 + ChaCha20-Poly1305 on CryptoKit, opening a bundle the
+  gate sealed); `verifySignedAgentPolicy`, `agentQuoteVerifier`
+  (`AgentPolicy`), `TeeTrust.kmsReleaseSigner`.
+
 ### Changed
 
 - `URLSessionHttpClient` drops a bare trailing `?` from a request URL (as
@@ -324,9 +392,9 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 
 ### Known gaps
 
-- The relay's node key is taken from its TEE attestation over TLS (report data
-  bound to the request nonce and the named key); **DCAP quote signature and
-  measurement verification is a follow-up**. Writes do not depend on it.
+- ~~The relay's node key is taken from its TEE attestation over TLS; DCAP
+  quote verification is a follow-up.~~ Done in the mero-js parity release:
+  `DcapRelayKeyVerifier` verifies the quote and the signed release.
 - The hosted wallet returns only to `https://` callbacks; accepting app schemes
   is a pending wallet change.
 

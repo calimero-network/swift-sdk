@@ -121,8 +121,9 @@ relay's Bearer session (admin reads, SSE). See
 
 > The hosted wallet returns only to `https://` callbacks today; app-scheme
 > callbacks are a pending wallet change. The SDK accepts either. The relay's
-> node key is taken from its TEE attestation over TLS; full DCAP quote
-> verification is a follow-up (pluggable via `RelayKeyVerifier`).
+> node key is taken from its TEE attestation only once its DCAP quote verifies
+> on the device against the signed mero-tee release it runs
+> (`DcapRelayKeyVerifier`, the default `RelayKeyVerifier`).
 
 ## Quick start (development node)
 
@@ -301,6 +302,25 @@ redemption (`redeemInvitation`, step-typed `bootstrapFromInvitation`,
 `joinAsAccount`). See
 [Delegated accounts](https://calimero-network.github.io/swift-sdk/guides/delegated-accounts/)
 and [Transport](https://calimero-network.github.io/swift-sdk/reference/transport/).
+
+## TEE trust, sealed transport and private agents
+
+Everything a TEE node proves is checked on the device, CryptoKit only:
+`Dcap.verify` (Intel's PCK chain, CRLs, TCB info, QE identity, the quote's
+signatures — a port of dcap-qvl), `createQuoteVerifier` /
+`trustedMeasurementsFromReleases` (the measurements of a trusted image), and
+signed mero-tee releases (`verifySignedNodeRelease`, `trustSignedRelease`,
+`createSignedReleaseVerifier`) against the embedded Sigstore trust root. Relay
+node keys are verified by quote (`DcapRelayKeyVerifier`, `attestRelayNodeKey`).
+`SealedTransport` seals requests end to end to a node's attested key (Noise NK
++ AES-GCM frames, byte for byte with core's `sealed.rs`) and hands any
+`URLSession` consumer a sealed session; `connectCloud(seal:)` and delegated
+sessions seal the relay. `attestAgent` / `provisionAgent` / `releaseAgent`
+drive mero-agent-gate with HPKE Auth mode, and `verifySignedAgentPolicy` /
+`agentQuoteVerifier` say which agent images to trust. See
+[TEE trust](https://calimero-network.github.io/swift-sdk/guides/tee-trust/),
+[Sealed transport](https://calimero-network.github.io/swift-sdk/guides/sealed-transport/)
+and [Private agents](https://calimero-network.github.io/swift-sdk/guides/agent-gate/).
 
 ## Holding the account root
 

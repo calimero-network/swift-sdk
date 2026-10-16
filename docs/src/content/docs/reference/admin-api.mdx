@@ -408,7 +408,8 @@ flags are sent only when set.
 
 `teeVerifyQuote` is gone: the node has not served `POST /tee/verify-quote` since
 before rc.41. Verify a quote client-side against the collateral `teeAttest`
-returns with `includeCollateral: true`.
+returns with `includeCollateral: true` — `createQuoteVerifier(_:)`,
+`fetchAttestedTransportKey(_:verifier:)` ([TEE trust](/guides/tee-trust/)).
 
 ## Network & node
 

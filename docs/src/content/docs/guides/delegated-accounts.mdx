@@ -58,7 +58,11 @@ Warrant nonces are one sequence per relay (`WarrantNonceStore`);
 
 A relay login names the relay's node signing key, and that key must never be
 read from the relay being logged in to. It is learned from the relay's TEE
-attestation (under `CloudConfig.relayKeyVerifier`) and pinned in the store.
+attestation (under `CloudConfig.relayKeyVerifier` — by default a
+`DcapRelayKeyVerifier`, which verifies the DCAP quote against the signed
+mero-tee release the relay runs; see [TEE trust](/guides/tee-trust/)) and
+pinned in the store. Everything the delegated client sends a hosted relay is
+[sealed](/guides/sealed-transport/) to its attested TD.
 
 ```swift
 switch await DelegatedAccounts.attemptRelayNodeKey(relay, env: env) {

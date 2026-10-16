@@ -1,0 +1,116 @@
+---
+title: TEE trust
+description: Verifying a TEE node on the device — DCAP quotes against Intel's root, signed mero-tee releases against the Sigstore trust root, the measurements of a trusted image, and the relay node keys they vouch for.
+sidebar:
+  order: 10
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A TEE node proves what it runs with a **TDX quote**: a report of its
+measurements and of 64 bytes of report data, signed by a key that chains to
+Intel's root. MeroKit checks such a quote **on the device**, with nothing but
+the node: the node hands over the Intel-signed collateral with its quote
+(`includeCollateral`), and a node cannot forge collateral, only choose which
+valid collateral to serve. It is a port of mero-js `src/sealed/verify.ts`,
+`release.ts`, `sigstore.ts` and `x509.ts`; where mero-js takes the DCAP check
+from `@phala/dcap-qvl`, MeroKit carries its own port of it (CryptoKit only).
+
+## What a quote verifier checks
+
+`createQuoteVerifier(_:)` returns a `QuoteVerifier` that accepts a quote only
+when every check passes:
+
+- **DCAP** (`Dcap.verify(_:collateral:nowSecs:)`): the collateral's CRLs, TCB
+  info and QE identity, each signed by Intel and current; the PCK certificate
+  chain to Intel's SGX root CA, with revocation; the QE report, its signature
+  and its binding of the attestation key; the quote's own signature; the
+  platform's TCB level; no debug TD.
+- **TCB status**: one allowed (`UpToDate` by default), never `Revoked`.
+- **Debug**: refused again here, whatever `dcapVerify` you swap in.
+- **Image**: one of `allowedMeasurements` in full — MRTD and RTMR0–3 together,
+  so the registers of different images never combine. `allowedMrtd` alone is
+  refused: on GCP the MRTD measures the platform firmware every image shares.
+- **Report data**: exactly `nonce ‖ reportDataSuffix`, the binding this client
+  computed (a transport key, a node key, an agent's keys).
+
+```swift
+let verifier = try createQuoteVerifier(
+  QuoteVerifierOptions(trusting: try trustedMeasurementsFromReleases(
+    [published], profile: TeeTrust.productionProfile)))      // "locked-read-only"
+let ok = try await verifier.verify(
+  TransportQuoteArgs(quoteB64: quote, nonce: nonce, reportDataSuffix: binding, collateral: collateral))
+```
+
+Any failure throws a `TeeTrustError` naming what did not hold. Mock quotes
+never pass: they carry no signature.
+
+`trustedMeasurementsFromReleases(_:profile:allowDebugProfile:)` reads the
+`published-mrtds.json` of the releases you trust: each release's image by all
+of its registers, and only the TCB statuses every release accepts. Only
+`locked-read-only` is a production profile; `debug` and `debug-read-only`
+images run the operator's tooling inside the TD and need `allowDebugProfile`.
+
+## Signed node releases
+
+Shipping `published-mrtds.json` with the app trusts that file. To trust a
+release fetched at run time instead, verify its **cosign keyless signature**:
+
+```swift
+let version = try await fetchNodeReleaseVersion(relayURL)          // from GET /admin-api/tee/info
+let release = try await fetchNodeRelease(
+  try cloudNodeReleaseUrl(TeeTrust.defaultReleaseMirror, version: version))
+let trusted = try trustSignedRelease(
+  TrustSignedReleaseOptions(release: release, profile: "locked-read-only", minReleaseVersion: "2.3.99"))
+```
+
+`verifySignedNodeRelease(_:bundle:expectedVersion:identity:issuer:signature:)`
+checks, as `cosign verify-blob --bundle` does, against the Sigstore trust root
+embedded in the SDK (`Sigstore.fulcioAuthorities`, `Sigstore.rekorLogs`):
+
+- the signature over the exact bytes verifies with the bundle's certificate;
+- Rekor's signed entry timestamp verifies, for an entry that is this signature
+  over these bytes by this certificate;
+- the certificate chains to a Fulcio CA and was valid **when Rekor logged it**
+  (nothing reads the device clock, so a release that verifies once always does);
+- it names the mero-tee node release workflow (`TeeTrust.nodeReleaseSigner`)
+  and GitHub Actions as its issuer;
+- the file is a node release that lists measured profiles, with the `tag` asked for.
+
+`minReleaseVersion` is required: every release ever signed stays validly
+signed, so without a floor a relay could present an old one with a flaw since
+fixed. `createSignedReleaseVerifier(_:)` does all of this per attestation —
+the release the node names, verified, then its quote against that release's
+image only.
+
+<Aside type="note">
+The mirror (`TeeTrust.defaultReleaseMirror`, `https://cloud.calimero.network`)
+is only a transport: what it serves is verified, so it can fail to answer but
+cannot make a release trusted. Pass `NodeReleaseSource.custom` to read the
+release from a file bundled with the app.
+</Aside>
+
+## Relay node keys
+
+A relay login names the relay's node key, and that key must never be taken
+from the relay on its word. With `bindNodeKey`, core commits the key into the
+quote's report data — `nonce ‖ SHA-256("calimero.tee-attest.key-binding.v1" ‖ 0³² ‖ key)`
+(`attestKeyBinding(_:)`, `reportDataOf(_:)`). The default verifier,
+`DcapRelayKeyVerifier`, accepts the key only once the quote verified against
+the signed release the relay names (`locked-read-only`, at least
+`DcapRelayKeyVerifier.minRelayRelease`):
+
+```swift
+let config = CloudConfig()                                   // relayKeyVerifier: DcapRelayKeyVerifier()
+let key = try await RelayNodeKey.attest(relayURL: relay)     // DCAP + signed release + binding
+// or, without a RelayKeyVerifier:
+let attested = try await attestRelayNodeKey(
+  AttestRelayNodeKeyOptions(relayURL: relay, verify: DcapRelayKeyVerifier.signedReleaseVerifier(relayURL: relay)))
+```
+
+A loopback relay is a dev rig answering mock quotes, accepted from loopback
+only. A relay or mirror that does not answer is a `RelayKeyTransportError`,
+which `attemptRelayNodeKey` reports as `.unavailable` (try again); a proof that
+does not hold is `.refused`. `TLSRelayKeyVerifier`, the older check of the
+binding alone over TLS, and `PinnedRelayKeyVerifier` remain for dev rigs and
+keys pinned out of band.

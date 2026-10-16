@@ -106,8 +106,10 @@ replica), or grant `CAN_AUTHOR_ON_BEHALF` to the named relay account.
 
 Reads and live events through the relay need its node key: pass
 `relayNodeKey:` if you know it; otherwise the key the cloud reports is used,
-and failing that the key the relay attests (`CloudConfig.relayKeyVerifier`).
-Writes work either way.
+and failing that the key the relay attests (`CloudConfig.relayKeyVerifier`, a
+`DcapRelayKeyVerifier` by default: see [TEE trust](/guides/tee-trust/)).
+Writes work either way. Pass `seal:` (a quote verifier) to seal every call to
+the relay to its attested TD ([Sealed transport](/guides/sealed-transport/)).
 
 ## Hosting a namespace (HA)
 
