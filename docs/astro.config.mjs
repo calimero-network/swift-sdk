@@ -68,6 +68,7 @@ export default defineConfig({
             'guides/groups-and-governance',
             'guides/account-roots',
             'guides/signing-owner-ops',
+            'guides/calimero-cloud',
             'guides/blobs',
             'guides/swiftui-frontend',
           ],

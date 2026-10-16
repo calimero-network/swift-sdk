@@ -138,6 +138,14 @@ manager returned. Supply your own `RelayKeyVerifier` (or a
 `PinnedRelayKeyVerifier`) in `CloudConfig` to tighten it. Warranted writes do not
 depend on the node key; only Bearer reads and events do.
 
+### Signed in to the cloud as a user
+
+The routes above are proven by the device certificate. The cloud's
+signed-in routes — owned namespaces and their relays, HA, linking accounts —
+take a cloud login instead (Google, or the account root), and
+`connectCloud` / `connectCloudWithAccount` reach a relay from one. See
+[Calimero Cloud](/guides/calimero-cloud/).
+
 ## Development nodes
 
 For a node you run yourself, exchange its admin username and password for a

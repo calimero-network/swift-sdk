@@ -32,6 +32,8 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   replay. Wrap idempotent calls in the now-public `withRetry` to retry.
 - `Mero.close()` now ends the event streams the instance started (it was a
   no-op), and so does `logout()`, which calls it.
+- `AccountError` has two new cases, `cloudNotReady` and `linkDeclined`: an
+  exhaustive `switch` over it needs them.
 
 ### Added
 
@@ -148,6 +150,57 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   request carrying a proof never follows a redirect**: the `3xx` surfaces as
   `MeroError.http` with status `0` and is not re-sent (as mero-js
   `refuseProofRedirect`). A file body cannot be signed and is refused.
+- **Cloud login sessions** (port of mero-js `CloudClient`'s signed-in half):
+  `CloudClient(sessionToken:sessionStore:onSession:)`, `signInWithGoogle(_:)`,
+  `signInWithAccount(_:)` (root-signed, `POST /api/auth/account`),
+  `getAccountLoginChallenge()` / `submitAccountLogin(_:)`, `refreshSession()`,
+  `signOut()` (forgets the session even when the server call fails),
+  `getSession()`, `isSignedIn`, `CloudClient.keychainSessionStore(...)`. The
+  MDMA token (`CloudLoginSession`, `CloudUser`) is shared by every copy of the
+  client and adopted from `x-mdma-session-refresh` on any response; a
+  signed-in route with no session throws `AccountError.notSignedIn` unsent.
+- **Owned namespaces, relays, machines**: `getMyNamespaces()`
+  (`CloudNamespace`), `getNamespaceRelays(_:)` (`CloudRelay`, with
+  `admission`, `admissionHint` and the relay's own `CloudRelayJoin` report),
+  `findExecutingRelay(_:)`, `CloudClient.pickExecutingRelay(_:)`,
+  `getMyMachines()` (`CloudMachine`, `CloudMachineNamespace`). mero-js's
+  deprecated `getMyNode` is not ported.
+- **HA**: `claimNamespace(_:ownershipProof:)` (or `proof:` for a typed node
+  proof), `enableNamespaceHa(_:admitterAddrs:)`,
+  `enableFoundedNamespaceHa(_:ownershipProof:)`, `disableNamespaceHa(_:)`,
+  `admitterAddrsFromNetworkStatus(_:)`, the cloud's page URLs
+  `enableHAURL(_:)` / `disableHAURL(_:)` (`HAPageOptions`), and in MeroKitUI
+  `CloudClient.enableHA(_:callback:authenticator:)` /
+  `disableHA(_:callback:authenticator:)`, which open them in the system auth
+  sheet. `signAccountOwnershipClaim(_:)` (`AccountOwnershipClaimInput`,
+  audience `AccountHaClaim.ownershipAudience` = `mdma:enable-ha-namespace`,
+  bound to the login's email) and `signAccountHaClaim(_:)`
+  (`AccountHaClaimInput`), each from a device secret or a `Signer`.
+  `HaRefusal` (`accountNotLinked`, `accountLinkedToSeveralUsers`,
+  `haRequestPending`, `unknownRelay`, `relayNotDialable` — mero-js's typed
+  refusal errors) and `AccountError.haRefusal` read an `haRefused` back.
+- **Account linking**: `linkAccount(_:)`, `getAccountLinkChallenge()` /
+  `submitAccountLink(_:)` (`AccountLinkChallenge`, `AccountLinkProof`,
+  `CloudAccountLink`), `linkAccountWithGrant(grant:rootSecret:signer:)`
+  (anonymous even with a session), `getMyAccounts()` (`CloudLinkedAccounts`),
+  `CloudClient.accountLinkHandoff(portalURL:accountId:callbackURL:stateStore:)`
+  / `readAccountLinkCallback(_:stateStore:)` (`AccountLinkHandoff`,
+  `AccountLinkCallback`), and the consent-page flow
+  `CloudLink.cloudLinkUrl(accountId:returnTo:cloudWebURL:stateStore:)`,
+  `readCloudLinkCallback(_:stateStore:)`, `completeCloudLink(_:root:...)`,
+  `strippingCallback(_:)`, with MeroKitUI's `CloudLink.beginCloudLink(...)`
+  presenting it. A grant is accepted only for a link this app began, for that
+  account, within 10 minutes, once (`CloudLinkStateStore`, in memory or
+  `.keychain()`, in place of `localStorage`). `callbackIsForeign(_:pageOrigin:)`.
+- **`connectCloud(_:)` / `connectCloudWithAccount(_:)`** (port of mero-js
+  `connect.ts`; `ConnectCloudOptions`, `ConnectCloudWithAccountOptions`): sign
+  in, pick the owned namespace and the relay that can write there, and return
+  a `CloudConnection` — which gains `cloud`, `namespace`, `namespaceId`,
+  `relayInfo` and `execute(contextId:method:argsJson:)`. Its relay session is
+  opened by the same code as `CloudSignIn.connect(_:)`.
+- `AccountError.cloudNotReady` (no namespace, several, HA off, nothing
+  assigned, only replicas, relays awaiting the grant — mero-js's messages;
+  classified `.unavailable`) and `AccountError.linkDeclined` (`.forbidden`).
   `SseConnection(baseURL:authorize:)` and `SseClient(baseURL:authorize:)` sign
   the stream and every subscription `POST`, with the same redirect refusal.
 

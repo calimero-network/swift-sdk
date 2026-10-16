@@ -180,9 +180,12 @@ without the `HTTP <status>` prefix.
 
 `AccountError`s are mapped too: `intentRefused` and `haRefused` by their
 status (a nonce refusal stays retryable), `invalidInput` / `credentialRejected`
-/ `stateMismatch` / `protocolViolation` → `.invalid`, `enrolmentDeclined` →
-`.forbidden`, `notSignedIn` → `.unauthorized`, `relayKeyUnavailable` /
-`invitationNotClaimable` → `.unavailable`.
+/ `stateMismatch` / `protocolViolation` → `.invalid`, `enrolmentDeclined` /
+`linkDeclined` → `.forbidden`, `notSignedIn` → `.unauthorized`,
+`relayKeyUnavailable` / `invitationNotClaimable` / `cloudNotReady` →
+`.unavailable`. `AccountError.haRefusal` reads an `haRefused` back as a typed
+`HaRefusal` (`accountNotLinked`, `accountLinkedToSeveralUsers`,
+`haRequestPending`, `unknownRelay`, `relayNotDialable`).
 
 ## Retries & timeouts
 

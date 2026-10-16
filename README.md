@@ -270,6 +270,21 @@ await mero.logout() // clears the token bundle from memory and the store
   request carrying a proof never follows a redirect. See
   [Request proofs](https://calimero-network.github.io/swift-sdk/get-started/authentication/#request-proofs-no-session).
 
+## The Cloud manager, signed in
+
+`CloudClient` also covers the cloud's signed-in routes, as mero-js does:
+`signInWithGoogle` / `signInWithAccount` (root-signed, no Google), a session
+that copies share, follows MDMA's rolling refresh and persists in the Keychain
+(`sessionStore:`), `getMyNamespaces`, `getNamespaceRelays` /
+`findExecutingRelay`, `getMyMachines`, HA (`claimNamespace`,
+`enableNamespaceHa`, `enableFoundedNamespaceHa`, `disableNamespaceHa`, the
+`/enable-ha` page via MeroKitUI), and account linking (`linkAccount`,
+`getMyAccounts`, the consent-page grant flow `CloudLink.beginCloudLink` →
+`completeCloudLink`). `connectCloud(_:)` / `connectCloudWithAccount(_:)` sign
+in and hand back a `CloudConnection` that writes through the namespace's
+relay. See
+[Calimero Cloud](https://calimero-network.github.io/swift-sdk/guides/calimero-cloud/).
+
 ## Holding the account root
 
 For a nodeless account, or a root kept on the device: `generateAccountRoot()` /
