@@ -111,10 +111,15 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   `onAppVersionChanged` / `onMigrationEvent` on `SseConnection`, plus
   `Mero`/`SseClient` `appVersionChanges(contextIds:)` and
   `migrationEvents(groupIds:)`.
-- **`WsClient`** (experimental, as in mero-js; `Mero.ws`): `GET /ws?token=`,
-  `subscribe`/`unsubscribe` messages, re-subscribe after reconnect, backoff
-  1 s · 2ⁿ ≤ 30 s, over a `WebSocketTransport`/`WebSocketConnector`
-  abstraction (`URLSessionWebSocketConnector` by default).
+- **`WsClient`** (experimental, as in mero-js; `Mero.ws`): `GET /ws` with the
+  token in an `Authorization: Bearer` header on the upgrade request (as SSE
+  and the Kotlin SDK send it; core reads the header before `?token=`, and a
+  header stays out of URL logs), `subscribe`/`unsubscribe` messages,
+  re-subscribe after reconnect, backoff 1 s · 2ⁿ ≤ 30 s, over a
+  `WebSocketTransport`/`WebSocketConnector` abstraction
+  (`URLSessionWebSocketConnector` by default; `open(_:)` takes the upgrade
+  `URLRequest`). `tokenInQuery: true` sends mero-js's `?token=` instead, for
+  a node or proxy that drops the header.
 - **Ephemeral presence**: `Mero.ephemeral` → `EphemeralClient`
   (`set(contextId:state:codec:)` via JSON-RPC `set_ephemeral`,
   `subscribe(contextId:codec:)`), `Codec` / `JSONCodec`, `EphemeralEntry`

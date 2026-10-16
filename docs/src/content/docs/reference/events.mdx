@@ -282,7 +282,9 @@ The [presence guide](/guides/presence/) walks through both writers.
 public final class WsClient: @unchecked Sendable {
     public init(baseURL: URL, token: @escaping @Sendable () async -> String?,
                 connector: any WebSocketConnector = URLSessionWebSocketConnector(),
-                backoff: ReconnectBackoff = .webSocket)
+                backoff: ReconnectBackoff = .webSocket,
+                tokenInQuery: Bool = false)
+    public let tokenInQuery: Bool
     public func connect()
     public func close()
     public var isOpen: Bool { get }
@@ -293,13 +295,20 @@ public final class WsClient: @unchecked Sendable {
 }
 ```
 
-It opens `GET /ws?token=…` (http→ws, https→wss; the token is
-`encodeURIComponent`-encoded in the query, which is where core's `/ws` reads
-it) and sends `{"id":null,"method":"subscribe","params":{"contextIds":[…],"groupIds":[…]}}`
+It opens `GET /ws` (http→ws, https→wss) with the access token in an
+`Authorization: Bearer` header on the upgrade request — the same header SSE
+sends. Core's auth layer reads that header first and falls back to `?token=`
+only when there is none; mero-js uses the query only because a browser
+`WebSocket` cannot set headers, and a token in a URL ends up in proxy and
+server logs. For a node or proxy that drops the header on the upgrade, pass
+`tokenInQuery: true`: the token then rides in `?token=…`
+(`encodeURIComponent`-encoded) and no `Authorization` header is sent. It sends `{"id":null,"method":"subscribe","params":{"contextIds":[…],"groupIds":[…]}}`
 (empty lists left out) for the ids passed, re-sending every remembered id
 after each reconnect. Reconnects wait 1 s · 2ⁿ, capped at 30 s, reset when a
 socket opens. `WebSocketTransport` / `WebSocketConnector` abstract the socket,
-so a test can substitute one.
+so a test can substitute one; a connector's `open(_:)` receives the whole
+upgrade `URLRequest` (URL and headers), which `URLSessionWebSocketConnector`
+hands to `URLSession.webSocketTask(with:)`.
 
 <Aside type="note">
   The stream uses a long-lived `URLSession.bytes(for:)` request. Don't back it

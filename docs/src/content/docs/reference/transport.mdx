@@ -49,7 +49,7 @@ client's `rpc` reads by `admin.queryContext` first (see
 | `admin` (`get async throws`) | the node's | the relay's as the account — by `sessionToken`, else `proof`; else throws `noAdminCredential` |
 | `auth` | the node's | throws |
 | `events` | `Mero.sse` | the observer's session stream, else one signed by the proof, else throws `missingNodeKey` |
-| `ws` | `Mero.ws` | the observer's; throws `proofCannotOpenWebSocket` for a proof (the socket authenticates by `?token=`) |
+| `ws` | `Mero.ws` | the observer's; throws `proofCannotOpenWebSocket` for a proof (`WsClient` takes a bearer token only, no request-proof authorizer) |
 | `ephemeral` | `.node(EphemeralClient)` | `.relay(RelayPresenceClient)` — publishes with no node key |
 | `cloud` | the config's `CloudClient` | throws |
 | `close()` | closes the `Mero`'s streams | closes the observer and the proof stream |

@@ -114,9 +114,9 @@ extension MeroTransportError: LocalizedError {
         case .nodeHasNoRelay:
             return "this client was constructed with the node transport and has no relay"
         case .proofCannotOpenWebSocket:
-            return "this client authenticates with a request proof, which cannot open the WebSocket: the socket "
-                + "authenticates with `?token=`, which has no proof counterpart. Use `events` (SSE), which carries "
-                + "the X-Calimero-Proof header."
+            return "this client authenticates with a request proof, which cannot open the WebSocket: `WsClient` "
+                + "authorizes its upgrade with a bearer token only and has no request-proof authorizer. Use "
+                + "`events` (SSE), which carries the X-Calimero-Proof header."
         }
     }
 }

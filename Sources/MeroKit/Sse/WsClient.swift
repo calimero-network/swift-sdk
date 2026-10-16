@@ -23,8 +23,10 @@ public protocol WebSocketTransport: AnyObject, Sendable {
 
 /// Opens WebSockets for ``WsClient``.
 public protocol WebSocketConnector: Sendable {
-    /// Open a socket to `url`, returning once the handshake has completed.
-    func open(_ url: URL) async throws -> any WebSocketTransport
+    /// Open a socket with the upgrade `request` — its URL and its headers
+    /// (the `Authorization` bearer among them) — returning once the handshake
+    /// has completed.
+    func open(_ request: URLRequest) async throws -> any WebSocketTransport
 }
 
 /// The default connector: `URLSessionWebSocketTask`.
@@ -35,8 +37,8 @@ public struct URLSessionWebSocketConnector: WebSocketConnector {
         self.session = session
     }
 
-    public func open(_ url: URL) async throws -> any WebSocketTransport {
-        let transport = URLSessionWebSocketTransport(task: session.webSocketTask(with: url))
+    public func open(_ request: URLRequest) async throws -> any WebSocketTransport {
+        let transport = URLSessionWebSocketTransport(task: session.webSocketTask(with: request))
         transport.task.resume()
         // A task has no "open" callback without a delegate: a ping's pong is
         // the first moment the handshake is known to have completed.
@@ -119,8 +121,14 @@ public enum WsClientEvent: Sendable {
 /// is the recommended transport: a WebSocket message sent before the socket
 /// is open is lost, which is why apps moved to SSE.
 ///
-/// Connects to `GET {base}/ws?token=…` (http→ws, https→wss; the token rides
-/// in the query because core's `/ws` reads it there). Subscriptions are
+/// Connects to `GET {base}/ws` (http→ws, https→wss) with the access token in
+/// an `Authorization: Bearer` header on the upgrade request, as ``SseConnection``
+/// sends it. Core's auth layer reads that header first and falls back to
+/// `?token=` only when there is none; mero-js uses the query solely because a
+/// browser `WebSocket` cannot set headers, and a token in a URL ends up in
+/// logs. Pass `tokenInQuery: true` for a node (or a proxy in front of one)
+/// that does not pass the header through: the token then rides in the query,
+/// `encodeURIComponent`-encoded, and no header is sent. Subscriptions are
 /// `{"id":null,"method":"subscribe","params":{"contextIds":[…],"groupIds":[…]}}`
 /// messages (core `server-primitives` `ws.rs`), remembered and re-sent after
 /// every reconnect. Reconnects with ``ReconnectBackoff/webSocket``: 1 s · 2ⁿ,
@@ -130,6 +138,8 @@ public final class WsClient: @unchecked Sendable {
     private let token: @Sendable () async -> String?
     private let connector: any WebSocketConnector
     public let backoff: ReconnectBackoff
+    /// Whether the token rides in `?token=` instead of the `Authorization` header.
+    public let tokenInQuery: Bool
     private let sleep: @Sendable (TimeInterval) async -> Void
 
     private let lock = NSLock()
@@ -140,21 +150,29 @@ public final class WsClient: @unchecked Sendable {
     private var groupIds: [String] = []
     private var listeners = ListenerSet<WsClientEvent>()
 
+    /// - Parameter tokenInQuery: send the token as `?token=` instead of an
+    ///   `Authorization: Bearer` header — only for a node or proxy that drops
+    ///   the header on the upgrade. Off by default: a URL is logged where a
+    ///   header is not.
     public convenience init(
         baseURL: URL, token: @escaping @Sendable () async -> String?,
-        connector: any WebSocketConnector = URLSessionWebSocketConnector(), backoff: ReconnectBackoff = .webSocket
+        connector: any WebSocketConnector = URLSessionWebSocketConnector(), backoff: ReconnectBackoff = .webSocket,
+        tokenInQuery: Bool = false
     ) {
-        self.init(baseURL: baseURL, token: token, connector: connector, backoff: backoff, sleep: sleepSeconds)
+        self.init(
+            baseURL: baseURL, token: token, connector: connector, backoff: backoff, tokenInQuery: tokenInQuery,
+            sleep: sleepSeconds)
     }
 
     init(
         baseURL: URL, token: @escaping @Sendable () async -> String?, connector: any WebSocketConnector,
-        backoff: ReconnectBackoff, sleep: @escaping @Sendable (TimeInterval) async -> Void
+        backoff: ReconnectBackoff, tokenInQuery: Bool = false, sleep: @escaping @Sendable (TimeInterval) async -> Void
     ) {
         self.baseURL = baseURL
         self.token = token
         self.connector = connector
         self.backoff = backoff
+        self.tokenInQuery = tokenInQuery
         self.sleep = sleep
     }
 
@@ -167,12 +185,23 @@ public final class WsClient: @unchecked Sendable {
     /// The group ids this client holds.
     public var subscribedGroupIds: [String] { locked { groupIds } }
 
-    /// The socket URL for `token`: `ws(s)://…/ws?token=…`.
-    static func socketURL(baseURL: URL, token: String) -> URL? {
+    /// The upgrade request for `token`: `ws(s)://…/ws` carrying
+    /// `Authorization: Bearer …`, or with `tokenInQuery`, `ws(s)://…/ws?token=…`
+    /// and no `Authorization` header.
+    static func socketRequest(baseURL: URL, token: String, tokenInQuery: Bool) -> URLRequest? {
+        guard let url = socketURL(baseURL: baseURL, queryToken: tokenInQuery ? token : nil) else { return nil }
+        var request = URLRequest(url: url)
+        if !tokenInQuery { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
+    /// The socket URL: `ws(s)://…/ws`, plus `?token=…` when `queryToken` is given.
+    static func socketURL(baseURL: URL, queryToken: String? = nil) -> URL? {
         var base = baseURL.absoluteString
         while base.hasSuffix("/") { base.removeLast() }
         if base.hasPrefix("http") { base = "ws" + base.dropFirst("http".count) }
-        return URL(string: "\(base)/ws?token=\(encodeURIComponent(token))")
+        let query = queryToken.map { "?token=\(encodeURIComponent($0))" } ?? ""
+        return URL(string: "\(base)/ws\(query)")
     }
 
     /// `encodeURIComponent`: everything but `A–Z a–z 0–9 - _ . ! ~ * ' ( )`.
@@ -302,10 +331,12 @@ public final class WsClient: @unchecked Sendable {
         guard let accessToken = await token() else {
             throw MeroError.noCredentials
         }
-        guard let url = Self.socketURL(baseURL: baseURL, token: accessToken) else {
+        guard
+            let upgrade = Self.socketRequest(baseURL: baseURL, token: accessToken, tokenInQuery: tokenInQuery)
+        else {
             throw MeroError.network("bad WebSocket URL for \(baseURL)")
         }
-        let open = try await connector.open(url)
+        let open = try await connector.open(upgrade)
         let adopted = locked { () -> SubscriptionChange? in
             guard generation == current else { return nil }
             socket = open
