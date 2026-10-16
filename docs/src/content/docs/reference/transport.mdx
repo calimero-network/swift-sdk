@@ -1,0 +1,69 @@
+---
+title: Transport (node or relay)
+description: MeroTransportClient, ExecuteTransport, RelayTransport and RelayObserver — one execute call shape through a node or through a relay, chosen at construction.
+sidebar:
+  order: 8
+---
+
+One client, two transports, chosen once at construction. After that,
+`client.rpc.execute(contextId:method:argsJson:)` is the same call against a
+node and against a relay. Port of mero-js `src/transport/*` (`MeroClient`
+there; named `MeroTransportClient` here, apart from MeroKitUI's `MeroClient`).
+
+```swift
+// A node: exactly the Mero you already have.
+let node = MeroTransportClient(mero: mero)
+
+// A relay: warranted writes, reads and events as the account.
+let relayed = try MeroTransportClient(.relay(RelayTransportConfig(
+    relay: connection.relay!,
+    observe: RelayObserveConfig(nodeKey: connection.nodeKey),     // events through a session
+    proof: ProofCredential(credential: credential, keys: keys)))) // admin + events by request proof
+
+let value: String = try await relayed.rpc.execute(contextId: ctx, method: "get", argsJson: ["key": "k"])
+if relayed.canSubscribe { relayed.events.connect() }
+```
+
+## `ExecuteTransport`
+
+| Member | |
+| --- | --- |
+| `kind` | `RpcTransportKind` — `.node` or `.relay` |
+| `canSubscribe` | whether events work **as configured** |
+| `execute(contextId:method:argsJson:)` | the canonical call, decoded into `T` |
+| `executeWithMetadata(contextId:method:argsJson:)` | `ExecuteResult<T>`: `returns`, `transport`, `rootHash` (relay writes only; `nil` means unknown, never "nothing changed") |
+| `migrateMyEntries(_:)`, `countMyPending(_:)` | plain context methods on both |
+
+`RpcClient` conforms as it ships. `RelayTransport` adapts `RelayClient`
+(warrants), `MeroRpcTransport` a `Mero` (no `await` to reach it). A delegated
+client's `rpc` reads by `admin.queryContext` first (see
+[Delegated accounts](/guides/delegated-accounts/)).
+
+## `MeroTransportClient`
+
+| Surface | Node | Relay |
+| --- | --- | --- |
+| `transport`, `rpc`, `canSubscribe` | ✓ | ✓ |
+| `node` | the `Mero` | throws `relayHasNo` |
+| `relay` | throws `nodeHasNoRelay` | the `RelayClient` |
+| `admin` (`get async throws`) | the node's | the relay's as the account — by `sessionToken`, else `proof`; else throws `noAdminCredential` |
+| `auth` | the node's | throws |
+| `events` | `Mero.sse` | the observer's session stream, else one signed by the proof, else throws `missingNodeKey` |
+| `ws` | `Mero.ws` | the observer's; throws `proofCannotOpenWebSocket` for a proof (the socket authenticates by `?token=`) |
+| `ephemeral` | `.node(EphemeralClient)` | `.relay(RelayPresenceClient)` — publishes with no node key |
+| `cloud` | the config's `CloudClient` | throws |
+| `close()` | closes the `Mero`'s streams | closes the observer and the proof stream |
+
+Every throw is a `MeroTransportError` naming what is missing; nothing here
+silently connects to a node the app did not choose.
+
+## `RelayObserver`
+
+A relay is a node: it serves `/auth/challenge`, `/auth/token`, `/sse` and
+`/ws`, and an `account_proof` login with the device certificate grants
+`context:subscribe`. `RelayObserver` mints that session lazily — reading
+`events` or `ws` sends nothing — single-flight (two surfaces asking at once
+mint one session), and again once the token is within 30 s of expiring, or on
+every ask when its lifetime cannot be read. The relay's node key is the one
+input it cannot infer: pass it pinned (`RelayObserveConfig(nodeKey:)`), never
+read from the relay itself.

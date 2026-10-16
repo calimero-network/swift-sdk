@@ -32,8 +32,25 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   replay. Wrap idempotent calls in the now-public `withRetry` to retry.
 - `Mero.close()` now ends the event streams the instance started (it was a
   no-op), and so does `logout()`, which calls it.
-- `AccountError` has two new cases, `cloudNotReady` and `linkDeclined`: an
-  exhaustive `switch` over it needs them.
+- `AccountError` has new cases, `cloudNotReady`, `linkDeclined`,
+  `notForAccount(method:)` and `noRelay(method:)`: an exhaustive `switch` over
+  it needs them. `RpcTransportKind` gains `.relay`.
+- **`AccountJoin.bootstrapFromInvitation` no longer throws**: it returns a
+  `BootstrapResult` (`.joined(JoinOutcome)` / `.failed(BootstrapFailure)`), and
+  every failure names its `BootstrapStep` (`admitters-lookup`, `no-nodes`,
+  `not-invited`, `invited-unreachable`, `no-relay-url`, `sign`, `admit`,
+  `no-credential`) with mero-js's reason and the HTTP status. `.get()` throws
+  the failure. `resolveRelay` and `CloudSignIn.join` throw a `BootstrapFailure`
+  (`no-credential` when nobody is signed in) instead of `AccountError`.
+- **An invitation's unsigned admitter address is never a relay** (mero-js
+  98d6e6e). A namespace the cloud routes to no node is `no-nodes` for the
+  claimant, and `CloudSignIn.createNamespaceInvitation` refuses it as
+  `invitationNotClaimable(…, "not-hosted")` instead of carrying the session's
+  relay in `admitter_addrs`: that address sits outside the inviter's signature,
+  so a host proxying a genuine relay could have been joined and logged in through.
+- `CloudSignIn.foundNamespace` attests the founding relay now, even when its
+  key is known: the founding relay holds the namespace's keys.
+- `CloudClient.haRefusalMessages` takes mero-js's wording (`HA_REFUSAL_MESSAGES`).
 
 ### Added
 
@@ -203,6 +220,58 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   classified `.unavailable`) and `AccountError.linkDeclined` (`.forbidden`).
   `SseConnection(baseURL:authorize:)` and `SseClient(baseURL:authorize:)` sign
   the stream and every subscription `POST`, with the same redirect refusal.
+
+- **Unified transport** (port of mero-js `src/transport/*`):
+  `MeroTransportClient` (mero-js `MeroClient`, named apart from MeroKitUI's) over
+  `MeroTransportConfig` `.node(NodeTransportConfig)` / `.relay(RelayTransportConfig)`
+  with `transport`, `rpc`, `canSubscribe`, `node`, `relay`, `admin`, `auth`,
+  `events`, `ws` (throws for a request proof), `ephemeral` (`EphemeralSurface`:
+  `EphemeralClient` on a node, `RelayPresenceClient` on a relay), `cloud` and
+  `close()`; `MeroTransportError` names what a surface lacks. `ExecuteTransport`
+  (`kind`, `canSubscribe`, `execute`, `executeWithMetadata`, `migrateMyEntries`,
+  `countMyPending`), which `RpcClient` conforms to as it ships, `MeroRpcTransport`
+  and `RelayTransport`. `ExecuteResult` (= `RpcExecuteResult`) gains `rootHash`.
+  `RelayObserver` / `RelayObserveConfig`: an `account_proof` session minted
+  lazily with the pinned node key, single-flight, re-minted within 30 s of
+  expiry, feeding SSE and the WebSocket.
+- **Delegated accounts** (port of mero-js `src/account/session.ts`, `govern.ts`,
+  `create-context.ts`, `join-as-account.ts`): `DelegatedSession`,
+  `DelegatedEnvironment`, and a `DelegatedAccountStore` (`UserDefaults`,
+  Keychain or memory; `UserDefaultsValueStore`) holding each account's
+  `RelayMap`, its subgroups' namespaces and the relays' pinned node keys.
+  `DelegatedAccounts`: `readRelayMap`, `rememberRelay`, `relayForContext`,
+  `carryExecutorAccount`, `knownRelays`, `listDelegatedContexts` /
+  `listDelegatedNamespaces` (the union across every known relay,
+  `DelegatedListing`), `rememberGroupNamespace`, `namespaceOfGroup`,
+  `markContextNonceSpent`; `attemptRelayNodeKey` (`RelayNodeKeyAttempt`:
+  learned / unavailable / refused), `resolveRelayNodeKey`, `learnRelayNodeKey`
+  (retry 1, 2, 5, 10, then every 30 s; cancellable; `nil` on a refusal);
+  `buildDelegatedClient` (reads by `admin.queryContext` first, a `409`
+  remembered as a write; admin and events by request proof, plus a session
+  once the relay's key is pinned; inert events until then on a hosted relay;
+  `nil` without a relay); `createDelegatedContext`,
+  `createDelegatedPrivateContext`, `foundDelegatedNamespace`,
+  `delegatedGovernance`, `governGroup`, `governRoot`, `latestPublishedVersion`
+  and `joinAsAccount`. `CloudSignIn` gains `delegatedStore`,
+  `delegatedEnvironment` and `delegatedSession()`, and records the relay a join
+  or a founding used.
+- **One admin surface** (port of mero-js `account-admin.ts`, `node-admin.ts`):
+  `AdminSurface`, which `AdminApi` conforms to; `AdminApiForwarding`;
+  `AccountAdmin` (`createAccountAdmin`, `AccountAdminDeps`, `AdminAppConfig`,
+  `AccountInvitationInput`, `mintInvitation`) — reads from the relay, writes as
+  governance ops, founding and device-signed invitations, node-only calls
+  refused by name, an account with no relay a member of nothing — and
+  `NodeAdmin` (`createNodeAdmin`), which installs the app from the registry
+  before `createNamespace` and checks the installed id.
+  `CreateNamespaceResponseData` gains `haEnabled` / `haError`.
+  `InvitationNotClaimableReason` and `AccountError.invitationNotClaimableReason`.
+  `CloudClient.haAccountNotLinkedMessage`.
+- **Invitation redemption** (port of mero-js `admin-api/redeem-invitation.ts`):
+  `redeemInvitation(_:redeemer:)` (`RedeemRequest`, `InviteRedeemer`),
+  `RedeemOutcome` (`joined`, `alreadyMember`, `failed`), `InviteFailureReason`,
+  `isSettled` / `shouldRetain`, and `AdminSurface.redeemInvitation(_:invitation:groupName:teamName:)`.
+  `AccountJoin.resolveRelayFromInvitation`, `joinWithNode(nodeURL:admitURL:…)`
+  (`ResolveRelayResult`, `JoinWithNodeResult`) and `InvitationRelay.peerId`.
 
 ### Changed
 

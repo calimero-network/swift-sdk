@@ -285,6 +285,23 @@ in and hand back a `CloudConnection` that writes through the namespace's
 relay. See
 [Calimero Cloud](https://calimero-network.github.io/swift-sdk/guides/calimero-cloud/).
 
+## Delegated accounts and the unified transport
+
+An account with no node behaves like one in app code. `MeroTransportClient`
+takes the node or the relay transport at construction, and
+`client.rpc.execute(contextId:method:argsJson:)` is the same call on both
+(`ExecuteTransport`, `RelayTransport`, `RelayObserver`). On top of it:
+the per-account relay map across relays (`DelegatedAccountStore`,
+`listDelegatedContexts` / `listDelegatedNamespaces`), relay node keys learned
+from attestation with backoff (`learnRelayNodeKey`), the delegated client
+(`buildDelegatedClient`: reads by query, writes by warrant), `AdminSurface`
+with an account's admin facade (`AccountAdmin`) and a node's (`NodeAdmin`),
+founding and governance through the namespace's relay, and invitation
+redemption (`redeemInvitation`, step-typed `bootstrapFromInvitation`,
+`joinAsAccount`). See
+[Delegated accounts](https://calimero-network.github.io/swift-sdk/guides/delegated-accounts/)
+and [Transport](https://calimero-network.github.io/swift-sdk/reference/transport/).
+
 ## Holding the account root
 
 For a nodeless account, or a root kept on the device: `generateAccountRoot()` /

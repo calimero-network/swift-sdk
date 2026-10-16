@@ -124,8 +124,18 @@ A brand-new account is a member of nothing, so no relay serves it yet.
 a relay:
 
 ```swift
-let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
+do {
+    let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
+} catch let failure as BootstrapFailure {
+    // failure.step says what to do: .notInvited → ask for a fresh invitation,
+    // .noRelayURL → try shortly, .admit → the node's refusal (failure.status)…
+}
 ```
+
+The admitting node comes from the cloud's routing for the namespace, narrowed
+to the invitation's signed admitters — never from an address the invitation
+carries. See [Delegated accounts](/guides/delegated-accounts/) for the rest of
+the account layer.
 
 ### The relay's node key
 
