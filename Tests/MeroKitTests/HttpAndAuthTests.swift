@@ -168,7 +168,10 @@ final class RefreshStateMachineTests: XCTestCase {
     private func seededStore() -> MemoryTokenStore {
         let store = MemoryTokenStore()
         store.setTokens(
-            TokenData(accessToken: "OLD", refreshToken: "OLD_REFRESH", expiresAt: Date().addingTimeInterval(3600)))
+            TokenData(
+                accessToken: "OLD", refreshToken: "OLD_REFRESH", expiresAt: Date().addingTimeInterval(3600),
+                // Bound to the node `mero(store:)` talks to, or `Mero` ignores it.
+                nodeOrigin: "https://node.test"))
         return store
     }
 

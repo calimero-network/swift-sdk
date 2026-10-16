@@ -63,11 +63,22 @@ struct MeroExample {
         print("Open this in ASWebAuthenticationSession:\n  \(loginURL)")
 
         section("Parse an SSO callback")
+        // The node sends the person back to the callback URL it was given —
+        // which carries the `auth_state` of the login begun above — plus the
+        // tokens in the fragment. A callback with no pending state is ignored.
+        let returnedTo =
+            URLComponents(string: loginURL)?.queryItems?.first { $0.name == "callback-url" }?.value ?? ""
         let callbackURL =
-            "myapp://auth-callback#access_token=AAA&refresh_token=RRR&context_id=ctx1&node_url=https%3A%2F%2Fnode.example"
+            returnedTo + "#access_token=AAA&refresh_token=RRR&context_id=ctx1&node_url=https%3A%2F%2Fnode.example"
         if let parsed = Mero.parseAuthCallback(callbackURL) {
             print("accessToken=\(parsed.accessToken) contextId=\(parsed.contextId) nodeUrl=\(parsed.nodeUrl)")
         }
+        print("Replayed callback accepted again: \(Mero.parseAuthCallback(callbackURL) != nil)")  // false
+
+        section("Capability presets")
+        print(
+            "contributor=\(CapabilityPresets.contributor) collaborator=\(CapabilityPresets.collaborator) "
+                + "names=\(Capabilities.capNames(CapabilityPresets.collaborator))")
 
         section("Capability bitmask")
         var mask: UInt32 = 0

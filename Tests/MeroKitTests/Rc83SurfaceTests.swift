@@ -618,7 +618,10 @@ final class Rc83SurfaceTests: XCTestCase {
     /// A node that cannot retire the token never keeps the caller logged in.
     func testMeroLogoutClearsEvenWhenTheNodeRefuses() async throws {
         let store = MemoryTokenStore()
-        store.setTokens(TokenData(accessToken: "A", refreshToken: "R", expiresAt: Date().addingTimeInterval(3600)))
+        store.setTokens(
+            TokenData(
+                accessToken: "A", refreshToken: "R", expiresAt: Date().addingTimeInterval(3600),
+                nodeOrigin: "https://node.test"))
         serve(#"{"error":"Invalid refresh token: expired"}"#, status: 401)
         let mero = Mero(
             config: MeroConfig(baseURL: URL(string: "https://node.test")!, tokenStore: store),

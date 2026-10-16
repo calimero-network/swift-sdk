@@ -75,7 +75,8 @@ final class SsoLoginTests: XCTestCase {
     func testParseAuthCallbackExtractsAllFields() {
         let url =
             "myapp://auth-callback#access_token=AAA&refresh_token=RRR&application_id=app1&context_id=ctx1&context_identity=id1&node_url=https%3A%2F%2Fnode.example"
-        let result = SsoLogin.parseAuthCallback(url)
+        // A host-injected callback: no login state to match, so opt in.
+        let result = SsoLogin.parseAuthCallback(url, options: ParseAuthCallbackOptions(allowUnsolicited: true))
         XCTAssertEqual(result?.accessToken, "AAA")
         XCTAssertEqual(result?.refreshToken, "RRR")
         XCTAssertEqual(result?.applicationId, "app1")
@@ -85,8 +86,9 @@ final class SsoLoginTests: XCTestCase {
     }
 
     func testParseAuthCallbackReturnsNilWithoutAccessToken() {
-        XCTAssertNil(SsoLogin.parseAuthCallback("myapp://cb#refresh_token=RRR"))
-        XCTAssertNil(SsoLogin.parseAuthCallback("myapp://cb-no-hash"))
+        let unsolicited = ParseAuthCallbackOptions(allowUnsolicited: true)
+        XCTAssertNil(SsoLogin.parseAuthCallback("myapp://cb#refresh_token=RRR", options: unsolicited))
+        XCTAssertNil(SsoLogin.parseAuthCallback("myapp://cb-no-hash", options: unsolicited))
     }
 
     func testBuildAuthLoginUrl() {
@@ -102,9 +104,9 @@ final class SsoLoginTests: XCTestCase {
             )
         )
         XCTAssertTrue(url.hasPrefix("https://node.example/auth/login?"))
-        XCTAssertTrue(url.contains("callback-url=myapp://cb") || url.contains("callback-url=myapp%3A%2F%2Fcb"))
+        XCTAssertTrue(url.contains("callback-url=myapp%3A%2F%2Fcb%3Fauth_state%3D"))
         XCTAssertTrue(url.contains("mode=login"))
-        XCTAssertTrue(url.contains("permissions=admin,context") || url.contains("permissions=admin%2Ccontext"))
+        XCTAssertTrue(url.contains("permissions=admin%2Ccontext"))
         XCTAssertTrue(url.contains("package-name=com.acme.app"))
         XCTAssertTrue(url.contains("package-version=1.2.3"))
         XCTAssertTrue(url.contains("registry-url="))

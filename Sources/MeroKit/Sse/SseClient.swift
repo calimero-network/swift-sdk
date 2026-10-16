@@ -55,6 +55,86 @@ public struct ContextEvent: Sendable {
     }
 }
 
+/// A group-keyed event — membership changes and migration progress —
+/// delivered to a stream subscribed with `groupIds`. (== Kotlin `GroupEvent`.)
+///
+/// ``kind`` is the frame's `result.type` (`MemberJoined`, `MemberAdded`,
+/// `MemberRemoved`, `MemberRoleChanged`, `MigrationStarted`,
+/// `MigrationProgress`, `CascadeProgress`, `MigrationCompleted`; roles may
+/// read `RelayTee` since core rc.83), and ``payload`` the raw `result` JSON.
+public struct GroupEvent: Sendable, Equatable {
+    /// The group the event belongs to, hex.
+    public let groupId: String
+    public let kind: String
+    public let payload: JSONValue
+
+    public init(groupId: String, kind: String, payload: JSONValue) {
+        self.groupId = groupId
+        self.kind = kind
+        self.payload = payload
+    }
+}
+
+/// Either kind of event an SSE stream delivers. (== Kotlin `NodeEvent`.)
+public enum NodeEvent: Sendable {
+    /// An event of a subscribed context (`StateMutation`, `SyncStatus`, …).
+    case context(ContextEvent)
+    /// A group-keyed event of a subscribed group.
+    case group(GroupEvent)
+
+    /// The event as the untyped ``ContextEvent`` that
+    /// ``SseClient/events(contextIds:groupIds:)`` yields: a group event has an
+    /// empty ``ContextEvent/contextId`` and ``ContextEvent/groupId`` set.
+    public var contextEvent: ContextEvent {
+        switch self {
+        case .context(let event):
+            return event
+        case .group(let event):
+            return ContextEvent(contextId: "", kind: event.kind, payload: event.payload, groupId: event.groupId)
+        }
+    }
+}
+
+/// The live streams one owner started, so it can cancel them all at once
+/// (``Mero/close()``). Thread-safe.
+final class SseStreamRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var nextId = 0
+    private var cancels: [Int: @Sendable () -> Void] = [:]
+
+    /// Register a stream's cancel action; returns the id to ``remove(_:)`` it with.
+    func register(_ cancel: @escaping @Sendable () -> Void) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        nextId += 1
+        cancels[nextId] = cancel
+        return nextId
+    }
+
+    func remove(_ id: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        cancels[id] = nil
+    }
+
+    /// The number of streams still registered.
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancels.count
+    }
+
+    /// Cancel every registered stream. The actions run outside the lock: each
+    /// one finishes its stream, whose termination handler calls ``remove(_:)``.
+    func cancelAll() {
+        lock.lock()
+        let pending = Array(cancels.values)
+        cancels.removeAll()
+        lock.unlock()
+        for cancel in pending { cancel() }
+    }
+}
+
 /// Server-Sent-Events subscription client — the iOS analog of mero-js's SSE
 /// client. Opens `GET {base}/sse` (bearer in the `Authorization` header) and
 /// POSTs `{base}/sse/subscription` to (re)subscribe to context and group ids,
@@ -82,26 +162,67 @@ public final class SseClient: @unchecked Sendable {
     private let baseURL: URL
     private let token: @Sendable () async -> String?
     private let session: URLSession
+    private let registry: SseStreamRegistry?
     private let reconnectDelay: UInt64 = 3_000_000_000  // 3s, matches the JS client
 
-    public init(
+    public convenience init(
         baseURL: URL, token: @escaping @Sendable () async -> String?, session: URLSession = .shared
+    ) {
+        self.init(baseURL: baseURL, token: token, session: session, registry: nil)
+    }
+
+    init(
+        baseURL: URL, token: @escaping @Sendable () async -> String?, session: URLSession,
+        registry: SseStreamRegistry?
     ) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+        self.registry = registry
     }
 
-    /// Stream of events for the given context ids. Cancel the consuming task to
-    /// close the connection.
+    /// Stream of events for the given context ids (and, as ``ContextEvent``s
+    /// with ``ContextEvent/groupId`` set, for `groupIds`). Cancel the consuming
+    /// task to close the connection.
     public func events(
         contextIds: [String], groupIds: [String] = []
     ) -> AsyncThrowingStream<ContextEvent, Error> {
+        stream(contextIds: contextIds, groupIds: groupIds) { $0.contextEvent }
+    }
+
+    /// Stream of group-keyed events (membership, migration) for `groupIds`.
+    /// The node drops ids the token may not observe, silently.
+    /// (== Kotlin `SseClient.groupEvents`.)
+    public func groupEvents(groupIds: [String]) -> AsyncThrowingStream<GroupEvent, Error> {
+        stream(contextIds: [], groupIds: groupIds) { event in
+            if case .group(let group) = event { return group }
+            return nil
+        }
+    }
+
+    /// One stream for both: context events for `contextIds` and group events
+    /// for `groupIds`, subscribed together on every (re)connect.
+    /// (== Kotlin `SseClient.nodeEvents`.)
+    public func nodeEvents(
+        contextIds: [String], groupIds: [String]
+    ) -> AsyncThrowingStream<NodeEvent, Error> {
+        stream(contextIds: contextIds, groupIds: groupIds) { $0 }
+    }
+
+    /// The reconnect loop behind every public stream; `transform` picks and
+    /// shapes what the caller asked for (`nil` drops an event).
+    private func stream<Element: Sendable>(
+        contextIds: [String], groupIds: [String],
+        transform: @escaping @Sendable (NodeEvent) -> Element?
+    ) -> AsyncThrowingStream<Element, Error> {
         AsyncThrowingStream { continuation in
+            let emit: @Sendable (NodeEvent) -> Void = { event in
+                if let element = transform(event) { continuation.yield(element) }
+            }
             let task = Task { [self] in
                 while !Task.isCancelled {
                     do {
-                        try await runOnce(contextIds: contextIds, groupIds: groupIds, continuation: continuation)
+                        try await runOnce(contextIds: contextIds, groupIds: groupIds, emit: emit)
                     } catch let error as MeroError where error.httpStatus == Self.forbidden {
                         continuation.finish(throwing: error)
                         return
@@ -113,7 +234,16 @@ public final class SseClient: @unchecked Sendable {
                 }
                 continuation.finish()
             }
-            continuation.onTermination = { _ in task.cancel() }
+            // Let the owner (``Mero/close()``) end this stream; forget it once it ends.
+            let owner = self.registry
+            let registered = owner?.register {
+                task.cancel()
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                if let registered { owner?.remove(registered) }
+            }
         }
     }
 
@@ -121,7 +251,7 @@ public final class SseClient: @unchecked Sendable {
     /// events until the stream ends or the server sends a `close`.
     private func runOnce(
         contextIds: [String], groupIds: [String],
-        continuation: AsyncThrowingStream<ContextEvent, Error>.Continuation
+        emit: @Sendable (NodeEvent) -> Void
     ) async throws {
         guard let accessToken = await token() else { throw MeroError.noCredentials }
 
@@ -159,16 +289,8 @@ public final class SseClient: @unchecked Sendable {
                 continue
             }
 
-            if let result = obj["result"] as? [String: Any] {
-                let contextId = result["contextId"] as? String
-                let groupId = result["groupId"] as? String
-                guard contextId != nil || groupId != nil else { continue }
-                let kind = result["type"] as? String ?? "event"
-                let value =
-                    (try? JSONDecoder().decode(
-                        JSONValue.self, from: JSONSerialization.data(withJSONObject: result))) ?? .null
-                continuation.yield(
-                    ContextEvent(contextId: contextId ?? "", kind: kind, payload: value, groupId: groupId))
+            if let result = obj["result"] as? [String: Any], let event = Self.nodeEvent(result) {
+                emit(event)
             }
         }
     }
@@ -190,6 +312,23 @@ public final class SseClient: @unchecked Sendable {
         if let http = response as? HTTPURLResponse, http.statusCode == Self.forbidden {
             throw Self.forbiddenError(http, url: request.url)
         }
+    }
+
+    /// The event a frame's `result` object carries: a context event when it
+    /// names a `contextId`, a group event when it names only a `groupId`, and
+    /// `nil` when it names neither.
+    static func nodeEvent(_ result: [String: Any]) -> NodeEvent? {
+        let contextId = result["contextId"] as? String
+        let groupId = result["groupId"] as? String
+        guard contextId != nil || groupId != nil else { return nil }
+        let kind = result["type"] as? String ?? "event"
+        let value =
+            (try? JSONDecoder().decode(
+                JSONValue.self, from: JSONSerialization.data(withJSONObject: result))) ?? .null
+        if let contextId {
+            return .context(ContextEvent(contextId: contextId, kind: kind, payload: value, groupId: groupId))
+        }
+        return .group(GroupEvent(groupId: groupId ?? "", kind: kind, payload: value))
     }
 
     static let forbidden = 403

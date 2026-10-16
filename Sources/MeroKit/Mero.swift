@@ -9,6 +9,10 @@ public actor Mero {
     private let config: MeroConfig
     private let tokenStore: any TokenStore
     private let session: URLSession
+    /// The node a token bundle is bound to (``TokenData/nodeKey(for:)``).
+    private let nodeKey: String
+    /// Live SSE streams this instance started, cancelled by ``close()``.
+    private let streams = SseStreamRegistry()
 
     private var tokenData: TokenData?
     /// In-flight refresh, shared by concurrent 401s in this instance
@@ -42,8 +46,9 @@ public actor Mero {
         self.config = config
         self.tokenStore = config.tokenStore ?? MemoryTokenStore()
         self.session = session
-        // Restore tokens from the store if present.
-        self.tokenData = self.tokenStore.getTokens()
+        self.nodeKey = TokenData.nodeKey(for: config.baseURL)
+        // Restore tokens from the store if this node issued them.
+        self.tokenData = Self.boundTokens(in: self.tokenStore, nodeKey: self.nodeKey)
     }
 
     // MARK: - Sub-clients
@@ -53,21 +58,42 @@ public actor Mero {
     public var rpc: RpcClient { RpcClient(http: httpClient) }
 
     /// Live node events for the given contexts, over SSE (auto-reconnecting).
-    /// Cancel the consuming task to close the stream. Powers push updates
-    /// (new messages, etc.) without polling. `nonisolated` — reads only the
-    /// immutable config and defers the token read to the async provider.
+    /// Cancel the consuming task, or call ``close()``, to close the stream.
+    /// Powers push updates (new messages, etc.) without polling. `nonisolated` —
+    /// reads only the immutable config and defers the token read to the async
+    /// provider.
     ///
     /// `groupIds` (core rc.83) also subscribes to group-keyed events — membership
     /// changes and migration progress — which arrive with
-    /// ``ContextEvent/groupId`` set.
+    /// ``ContextEvent/groupId`` set. ``groupEvents(groupIds:)`` and
+    /// ``nodeEvents(contextIds:groupIds:)`` deliver those typed instead.
     public nonisolated func events(
         contextIds: [String], groupIds: [String] = []
     ) -> AsyncThrowingStream<ContextEvent, Error> {
+        sseClient().events(contextIds: contextIds, groupIds: groupIds)
+    }
+
+    /// Group-keyed events (membership changes, migration progress) for
+    /// `groupIds`, over the same auto-reconnecting SSE as
+    /// ``events(contextIds:groupIds:)``. The node silently drops ids the
+    /// token may not observe. (== Kotlin `Mero.groupEvents`.)
+    public nonisolated func groupEvents(groupIds: [String]) -> AsyncThrowingStream<GroupEvent, Error> {
+        sseClient().groupEvents(groupIds: groupIds)
+    }
+
+    /// Context and group events on one stream, subscribed together on every
+    /// (re)connect. (== Kotlin `Mero.nodeEvents`.)
+    public nonisolated func nodeEvents(
+        contextIds: [String], groupIds: [String]
+    ) -> AsyncThrowingStream<NodeEvent, Error> {
+        sseClient().nodeEvents(contextIds: contextIds, groupIds: groupIds)
+    }
+
+    private nonisolated func sseClient() -> SseClient {
         let provider: @Sendable () async -> String? = { [weak self] in
             await self?.currentTokenData()?.accessToken
         }
-        return SseClient(baseURL: config.baseURL, token: provider, session: session)
-            .events(contextIds: contextIds, groupIds: groupIds)
+        return SseClient(baseURL: config.baseURL, token: provider, session: session, registry: streams)
     }
 
     /// The transport in use (for advanced/custom callers).
@@ -106,7 +132,7 @@ public actor Mero {
                 expiresAt: expiresAtFromJWT(accessToken, fallback: Date().addingTimeInterval(3600))
             )
             self.tokenData = bundle
-            tokenStore.setTokens(bundle)
+            persistTokens()
             return bundle
         } catch let error as MeroError {
             // Only the node REFUSING the credentials means the credentials are
@@ -161,8 +187,9 @@ public actor Mero {
 
     private func performTokenRefreshLocked(triggering: String?) async throws -> TokenData {
         // Another process/extension may have rotated the bundle — the store, not
-        // our in-memory copy, is the source of truth.
-        if let stored = tokenStore.getTokens() {
+        // our in-memory copy, is the source of truth. Only a bundle this node
+        // issued: another node's tokens must never be presented here.
+        if let stored = Self.boundTokens(in: tokenStore, nodeKey: nodeKey) {
             tokenData = stored
             if let triggering, stored.accessToken != triggering {
                 // Someone else already refreshed. Adopt their bundle rather than
@@ -188,7 +215,7 @@ public actor Mero {
                 expiresAt: expiresAtFromJWT(accessToken, fallback: Date().addingTimeInterval(3600))
             )
             tokenData = bundle
-            tokenStore.setTokens(bundle)
+            persistTokens()
             return bundle
         } catch {
             // Do NOT clear tokens on a non-terminal refresh failure — the access
@@ -200,6 +227,22 @@ public actor Mero {
 
     // MARK: - Token state
 
+    /// Write the bundle to the store, tagged with the node that issued it.
+    private func persistTokens() {
+        guard var bundle = tokenData else { return }
+        bundle.nodeOrigin = nodeKey
+        tokenStore.setTokens(bundle)
+    }
+
+    /// The stored bundle, only if `nodeKey` issued it. A bundle for another
+    /// node — or one persisted before bundles named their node — reads as
+    /// empty, so its tokens are never sent here. (== mero-js `readStoredTokens`.)
+    private static func boundTokens(in store: any TokenStore, nodeKey: String) -> TokenData? {
+        guard var stored = store.getTokens(), stored.nodeOrigin == nodeKey else { return nil }
+        stored.nodeOrigin = nil
+        return stored
+    }
+
     /// Whether a token bundle is present.
     public var isAuthenticated: Bool { tokenData != nil }
 
@@ -208,13 +251,17 @@ public actor Mero {
 
     /// Set token data directly (e.g. from an SSO callback). If `expiresAt` is the
     /// distant past/unset, derives it from the JWT `exp` claim (fallback now+1h).
+    ///
+    /// The bundle is bound to this instance's node: whatever ``TokenData/nodeOrigin``
+    /// `data` carries, the stored copy names this node.
     public func setTokenData(_ data: TokenData) {
         var bundle = data
+        bundle.nodeOrigin = nil
         if bundle.expiresAt <= Date(timeIntervalSince1970: 0) {
             bundle.expiresAt = expiresAtFromJWT(bundle.accessToken, fallback: Date().addingTimeInterval(3600))
         }
         tokenData = bundle
-        tokenStore.setTokens(bundle)
+        persistTokens()
     }
 
     /// Set token data from a parsed SSO callback.
@@ -244,7 +291,8 @@ public actor Mero {
     /// logged out on this device. Mirrors mero-react's `logout` (clear the
     /// store even when never connected, so tokens don't linger).
     public func logout() async {
-        if let refreshToken = (tokenData ?? tokenStore.getTokens())?.refreshToken, !refreshToken.isEmpty {
+        let bundle = tokenData ?? Self.boundTokens(in: tokenStore, nodeKey: nodeKey)
+        if let refreshToken = bundle?.refreshToken, !refreshToken.isEmpty {
             // A bare transport: no bearer, no 401-refresh, no revoke hook. A
             // refresh triggered from inside logout would consume the very token
             // being retired.
@@ -255,18 +303,33 @@ public actor Mero {
         close()
     }
 
-    /// Close any long-lived connections (events, etc.). No-op until events land.
+    /// Close every live event stream this instance started
+    /// (``events(contextIds:groupIds:)``, ``groupEvents(groupIds:)``,
+    /// ``nodeEvents(contextIds:groupIds:)``): each one's connection is
+    /// cancelled and its `for try await` loop ends normally. Streams opened
+    /// afterwards work as usual. (== mero-js `close`.)
     public func close() {
-        // SSE/WS clients (roadmap M3) will be torn down here.
+        streams.cancelAll()
     }
 
     // MARK: - SSO utilities (static)
 
-    public static func parseAuthCallback(_ url: String) -> AuthCallbackResult? {
-        SsoLogin.parseAuthCallback(url)
+    /// Parse an SSO callback — `nil` unless it answers a login begun with
+    /// ``buildAuthLoginUrl(nodeUrl:options:stateStore:)`` on the same
+    /// `stateStore`. See ``SsoLogin/parseAuthCallback(_:options:stateStore:)``.
+    public static func parseAuthCallback(
+        _ url: String,
+        options: ParseAuthCallbackOptions = ParseAuthCallbackOptions(),
+        stateStore: AuthLoginStateStore = .shared
+    ) -> AuthCallbackResult? {
+        SsoLogin.parseAuthCallback(url, options: options, stateStore: stateStore)
     }
 
-    public static func buildAuthLoginUrl(nodeUrl: String, options: AuthLoginOptions) -> String {
-        SsoLogin.buildAuthLoginUrl(nodeUrl: nodeUrl, options: options)
+    /// Build the hosted-SSO login URL, beginning a login in `stateStore`.
+    /// See ``SsoLogin/buildAuthLoginUrl(nodeUrl:options:stateStore:)``.
+    public static func buildAuthLoginUrl(
+        nodeUrl: String, options: AuthLoginOptions, stateStore: AuthLoginStateStore = .shared
+    ) -> String {
+        SsoLogin.buildAuthLoginUrl(nodeUrl: nodeUrl, options: options, stateStore: stateStore)
     }
 }
