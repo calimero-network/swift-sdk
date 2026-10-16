@@ -142,7 +142,7 @@ extension SseConnection {
 }
 
 /// What an ``SseConnection`` reported, in a comparable shape.
-enum Seen: Equatable {
+enum SseSeen: Equatable {
     case connect(String)
     case event(String)
     case error(Int?)
@@ -150,7 +150,7 @@ enum Seen: Equatable {
 
 extension SseConnection {
     /// Record every connection event into `log`.
-    func record(into log: SyncLog<Seen>) {
+    func record(into log: SyncLog<SseSeen>) {
         on { event in
             switch event {
             case .connect(let sessionId): log.append(.connect(sessionId))

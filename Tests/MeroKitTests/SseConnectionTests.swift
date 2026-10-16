@@ -22,7 +22,7 @@ final class SseConnectionTests: XCTestCase {
         let node = ScriptedNode(streams: [ScriptedNode.open(Frames.connect("s1"))])
         node.install()
         let sse = SseConnection.testing()
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.remember(contextIds: ["c1"], groupIds: [])
         sse.connect()
@@ -59,7 +59,7 @@ final class SseConnectionTests: XCTestCase {
         try await sse.subscribe(contextIds: ["c1"], groupIds: ["g1"])
         XCTAssertTrue(node.subscriptions.isEmpty, "no session yet: remembered only")
 
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.connect()
         defer { sse.close() }
@@ -73,7 +73,7 @@ final class SseConnectionTests: XCTestCase {
         let node = ScriptedNode(streams: [ScriptedNode.open(Frames.connect("s1"))])
         node.install()
         let sse = SseConnection.testing()
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.connect()
         defer { sse.close() }
@@ -91,7 +91,7 @@ final class SseConnectionTests: XCTestCase {
         node.install()
         let sse = SseConnection.testing()
         sse.remember(contextIds: ["c1"], groupIds: ["g1"])
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         let postsAtConnect = SyncLog<Int>()
         sse.on { event in
             if case .connect(let sessionId) = event {
@@ -119,7 +119,7 @@ final class SseConnectionTests: XCTestCase {
         node.install()
         let sse = SseConnection.testing()
         sse.remember(contextIds: ["c1"], groupIds: [])
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.connect()
         defer { sse.close() }
@@ -135,7 +135,7 @@ final class SseConnectionTests: XCTestCase {
         node.install()
         let sse = SseConnection.testing(postTimeout: 0.2)
         sse.remember(contextIds: ["c1"], groupIds: [])
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.connect()
         defer { sse.close() }
@@ -188,7 +188,7 @@ final class SseConnectionTests: XCTestCase {
         node.install()
         let delays = SyncLog<TimeInterval>()
         let sse = SseConnection.testing(delays: delays)
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.connect()
         defer { sse.close() }
@@ -309,7 +309,7 @@ final class SseConnectionTests: XCTestCase {
         node.install()
         let clock = TestClock()
         let sse = SseConnection.testing(clock: clock)
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.remember(contextIds: ["ctx-1"], groupIds: [])
         sse.connect()
@@ -344,7 +344,7 @@ final class SseConnectionTests: XCTestCase {
         let node = ScriptedNode(streams: [ScriptedNode.open(frames)])
         node.install()
         let sse = SseConnection.testing()
-        let log = SyncLog<Seen>()
+        let log = SyncLog<SseSeen>()
         sse.record(into: log)
         sse.remember(contextIds: ["ctx-1"], groupIds: [])
         sse.connect()
