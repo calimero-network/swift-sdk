@@ -76,33 +76,3 @@ public final class UserDefaultsWarrantNonceStore: WarrantNonceStore, @unchecked 
         ledger.advance(MemoryWarrantNonceStore.key(relay), to: floor)
     }
 }
-
-/// Where an author device stands in a context's warrant-nonce sequence
-/// (`POST /admin-api/contexts/{ctx}/warrant-nonce`).
-public struct RelayWarrantNonceState: Sendable, Equatable {
-    /// The next nonce the node would accept, or `nil` when the sequence is
-    /// exhausted (`u64::MAX` spent) and the device must re-key.
-    public let nextNonce: UInt64?
-    public let highWaterNonce: UInt64?
-    public let seen: Bool
-
-    /// Parse from the raw body. The digits are read from the text, not via a
-    /// `Double`, which would round a nonce past 2^53 into one refused forever.
-    public static func parse(_ body: Data) throws -> RelayWarrantNonceState {
-        let text = String(decoding: body, as: UTF8.self)
-        guard let json = try? MeroJSON.decode(JSONValue.self, from: body), let data = json["data"] else {
-            throw AccountError.protocolViolation("warrant-nonce response had no `data`: \(text.prefix(200))")
-        }
-        func u64(_ field: String) -> UInt64? {
-            guard data[field] != nil, data[field] != .null else { return nil }
-            let pattern = "\"\(field)\"\\s*:\\s*\"?(\\d+)"
-            guard let regex = try? NSRegularExpression(pattern: pattern),
-                let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-                let range = Range(match.range(at: 1), in: text)
-            else { return nil }
-            return UInt64(text[range])
-        }
-        return RelayWarrantNonceState(
-            nextNonce: u64("nextNonce"), highWaterNonce: u64("highWaterNonce"), seen: data["seen"]?.boolValue == true)
-    }
-}

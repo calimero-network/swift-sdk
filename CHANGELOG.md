@@ -2,6 +2,28 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: drop the warrant-nonce routes
+
+### Breaking
+
+- **The warrant-nonce routes are gone.** Core serves neither
+  `GET /admin-api/contexts/{ctx}/warrant-nonce/{deviceKey}` nor
+  `POST /admin-api/contexts/{ctx}/warrant-nonce`, so every call could only
+  fail against a current node (mero-js dropped the same API). Removed:
+  - `AdminApi.getWarrantNonce(_:authorDeviceKey:)`,
+    `AdminApi.getWarrantNonceAsAuthor(_:authorProof:)` and `WarrantNonceState`;
+  - `RelayClient.warrantNonce(contextId:)`, `RelayClient.recoverNonce(contextId:)`
+    and `RelayWarrantNonceState`.
+- **`RelayClient.execute` no longer retries a nonce refusal.** It used to ask
+  the node where the sequence stood and retry once. A refusal that names the
+  nonce now throws `AccountError.intentRefused` with `retryable: true`, as
+  mero-js does; the `WarrantNonceStore` already moved past the refused nonce
+  when it handed it out, so calling again signs a fresh warrant. Persist the
+  store (`UserDefaultsWarrantNonceStore`): it is the only record of where the
+  sequence stands. `WarrantNonceStore`, `MemoryWarrantNonceStore`,
+  `UserDefaultsWarrantNonceStore` and `advance(relay:to:)` are unchanged.
+- The sample app's explorer drops its `relay.nonce` (`warrantNonce`) entry.
+
 ## Unreleased: mero-js parity
 
 ### Breaking

@@ -447,51 +447,6 @@ final class Rc83SurfaceTests: XCTestCase {
         XCTAssertFalse(governance.canActOnBehalf)
     }
 
-    // MARK: - Warrant nonces (not served by rc.83; shape from mero-js)
-
-    func testWarrantNonceRoutes() async {
-        var req = await capture { _ = try await self.admin.getWarrantNonce("ctx-1", authorDeviceKey: "dk") }
-        XCTAssertEqual(req.method, "GET")
-        XCTAssertEqual(req.path, "/admin-api/contexts/ctx-1/warrant-nonce/dk")
-
-        req = await capture { _ = try await self.admin.getWarrantNonceAsAuthor("ctx-1", authorProof: "pp") }
-        XCTAssertEqual(req.method, "POST")
-        XCTAssertEqual(req.path, "/admin-api/contexts/ctx-1/warrant-nonce")
-        XCTAssertEqual(Set((jsonBody(req) ?? [:]).keys), ["authorProof"])
-    }
-
-    /// A u64 past 2^53 must come back digit for digit.
-    func testWarrantNonceKeepsAU64Exactly() async throws {
-        serve(
-            """
-            {"data":{"contextId":"c","authorDeviceKey":"k","seen":true,
-             "highWaterNonce":9007199254740993,"windowWidth":64,"nextNonce":9007199254740994}}
-            """)
-        let state = try await admin.getWarrantNonce("c", authorDeviceKey: "k")
-        XCTAssertEqual(state.nextNonce, 9_007_199_254_740_994)
-        XCTAssertEqual(state.highWaterNonce, 9_007_199_254_740_993)
-        XCTAssertFalse(state.isExhausted)
-    }
-
-    func testAnAbsentNextNonceMeansExhausted() async throws {
-        serve(#"{"data":{"contextId":"c","authorDeviceKey":"k","seen":true,"windowWidth":64}}"#)
-        let state = try await admin.getWarrantNonce("c", authorDeviceKey: "k")
-        XCTAssertTrue(state.isExhausted)
-        XCTAssertEqual(state.highWaterNonce, UInt64.max)
-    }
-
-    func testAnRc83NodeAnswersTheNonceRouteWith404() async {
-        serve("", status: 404)
-        do {
-            _ = try await admin.getWarrantNonce("c", authorDeviceKey: "k")
-            XCTFail("expected a 404")
-        } catch let error as MeroError {
-            XCTAssertEqual(error.httpStatus, 404)
-        } catch {
-            XCTFail("wrong error type: \(error)")
-        }
-    }
-
     // MARK: - Account root, devices, sealing
 
     func testSignWithRootMatchesCoresFixtures() async throws {

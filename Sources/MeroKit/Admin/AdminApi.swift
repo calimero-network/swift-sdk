@@ -1287,36 +1287,6 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "getIntentRelay")
     }
 
-    /// Where `authorDeviceKey` stands in its warrant-nonce sequence in `contextId`.
-    ///
-    /// ⚠️ Core rc.83 does not serve this route, so it answers `404` there
-    /// (see ``HTTPError/status``). mero-js ships it ahead of core; this method
-    /// exists so a client can try it and fall back to its own counter on a 404.
-    /// The nonces are read as `UInt64`, exactly.
-    public func getWarrantNonce(
-        _ contextId: String, authorDeviceKey: String
-    ) async throws -> WarrantNonceState {
-        let (data, _) = try await http.sendRaw(
-            HttpRequest(
-                path:
-                    "/admin-api/contexts/\(contextId.percentEncoded())/warrant-nonce/\(authorDeviceKey.percentEncoded())"
-            ))
-        return try WarrantNonceState.parse(data)
-    }
-
-    /// The same answer as ``getWarrantNonce(_:authorDeviceKey:)``, asked with the
-    /// author's own credential instead of an admin token. `authorProof` is hex
-    /// borsh `AccountProof<DeviceCert>`. Same rc.83 caveat: expect `404`.
-    public func getWarrantNonceAsAuthor(
-        _ contextId: String, authorProof: String
-    ) async throws -> WarrantNonceState {
-        let req = try jsonRequest(
-            "/admin-api/contexts/\(contextId.percentEncoded())/warrant-nonce", method: .post,
-            body: WarrantNonceAsAuthorRequest(authorProof: authorProof))
-        let (data, _) = try await http.sendRaw(req)
-        return try WarrantNonceState.parse(data)
-    }
-
     /// Post a signed presence update for a context on a relay. The body is
     /// signed by the caller (see the Cloud/relay layer); this sends it as given.
     /// Core answers `204` with no body.

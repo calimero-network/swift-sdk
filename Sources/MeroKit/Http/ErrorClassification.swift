@@ -197,7 +197,7 @@ private func classify(_ error: AccountError) -> ClassifiedError {
     switch error {
     case .intentRefused(let reason, let retryable, let status):
         let kind = ErrorKind(status: status)
-        // A nonce refusal is one recovery can fix, whatever its status says.
+        // A nonce refusal is one a fresh warrant can fix, whatever its status says.
         return ClassifiedError(
             kind: kind, status: status, retryable: kind.isRetryable || retryable,
             message: reason.isEmpty ? message : reason)
