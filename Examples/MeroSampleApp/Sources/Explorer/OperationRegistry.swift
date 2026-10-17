@@ -1033,13 +1033,6 @@ private let cloudOps: [SDKOperation] = [
         return "rootHash: \(out.rootHash ?? "-")\nreturns: \(Fmt.json(out.returns ?? .null))"
     },
     .cloud(
-        id: "relay.nonce", name: "warrantNonce", summary: "Where this device's nonce sequence stands",
-        fields: [ctxField]
-    ) { c, i in
-        let s = try await c.requireRelay().warrantNonce(contextId: i.v("contextId"))
-        return "nextNonce: \(s.nextNonce.map(String.init) ?? "exhausted")\nseen: \(s.seen)"
-    },
-    .cloud(
         id: "relay.describeCreation", name: "describeCreation", summary: "May this account create contexts here?",
         fields: [.line("groupId", "Group ID", "64 hex")]
     ) { c, i in

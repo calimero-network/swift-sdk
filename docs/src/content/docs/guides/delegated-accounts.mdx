@@ -53,6 +53,10 @@ let namespaces = await DelegatedAccounts.listDelegatedNamespaces(session, env: e
 session change when the relay stays the same, and drops it when it does not.
 Warrant nonces are one sequence per relay (`WarrantNonceStore`);
 `markContextNonceSpent(relayURL:contextId:nonce:nonces:)` records a spent one.
+Persist the store (`UserDefaultsWarrantNonceStore`): no node serves a lookup of
+the spent ledger, so a counter that restarts at 1 burns refusals until it
+catches up. A nonce refusal surfaces as `AccountError.intentRefused` with
+`retryable: true` and is not retried for you.
 
 ## The relay's node key
 

@@ -28,7 +28,7 @@ public enum AccountError: Error, Sendable, Equatable {
     case relayKeyUnavailable(String)
 
     /// A relay refused an intent (HTTP 400/403). `retryable` is true when the
-    /// refusal was about the nonce, which recovery can fix.
+    /// refusal was about the nonce: a fresh warrant (a new call) can succeed.
     case intentRefused(reason: String, retryable: Bool, status: Int)
 
     /// A server answered with something this client cannot use.

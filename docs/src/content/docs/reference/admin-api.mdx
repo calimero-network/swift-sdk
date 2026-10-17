@@ -73,8 +73,6 @@ strings ascending.
 | `queryContext(_ contextId: String, request: QueryContextRequest) -> QueryContextResponseData` | `POST /contexts/{contextId}/query` |
 | `postPresenceIntent(_ contextId: String, request: PresenceIntentRequest)` | `POST /contexts/{contextId}/presence-intents` |
 | `postPresenceIntent(_ contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64, keys: DeviceKeys, authorProof: String)` | same, signed with `keys` for you |
-| `getWarrantNonce(_ contextId: String, authorDeviceKey: String) -> WarrantNonceState` | `GET /contexts/{contextId}/warrant-nonce/{key}` |
-| `getWarrantNonceAsAuthor(_ contextId: String, authorProof: String) -> WarrantNonceState` | `POST /contexts/{contextId}/warrant-nonce` |
 
 ### Account reads and delegated intents (core rc.83)
 
@@ -92,9 +90,11 @@ the caller; these methods only carry them. The presence signature can be too,
 or the second `postPresenceIntent` signs the `calimero/presence/1` statement
 with the device key (see the [presence guide](/guides/presence/)).
 
-The warrant-nonce routes are in mero-js but **not served by core rc.83**, which
-answers `404`. Treat a 404 as "fall back to your own counter". Nonces are
-`UInt64` and decoded exactly.
+No node serves a warrant-nonce lookup, so the client's persisted
+`WarrantNonceStore` is the only record of where a device's sequence stands.
+A relay refusal that names the nonce throws `AccountError.intentRefused` with
+`retryable: true`; the store has already moved past the refused nonce, so
+calling again signs a fresh warrant.
 
 ### Context identity
 

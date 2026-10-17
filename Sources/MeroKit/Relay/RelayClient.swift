@@ -177,20 +177,16 @@ public struct RelayClient: PresenceRelay {
 
     /// Run `method(args)` in `contextId` through the relay, as the account.
     ///
-    /// On a nonce refusal the sequence is recovered from the node's own record
-    /// (`warrant-nonce`) and the write retried once.
+    /// One intent, once: the warrant's nonce is spent by the node on apply, and
+    /// a refused write is not retried (only a `429` is, which never reached the
+    /// node). A refusal throws ``AccountError/intentRefused(reason:retryable:status:)``,
+    /// with `retryable` set when the reason names the nonce. The store already
+    /// moved past the refused nonce when it handed it out, so calling again
+    /// signs a fresh warrant. No node serves a "where does my sequence stand"
+    /// lookup, so the persisted ``WarrantNonceStore`` is the only record of it.
     public func execute(
         contextId: String, method: String, argsJson: JSONValue = [:]
     ) async throws -> IntentResult {
-        do {
-            return try await executeOnce(contextId: contextId, method: method, argsJson: argsJson)
-        } catch AccountError.intentRefused(_, let retryable, _) where retryable {
-            try await recoverNonce(contextId: contextId)
-            return try await executeOnce(contextId: contextId, method: method, argsJson: argsJson)
-        }
-    }
-
-    private func executeOnce(contextId: String, method: String, argsJson: JSONValue) async throws -> IntentResult {
         let described = try await describe(contextId)
         let executor = try checkedExecutor(described.executorAccount, described.executorKey)
         let bytecodeId = Hex.encode(
@@ -247,31 +243,6 @@ public struct RelayClient: PresenceRelay {
         _ type: T.Type, contextId: String, method: String, argsJson: JSONValue = [:]
     ) async throws -> T {
         try decode(type, try await execute(contextId: contextId, method: method, argsJson: argsJson).returns)
-    }
-
-    // MARK: - Nonce recovery
-
-    /// Where this device stands in `contextId`'s nonce sequence, asked as the
-    /// author (`POST /admin-api/contexts/{ctx}/warrant-nonce {authorProof}`).
-    public func warrantNonce(contextId: String) async throws -> RelayWarrantNonceState {
-        let url = try AccountHTTP.url(relayURL, "/admin-api/contexts/\(escape(contextId))/warrant-nonce")
-        var headers: [String: String] = [:]
-        if let token = await tokenProvider() { headers["Authorization"] = "Bearer \(token)" }
-        let request = AccountHTTP.jsonRequest(
-            url, method: "POST", body: ["authorProof": .string(authorProof)], headers: headers, timeout: timeout)
-        let (raw, _) = try await AccountHTTP.sendRaw(request, session: session)
-        return try RelayWarrantNonceState.parse(raw)
-    }
-
-    /// Advance the local sequence to where the node says it stands.
-    public func recoverNonce(contextId: String) async throws {
-        let state = try await warrantNonce(contextId: contextId)
-        guard let next = state.nextNonce else {
-            throw AccountError.intentRefused(
-                reason: "this device has spent every nonce in context \(contextId); it must re-key to write again",
-                retryable: false, status: 409)
-        }
-        nonces.advance(relay: relayURL, to: next)
     }
 
     // MARK: - Presence

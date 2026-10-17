@@ -396,37 +396,37 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertEqual(String(warrant.dropLast(128 + 16).suffix(16)), "0100000000000000")
     }
 
-    func testNonceRefusalRecoversFromTheNodesRecordAndRetriesOnce() async throws {
+    func testNonceRefusalIsSurfacedRetryableAndTheNextCallSignsAFreshNonce() async throws {
         let ctx = rep("11")
         serveDescribe(ctx)
         let attempts = Counter()
+        let spent = "this warrant's nonce has already been spent by this author device"
         rig.on("POST", "/admin-api/contexts/\(ctx)/intents") { _ in
             attempts.increment() == 1
-                ? CloudRig.stub(403, #"{"error":"warrant nonce 1 already spent"}"#)
+                ? CloudRig.stub(403, #"{"error":"\#(spent)"}"#)
                 : CloudRig.stub(200, #"{"data":{"rootHash":"rh2","returns":null}}"#)
         }
-        rig.on(
-            "POST", "/admin-api/contexts/\(ctx)/warrant-nonce",
-            json:
-                #"{"data":{"contextId":"c","authorDeviceKey":"d","seen":true,"#
-                + #""highWaterNonce":9007199254740993,"nextNonce":9007199254740994,"windowWidth":64}}"#
-        )
         let nonces = MemoryWarrantNonceStore()
-        let client = makeRelay(nonces: nonces, token: "relay-access")
+        let client = makeRelay(nonces: nonces)
+
+        do {
+            _ = try await client.execute(contextId: ctx, method: "set")
+            XCTFail("expected a refusal")
+        } catch {
+            XCTAssertEqual(error as? AccountError, .intentRefused(reason: spent, retryable: true, status: 403))
+        }
+        // Not retried, and no node route is asked where the sequence stands.
+        XCTAssertEqual(attempts.count, 1)
 
         let result = try await client.execute(contextId: ctx, method: "set")
         XCTAssertEqual(result.rootHash, "rh2")
-        XCTAssertNil(result.returns)
         XCTAssertEqual(attempts.count, 2)
-        let lookup = try XCTUnwrap(rig.requests("POST", "/admin-api/contexts/\(ctx)/warrant-nonce").first)
-        XCTAssertEqual(lookup.headers["authorization"], "Bearer relay-access")
-        XCTAssertEqual(lookup.json?["authorProof"]?.stringValue, client.authorProof)
-        // Read from the digits, not a Double: 2^53 + 2 survives exactly.
-        let retried = try XCTUnwrap(rig.requests("POST", "/admin-api/contexts/\(ctx)/intents").last?.json)
-        let warrant = try XCTUnwrap(retried["warrant"]?.stringValue)
-        let nonceLE = try Hex.decode(String(warrant.dropLast(128 + 16).suffix(16)), label: "n", bytes: 8)
-        XCTAssertEqual(nonceLE.withUnsafeBytes { $0.load(as: UInt64.self) }, 9_007_199_254_740_994)
-        XCTAssertEqual(nonces.next(relay: relay), 9_007_199_254_740_995)
+        // The store moved past the refused nonce when it handed it out.
+        let warrants = rig.requests("POST", "/admin-api/contexts/\(ctx)/intents")
+            .compactMap { $0.json?["warrant"]?.stringValue }
+        let signed = warrants.map { String($0.dropLast(128 + 16).suffix(16)) }
+        XCTAssertEqual(signed, ["0100000000000000", "0200000000000000"])
+        XCTAssertEqual(nonces.next(relay: relay), 3)
     }
 
     func testNonRetryableRefusalIsSurfaced() async {
