@@ -26,6 +26,7 @@ the shared [`HttpClient`](/reference/error-model/#transport); methods are
 | `getHealth() -> HealthResponse` | `GET /auth/health` |
 | `getIdentity() -> IdentityResponse` | `GET /admin/identity` |
 | `getProviders() -> ProvidersResponse` | `GET /auth/providers` |
+| `getLoginPage() -> String` | `GET /auth/login` — the hosted login page, as HTML text |
 | `generateTokens(_ request: TokenRequest) -> TokenResponse` | `POST /auth/token` |
 | `refreshToken(_ request: RefreshTokenRequest) -> TokenResponse` | `POST /auth/refresh` |
 | `generateMockTokens(_ request: MockTokenRequest) -> TokenResponse` | `POST /auth/mock-token` (dev) |

@@ -30,6 +30,14 @@ public struct AuthApi: Sendable {
 
     // MARK: - Authentication
 
+    /// The node's hosted login page (`GET /auth/login`), as HTML text — the
+    /// page ``SsoLogin/buildAuthLoginUrl(nodeUrl:options:stateStore:)`` sends
+    /// the person to. (== mero-js `getLoginPage`.)
+    public func getLoginPage() async throws -> String {
+        let (data, _) = try await http.sendRaw(HttpRequest(path: "/auth/login", method: .get))
+        return String(decoding: data, as: UTF8.self)
+    }
+
     public func generateTokens(_ request: TokenRequest) async throws -> TokenResponse {
         try await http.post("/auth/token", json: request)
     }

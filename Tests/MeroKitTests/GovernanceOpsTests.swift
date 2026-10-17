@@ -470,8 +470,10 @@ final class GovernanceOpsTests: XCTestCase {
             account: cb.account, device: cb.device, credential: cb.credential, relayUrl: relay,
             executorAccount: rep("33"))
         let signIn = CloudSignIn(
-            config: CloudConfig(cloudBaseURL: cloud, relayKeyVerifier: PinnedRelayKeyVerifier(nodeKey: rep("77"))),
-            keyStore: .memory(keys), sessionStore: .memory(session), urlSession: MockURLProtocol.makeSession())
+            config: CloudConfig(
+                cloudBaseURL: cloud, relayKeyVerifier: PinnedRelayKeyVerifier(nodeKey: rep("77")), sealRelays: false),
+            keyStore: .memory(keys), sessionStore: .memory(session), nonces: MemoryWarrantNonceStore(),
+            urlSession: MockURLProtocol.makeSession(), delegatedStore: .memory())
         return (signIn, session)
     }
 
@@ -512,6 +514,12 @@ final class GovernanceOpsTests: XCTestCase {
                     200, #"[{"package":"com.calimero.curb","signerId":"did:key:z6MkX","appVersion":"0.3.0"}]"#)
             }
             if path.hasSuffix("/enable-ha") { return CloudRig.stub(200, #"{"status":"enabled"}"#) }
+            if path == "/admin-api/tee/attest" {
+                // The founding relay is attested now, whatever key was pinned.
+                return CloudRig.stub(
+                    200,
+                    #"{"data":{"quoteB64":"AA==","boundPublicKey":"\#(String(repeating: "77", count: 32))"}}"#)
+            }
             return CloudRig.stub(404, "{}")
         }
         let founded = try await signIn.foundNamespace(
@@ -535,7 +543,7 @@ final class GovernanceOpsTests: XCTestCase {
         XCTAssertTrue(seen.all.contains("POST /api/cloud/accounts/\(session.account)/namespaces/\(ns)/enable-ha"))
     }
 
-    func testCloudInvitationNamesTheRelaysAndCarriesTheRelayWhenUnrouted() async throws {
+    func testCloudInvitationNamesTheRelaysAndRefusesWhenTheCloudListsNoNode() async throws {
         let (signIn, session) = signedIn()
         let ns = rep("ab")
         rig.on(
@@ -550,11 +558,16 @@ final class GovernanceOpsTests: XCTestCase {
                  "contextCount":0,"defaultCapabilities":231,"subgroupVisibility":"open"}}
                 """)
         rig.on("GET", "/api/cloud/namespaces/\(ns)/challenge", json: #"{"nonce":"n"}"#)
-        rig.on("GET", "/api/cloud/namespaces/\(ns)/admitters", json: #"{"admitters":[]}"#)
+        rig.on(
+            "GET", "/api/cloud/namespaces/\(ns)/admitters",
+            json: """
+                {"servable":true,"admitters":[{"peer_id":"p","account":"\(rep("EE"))","relay_url":"\(relay)",
+                 "status":"active","fresh":true,"can_admit":true,"authorship_ready":true}]}
+                """)
 
         let invitation = try await signIn.createNamespaceInvitation(connection(session, mero: true), namespaceId: ns)
         XCTAssertEqual(invitation.invitation.admitters, [rep("ee")])
-        XCTAssertEqual(invitation.admitterAddrs, [relay])
+        XCTAssertTrue(invitation.admitterAddrs.isEmpty, "an unsigned address never stands in for the cloud's routing")
         XCTAssertEqual(invitation.inviterAccount, session.account)
         XCTAssertEqual(invitation.applicationId, Array(repeating: 0x34, count: 32))
         XCTAssertEqual(invitation.appKey, Array(repeating: 0x12, count: 32))
@@ -565,10 +578,8 @@ final class GovernanceOpsTests: XCTestCase {
                 publicKey: devicePk, signature: try Hex.decode(invitation.inviterSignature, label: "s", bytes: 64),
                 message: try GroupInvitations.hash(invitation.invitation)))
 
-        // No relay in it and nobody routed: nobody could claim it.
-        rig.on(
-            "GET", "/admin-api/groups/\(ns)/members",
-            json: #"{"members":[{"identity":"\#(session.account)","role":"Admin"}]}"#)
+        // The cloud lists no node: nobody could claim it, relay in it or not.
+        rig.on("GET", "/api/cloud/namespaces/\(ns)/admitters", json: #"{"admitters":[]}"#)
         do {
             _ = try await signIn.createNamespaceInvitation(connection(session, mero: true), namespaceId: ns)
             XCTFail("expected not-claimable")

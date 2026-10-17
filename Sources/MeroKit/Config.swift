@@ -27,41 +27,77 @@ public struct MeroConfig: Sendable {
     public var timeout: TimeInterval
     /// Optional token store for persistence. Defaults to an in-memory store.
     public var tokenStore: (any TokenStore)?
+    /// Sign every request/response call (`auth`, `admin`, `rpc`) with
+    /// `X-Calimero-Proof`, instead of or beside a session. `nil` sends none.
+    /// (== mero-js `MeroJsConfig.requestProof`.)
+    ///
+    /// The node honours it only with `--delegated-access`; one without answers
+    /// `403`, distinct from the `401` a bad proof gets. The event streams
+    /// (`sse`, `ws`) still use the session; for proof-authorized SSE build an
+    /// ``SseConnection`` with an `authorize:` hook.
+    public var requestProof: RequestProofConfig?
 
     public init(
         baseURL: URL,
         credentials: Credentials? = nil,
         timeout: TimeInterval = 10,
-        tokenStore: (any TokenStore)? = nil
+        tokenStore: (any TokenStore)? = nil,
+        requestProof: RequestProofConfig? = nil
     ) {
         self.baseURL = baseURL
         self.credentials = credentials
         self.timeout = timeout
         self.tokenStore = tokenStore
+        self.requestProof = requestProof
     }
+}
+
+/// How a ``Mero`` signs each request (``MeroConfig/requestProof``).
+public enum RequestProofConfig: Sendable {
+    /// Mint proofs from a credential and a key (``createProofSigner(_:)``):
+    /// a session key with its login statement, or the device key itself.
+    case keys(ProofSignerOptions)
+    /// Your own signer, when the key must not reach the SDK at all — a
+    /// hardware token, an extension. Its value is sent verbatim; `nil` sends
+    /// no proof.
+    case custom(ProofCallback)
+    /// A per-request authorizer (``createProofAuthorizer(_:)``), whose headers
+    /// are merged into each request.
+    case authorizer(RequestAuthorizer)
 }
 
 /// A token bundle: access + refresh token and the access token's expiry.
 ///
 /// Persisted to a ``TokenStore`` verbatim. `expiresAt` is derived from the JWT
 /// `exp` claim (see ``expiresAtFromJWT(_:fallback:)``).
+///
+/// ``Mero`` tags what it persists with ``nodeOrigin`` — the node the tokens
+/// came from — and ignores a stored bundle tagged for another node, or not
+/// tagged at all (== mero-js `TokenData.node_origin`).
 public struct TokenData: Codable, Sendable, Equatable {
     public var accessToken: String
     public var refreshToken: String
     /// Access-token expiry. Informational only — the SDK never refreshes
     /// proactively (refresh is reactive on 401, per core's contract).
     public var expiresAt: Date
+    /// Origin and path prefix of the issuing node (`https://host/node1`), set
+    /// on the copy ``Mero`` persists. A store entry for another node is
+    /// ignored. Optional, so a bundle persisted before it existed still
+    /// decodes (and is then ignored, as it names no node).
+    public var nodeOrigin: String?
 
-    public init(accessToken: String, refreshToken: String, expiresAt: Date) {
+    public init(accessToken: String, refreshToken: String, expiresAt: Date, nodeOrigin: String? = nil) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresAt = expiresAt
+        self.nodeOrigin = nodeOrigin
     }
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case refreshToken = "refresh_token"
         case expiresAt = "expires_at"
+        case nodeOrigin = "node_origin"
     }
 
     public init(from decoder: Decoder) throws {
@@ -74,6 +110,7 @@ public struct TokenData: Codable, Sendable, Equatable {
             ms > 0
             ? Date(timeIntervalSince1970: ms / 1000)
             : Date().addingTimeInterval(3600)
+        nodeOrigin = try c.decodeIfPresent(String.self, forKey: .nodeOrigin)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -81,6 +118,34 @@ public struct TokenData: Codable, Sendable, Equatable {
         try c.encode(accessToken, forKey: .accessToken)
         try c.encode(refreshToken, forKey: .refreshToken)
         try c.encode(expiresAt.timeIntervalSince1970 * 1000, forKey: .expiresAt)
+        try c.encodeIfPresent(nodeOrigin, forKey: .nodeOrigin)
+    }
+}
+
+extension TokenData {
+    /// The key a token bundle is bound to: origin plus path prefix, so nodes
+    /// behind one host stay apart (== mero-js `nodeKeyOf`).
+    ///
+    /// Scheme and host are lowercased, a default port (80 for http/ws, 443 for
+    /// https/wss) is dropped, and trailing slashes are trimmed from the path, so
+    /// `https://Host.example:443/node1/` and `https://host.example/node1` are the
+    /// same node. A URL with no host (`file:`, a custom scheme) keys as its full
+    /// string, as an opaque origin does in mero-js.
+    public static func nodeKey(for baseURL: URL) -> String {
+        guard let comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
+            let scheme = comps.scheme?.lowercased(), ["http", "https", "ws", "wss"].contains(scheme),
+            let rawHost = comps.host, !rawHost.isEmpty
+        else { return baseURL.absoluteString }
+        var host = rawHost.lowercased()
+        if host.contains(":"), !host.hasPrefix("[") { host = "[\(host)]" }  // IPv6 literal
+        var origin = "\(scheme)://\(host)"
+        if let port = comps.port {
+            let defaultPort = (scheme == "https" || scheme == "wss") ? 443 : 80
+            if port != defaultPort { origin += ":\(port)" }
+        }
+        var path = comps.percentEncodedPath
+        while path.hasSuffix("/") { path.removeLast() }
+        return origin + path
     }
 }
 

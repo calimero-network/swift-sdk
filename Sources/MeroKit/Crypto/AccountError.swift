@@ -19,7 +19,8 @@ public enum AccountError: Error, Sendable, Equatable {
     /// The person declined at the wallet, or the wallet refused the request.
     case enrolmentDeclined(String)
 
-    /// The enrolment answers a request this app did not make (`state` mismatch).
+    /// A wallet or cloud callback answers a request this app did not make (its
+    /// `state` is not one this app began, or was already spent).
     case stateMismatch
 
     /// The relay's node key could not be established. Reads and events need it;
@@ -45,6 +46,43 @@ public enum AccountError: Error, Sendable, Equatable {
     /// Nobody a claimant could reach would admit them with this invitation, so
     /// none was minted. `reason` is `not-hosted` or `no-named-node`.
     case invitationNotClaimable(namespaceId: String, reason: String)
+
+    /// The signed-in cloud account cannot write yet, and the message says
+    /// what to go and do: it owns no namespace (or several, and none was
+    /// named), HA is off, no relay is assigned yet, or none relays.
+    case cloudNotReady(String)
+
+    /// The person declined linking an account at the cloud, or the cloud
+    /// refused the link request.
+    case linkDeclined(String)
+
+    /// An account's admin (``AccountAdmin``) refused a call that needs a node:
+    /// upgrades, installs, aliases, a node's own copy of a context. `method`
+    /// names it. Nothing was sent. (== mero-js `NotForAccountError`.)
+    case notForAccount(method: String)
+
+    /// An account that has joined nothing has no relay, so nothing serves
+    /// `method` yet; redeem an invitation first. (== mero-js `NoRelayError`.)
+    case noRelay(method: String)
+}
+
+/// Why an account's invitation was not minted
+/// (``AccountError/invitationNotClaimable(namespaceId:reason:)``).
+/// (== mero-js `InvitationNotClaimableError.reason`.)
+public enum InvitationNotClaimableReason: String, Sendable, Equatable, CaseIterable {
+    /// The cloud lists no node holding the namespace. A relay it does not
+    /// list cannot stand in: an address on the invitation is unsigned.
+    case notHosted = "not-hosted"
+    /// The cloud's nodes are not among the admitters the invitation would name.
+    case noNamedNode = "no-named-node"
+}
+
+extension AccountError {
+    /// The typed reason of an ``invitationNotClaimable(namespaceId:reason:)``, or `nil`.
+    public var invitationNotClaimableReason: InvitationNotClaimableReason? {
+        guard case .invitationNotClaimable(_, let reason) = self else { return nil }
+        return InvitationNotClaimableReason(rawValue: reason)
+    }
 }
 
 extension AccountError: LocalizedError {
@@ -54,18 +92,23 @@ extension AccountError: LocalizedError {
         case .credentialRejected(let m): return "Credential rejected: \(m)"
         case .enrolmentDeclined(let m): return m
         case .stateMismatch:
-            return "This enrolment answers a request this app did not make — the state it carries is not the one sent."
+            return "This callback answers a request this app did not make — the state it carries is not one it sent."
         case .relayKeyUnavailable(let m): return "Relay node key unavailable: \(m)"
         case .intentRefused(let reason, _, let status): return "Relay refused the intent (HTTP \(status)): \(reason)"
         case .protocolViolation(let m): return m
         case .notSignedIn(let m): return m
         case .haRefused(let code, _, _): return CloudClient.haRefusalMessages[code] ?? "The cloud refused HA: \(code)"
         case .invitationNotClaimable(let ns, let reason):
-            return reason == "not-hosted"
-                ? "Nobody could claim an invitation to \(ns) yet: the namespace is not hosted in the cloud and has no "
-                    + "relay in it. Link this account to your cloud user in the wallet and enable HA, then invite."
-                : "Nobody could claim an invitation to \(ns): the cloud routes to none of the relays or admins it "
-                    + "would name as admitters."
+            return reason == InvitationNotClaimableReason.notHosted.rawValue
+                ? "nobody could claim an invitation to \(ns) yet: the cloud lists no node holding the namespace, so an "
+                    + "invitee with no node of their own has no relay to be admitted through."
+                : "nobody could claim an invitation to \(ns): the cloud routes to none of the relays or admins it "
+                    + "would name as admitters"
+        case .cloudNotReady(let m): return m
+        case .linkDeclined(let m): return m
+        case .notForAccount(let method): return "\(method) is not available for an account: it needs a node"
+        case .noRelay(let method):
+            return "\(method) needs a relay, and this account has none yet: join from an invitation first"
         }
     }
 }

@@ -72,6 +72,7 @@ strings ascending.
 | `getIntentRelay(_ contextId: String) -> IntentRelayInfo` | `GET /contexts/{contextId}/intents` |
 | `queryContext(_ contextId: String, request: QueryContextRequest) -> QueryContextResponseData` | `POST /contexts/{contextId}/query` |
 | `postPresenceIntent(_ contextId: String, request: PresenceIntentRequest)` | `POST /contexts/{contextId}/presence-intents` |
+| `postPresenceIntent(_ contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64, keys: DeviceKeys, authorProof: String)` | same, signed with `keys` for you |
 | `getWarrantNonce(_ contextId: String, authorDeviceKey: String) -> WarrantNonceState` | `GET /contexts/{contextId}/warrant-nonce/{key}` |
 | `getWarrantNonceAsAuthor(_ contextId: String, authorProof: String) -> WarrantNonceState` | `POST /contexts/{contextId}/warrant-nonce` |
 
@@ -86,8 +87,10 @@ method error is a `400` with `type: "FunctionCallError"`, readable through
 `getIntentRelay` answers what a warrant for this node must name: `executorAccount`,
 `executorKey`, `releaseBytecodeId` and `releaseVersion` (the last three are new in
 rc.83, and a warrant minted for rc.41 is refused). `canAuthorOnBehalf: false` is
-the default state of every context, not an error. The warrant, author proof and
-presence signature are minted by the caller; these methods only carry them.
+the default state of every context, not an error. The warrant and author proof are minted by
+the caller; these methods only carry them. The presence signature can be too,
+or the second `postPresenceIntent` signs the `calimero/presence/1` statement
+with the device key (see the [presence guide](/guides/presence/)).
 
 The warrant-nonce routes are in mero-js but **not served by core rc.83**, which
 answers `404`. Treat a 404 as "fall back to your own counter". Nonces are
@@ -159,6 +162,7 @@ rotates.
 | `rescopeDevice(_ deviceId: String, request: RescopeDeviceRequest) -> RescopeDeviceResponseData` | `PUT /account/devices/{deviceId}/scope` |
 | `labelDevice(_ deviceId: String, request: LabelDeviceRequest) -> LabelDeviceResponseData` | `PUT /account/devices/{deviceId}/label` |
 | `revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) -> RevokeDeviceResponseData` | `POST /namespaces/{namespaceId}/account/revoke` |
+| `listNamespaceRevokedDevices(_ namespaceId: String) -> NamespaceRevokedDevices` | `GET /namespaces/{namespaceId}/revoked-devices` — `revokedDevices` + `withdrawnSlots`, no `{ data }` envelope; `403` unless this node holds an account bound in the namespace |
 | `linkAccountDevice(_ namespaceId: String, request: LinkAccountDeviceRequest) -> LinkAccountDeviceResponseData` | `POST /namespaces/{namespaceId}/account/link-device` |
 | `signWithAccountRoot(_ request: AccountSignWithRootRequest) -> AccountSignWithRootResponseData` | `POST /account/sign-with-root` |
 | `sealToAccount(_ groupId: String, account: String, request: SealToAccountRequest) -> SealedEnvelope` | `POST /groups/{groupId}/accounts/{account}/seal` |
@@ -288,6 +292,15 @@ take an optional `rootProof`: hex borsh of an
 current `ownerOpCounter` (both from `getGroupInfo`). Omit it on a node that holds
 the owner's account root; never send `""`.
 
+Each also has a form that takes the account root (`root: RootSource`, plus
+`keyEpoch` and `chain` for a handed-off root) and mints the proof itself:
+`transferOwnership(_:newOwner:root:)`, `ownerDeleteGroup(_:root:)`,
+`changeNamespaceAdmin(_:newAdmin:root:)`, `setTeeAuthoringPolicy(_:allowedMrtd:root:)`,
+`disableTeeAuthoringPolicy(_:root:)` and `setTeeAdmissionPolicy(_:request:root:)`.
+`ownerOpTarget(_:plane:)` and `signRootProof(_:op:root:)` expose the steps, and
+`linkAccountDevice(_:credential:scope:)` signs a device scope. See
+[Signing owner ops](/guides/signing-owner-ops/).
+
 | Refusal | Status |
 | --- | --- |
 | Proof required, signer unbound, wrong account | `403` |
@@ -395,7 +408,8 @@ flags are sent only when set.
 
 `teeVerifyQuote` is gone: the node has not served `POST /tee/verify-quote` since
 before rc.41. Verify a quote client-side against the collateral `teeAttest`
-returns with `includeCollateral: true`.
+returns with `includeCollateral: true` — `createQuoteVerifier(_:)`,
+`fetchAttestedTransportKey(_:verifier:)` ([TEE trust](/guides/tee-trust/)).
 
 ## Network & node
 

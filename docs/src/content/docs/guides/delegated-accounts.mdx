@@ -1,0 +1,192 @@
+---
+title: Delegated accounts
+description: An account with no node of its own — the relay map across relays, learning a relay's node key, the delegated client, the account admin facade, founding, governance and redeeming invitations.
+sidebar:
+  order: 9
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A **delegated account** is an account, a device the wallet certified, and the
+relays that write on its behalf. It holds no node: every write is a warrant
+the device signs and a relay runs, every read is caller-scoped on the relay,
+and an invitation is redeemed by a signed join a relay admits. This page is
+the layer above [Calimero Cloud](/guides/calimero-cloud/) sign-in that makes
+such an account behave like a node in app code. It is a port of mero-js
+`src/account/*` and `src/admin-api/redeem-invitation.ts`.
+
+Everything starts from a `DelegatedSession`:
+
+```swift
+let signIn = CloudSignIn.keychain()
+guard let session = await signIn.delegatedSession() else { return }   // account, credential, keys, relay
+let env = signIn.delegatedEnvironment   // store, nonces, verifier, cloud URL, audience
+```
+
+`session.relayUrl == nil` is a signed-in state, not a broken one: a brand-new
+account is a member of nothing until it redeems an invitation.
+
+## The relay map
+
+An account's namespaces may be served by different relays. A relay admits the
+account to a namespace and then serves that namespace's contexts, so the SDK
+keeps, per account, which relay serves which namespace and context — in a
+`DelegatedAccountStore` (`UserDefaults` by default; `.keychain()` or
+`.memory()` when you prefer). It holds URLs and ids only; the device secret
+stays in the key store.
+
+```swift
+let store = env.store
+DelegatedAccounts.rememberRelay(session.account, relayURL: relay, namespaceId: ns, store: store)
+DelegatedAccounts.readRelayMap(session.account, store: store)          // RelayMap
+DelegatedAccounts.relayForContext(session.account, contextId: ctx, store: store)
+DelegatedAccounts.knownRelays(session, store: store)                   // the session's first, then the map's
+DelegatedAccounts.namespaceOfGroup(session, groupId: sub, store: store)
+
+// The union of every known relay's caller-scoped listing, each tagged with
+// its relay and recorded in the map. An unreachable relay is skipped.
+let contexts = await DelegatedAccounts.listDelegatedContexts(session, env: env)
+let namespaces = await DelegatedAccounts.listDelegatedNamespaces(session, env: env)
+```
+
+`carryExecutorAccount(from:to:)` keeps the relay's executor account across a
+session change when the relay stays the same, and drops it when it does not.
+Warrant nonces are one sequence per relay (`WarrantNonceStore`);
+`markContextNonceSpent(relayURL:contextId:nonce:nonces:)` records a spent one.
+
+## The relay's node key
+
+A relay login names the relay's node signing key, and that key must never be
+read from the relay being logged in to. It is learned from the relay's TEE
+attestation (under `CloudConfig.relayKeyVerifier` — by default a
+`DcapRelayKeyVerifier`, which verifies the DCAP quote against the signed
+mero-tee release the relay runs; see [TEE trust](/guides/tee-trust/)) and
+pinned in the store. Everything the delegated client sends a hosted relay is
+[sealed](/guides/sealed-transport/) to its attested TD.
+
+```swift
+switch await DelegatedAccounts.attemptRelayNodeKey(relay, env: env) {
+case .learned(let nodeKey): print("pinned", nodeKey)
+case .unavailable(let error): print("try again:", error)   // nothing answered
+case .refused(let error): print("no:", error)              // the proof did not hold
+}
+// However long the way is down: retries after 1, 2, 5, 10, then every 30 s;
+// nil on a refusal or when the task is cancelled.
+let key = await DelegatedAccounts.learnRelayNodeKey(relay, env: env)
+```
+
+## The delegated client
+
+`buildDelegatedClient` returns a relay-transport
+[`MeroTransportClient`](/reference/transport/) — or `nil` when the session has
+no relay (deliberately no placeholder: it would look connected and refuse every
+warrant).
+
+```swift
+guard let client = try DelegatedAccounts.buildDelegatedClient(session, env: env) else { return }
+let items: [String] = try await client.rpc.execute(contextId: ctx, method: "list", argsJson: [:])
+let mine = try await client.admin.getContexts()   // this account's own, on this relay
+```
+
+- **Writes** are warrants. **Reads**, once the relay's key is pinned, try the
+  session-authenticated `admin.queryContext` first; a `409` marks the method a
+  write, remembered per relay, context and method, and the call goes out as a
+  warrant. Any other failure of the query falls back to the warrant too.
+- **Admin and events** are authenticated by the device certificate (request
+  proofs), and with the key pinned also by an `account_proof` session, which a
+  hosted relay's forward-auth requires.
+- **Events** on a hosted relay whose key is not known yet are an inert
+  placeholder: `canSubscribe` is `false` and the stream opens nothing until the
+  client is rebuilt with the key. A loopback relay (a dev rig) takes the proof.
+
+## One admin surface for a node and an account
+
+`AdminSurface` is the admin API an app codes against. `AdminApi` conforms as it
+ships; `AccountAdmin` answers it for an account:
+
+```swift
+let admin: any AdminSurface = DelegatedAccounts.createAccountAdmin(
+    session: session, read: try? await client.admin,
+    app: AdminAppConfig(packageName: "com.calimero.chat"), env: env)
+
+let ns = try await admin.createNamespace(CreateNamespaceRequest(applicationId: appId, name: "Team"))
+let general = try await admin.createGroupInNamespace(ns.namespaceId, request: nil)
+try await admin.addGroupMembers(general.groupId, request: AddGroupMembersRequest(members: [GroupMemberInput(identity: bob, role: "Member")]))
+let invite = try await admin.createNamespaceInvitation(ns.namespaceId, request: nil)
+```
+
+| Call | As an account |
+| --- | --- |
+| reads (`getGroupInfo`, `listGroupMembers`, status…) | the relay, unchanged |
+| `listNamespacesForApplication` | its own list, filtered |
+| `getNodeIdentity` | the account itself |
+| `createNamespace` | founded through the relay with the app's package (latest version unless pinned); `haEnabled` / `haError` ride along |
+| `createGroupInNamespace` | a root op on the namespace; Open unless `restricted` |
+| members, roles, capabilities, metadata, settings, detach, leave | group ops on the group |
+| `deleteGroup`, `reparentGroup` | root ops on the namespace |
+| `joinContext`, `joinSubgroupInheritance` | `MemberJoinedOpen`; a direct member's is a no-op |
+| `createContext` | a creation warrant; the account is the member key |
+| `createNamespaceInvitation` | signed by the device, the relays as admitters, refused when nobody could claim it |
+| `joinNamespace` | `AccountAdminDeps.join` (wire `joinAsAccount`) |
+| upgrades, installs, aliases, `deleteContext`, `leaveContext`, TEE policy, devices | `AccountError.notForAccount` |
+
+With no relay yet (`read: nil`) the account is a member of nothing: the
+listings are empty, `getNodeIdentity` and `joinNamespace` work, everything
+else throws `AccountError.noRelay`.
+
+`NodeAdmin` (`createNodeAdmin(admin:app:)`) is a node's admin with
+`createNamespace` made whole: it installs the app's package from the registry
+first when the node lacks it, and refuses a bundle that installs as another
+application id.
+
+## Founding and governance
+
+```swift
+let founded = try await DelegatedAccounts.foundDelegatedNamespace(
+    session, defaultCapabilities: 231, application: app, env: env)
+try await DelegatedAccounts.governGroup(session, groupId: sub, op: GovernanceOps.groupMetadataSet(name: "general"), env: env)
+let dm = try await DelegatedAccounts.createDelegatedPrivateContext(
+    session, CreateDelegatedContextRequest(namespaceId: ns, applicationId: appId), members: [bob], env: env)
+```
+
+The founding relay is **attested now**, never trusted from a pin: it becomes
+the namespace's first TEE and holds its keys. Its executor account is the
+session's, or the one discovery names on a namespace remembered on that relay —
+only when discovery names the attested key. HA is asked for when the relay
+attested the founding; a refusal is reported in words
+(`CloudClient.haRefusalMessages`, `haAccountNotLinkedMessage`), never thrown.
+
+## Redeeming an invitation
+
+```swift
+let outcome = await admin.redeemInvitation(nsId, invitation: invitation, teamName: "Team")
+switch outcome {
+case .joined, .alreadyMember: showTeam()
+case .failed(_, let message, let reason, _): show(message, reason)   // expired, invalid, refused, signedOut…
+}
+if outcome.shouldRetain { keep(invitation) }
+```
+
+A join whose request failed but whose namespace is then listed is
+`alreadyMember`. An account's `joinNamespace` runs `joinAsAccount`:
+
+```swift
+var deps = AccountAdminDeps.live(env)
+deps.join = { ns, invitation in
+    try await DelegatedAccounts.joinAsAccount(session, namespaceId: ns, invitation: invitation, env: env) { moved in
+        Task { await adopt(moved) }   // the session is now on the admitting relay
+    }
+}
+```
+
+A refused bootstrap throws a `BootstrapFailure` whose `step` says what to do:
+`admitters-lookup` (the cloud read failed), `no-nodes` (the cloud lists none —
+an address on the invitation is unsigned and never stands in), `not-invited`
+(ask for a fresh invitation), `no-relay-url` (try shortly), `sign`, `admit`
+(with the node's `status`), or `no-credential`.
+
+<Aside>
+These helpers are the native analog of mero-js's `sessionStorage` /
+`localStorage` records: the store is per app install rather than per tab, and
+a store that cannot write never turns a known relay back into an unknown one.
+</Aside>

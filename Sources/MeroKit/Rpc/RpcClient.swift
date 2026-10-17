@@ -10,17 +10,32 @@ public struct MigrateMyEntriesSummary: Codable, Sendable, Equatable {
 public enum RpcTransportKind: String, Sendable, Equatable {
     /// Straight to a node's `/jsonrpc`.
     case node
+    /// Through a relay, as a warranted intent (or a session query for a read).
+    case relay
 }
 
-/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:)``.
+/// The result of ``RpcClient/executeWithMetadata(contextId:method:argsJson:)``,
+/// and of any ``ExecuteTransport``. (== mero-js `ExecuteResult`.)
 public struct RpcExecuteResult<T: Sendable>: Sendable {
+    /// Exactly what `execute` would have returned.
     public let returns: T
+    /// Which transport ran it.
     public let transport: RpcTransportKind
-    public init(returns: T, transport: RpcTransportKind) {
+    /// The context's scope root after the run, hex — relay writes only.
+    ///
+    /// `nil` on the node transport because JSON-RPC `execute` does not report
+    /// it, and on a relay read because nothing was written. `nil` therefore
+    /// means "unknown here", never "nothing changed".
+    public let rootHash: String?
+
+    public init(returns: T, transport: RpcTransportKind, rootHash: String? = nil) {
         self.returns = returns
         self.transport = transport
+        self.rootHash = rootHash
     }
 }
+
+extension RpcExecuteResult: Equatable where T: Equatable {}
 
 /// JSON-RPC 2.0 client for contract `execute` calls. (== mero-js `rpc/index.ts`.)
 ///
@@ -94,6 +109,45 @@ public struct RpcClient: Sendable {
             throw MeroError.emptyResponse("JSON-RPC result had no output")
         }
         return output
+    }
+
+    private struct CallRequest<Params: Encodable>: Encodable {
+        let jsonrpc = "2.0"
+        let id = 1
+        let method: String
+        let params: Params
+    }
+
+    private struct CallResponse: Decodable {
+        let result: JSONValue?
+        let error: Response<JSONValue>.RPCErr?
+    }
+
+    /// Call any JSON-RPC method on `/jsonrpc` and return its `result` (`nil`
+    /// when the node sent none). A JSON-RPC `error` object throws
+    /// ``MeroError/rpc(_:)``, keeping the node's `type` and `data`.
+    /// (== mero-js `jsonRpcCall`.)
+    @discardableResult
+    public func call<Params: Encodable & Sendable>(_ method: String, params: Params) async throws -> JSONValue? {
+        let bodyData = try MeroJSON.encode(CallRequest(method: method, params: params))
+        let (data, _) = try await http.sendRaw(HttpRequest(path: "/jsonrpc", method: .post, body: .json(bodyData)))
+        let decoded: CallResponse
+        do {
+            decoded = try MeroJSON.decode(CallResponse.self, from: data)
+        } catch {
+            let snippet = String(decoding: data.prefix(200), as: UTF8.self)
+            throw MeroError.decoding("JSON-RPC response: \(snippet)")
+        }
+        if let err = decoded.error {
+            throw MeroError.rpc(
+                RpcError(
+                    code: err.code ?? -1,
+                    message: err.message ?? Self.describe(type: err.type, data: err.data) ?? "RPC error",
+                    type: err.type,
+                    data: err.data
+                ))
+        }
+        return decoded.result
     }
 
     /// Execute, returning the output together with how it was carried.

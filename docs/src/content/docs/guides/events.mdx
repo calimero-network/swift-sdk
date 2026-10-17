@@ -66,10 +66,63 @@ So the frame tells you *that* state moved and the nested `events[]` tell you
 
 ## Reconnection
 
-The stream reconnects automatically ~3 seconds after a drop and re-subscribes to
-your context ids (the node persists the session's subscriptions). You don't need
-to rebuild the stream on a transient network blip — the `for try await` loop
-keeps delivering events across reconnects.
+The stream reconnects automatically after a drop and re-subscribes your ids on
+the new session. You don't need to rebuild the stream on a transient network
+blip — the `for try await` loop keeps delivering events across reconnects.
+
+The first reconnect waits 3 seconds (mero-js's `reconnectDelayMs`). While the
+node keeps refusing or stays unreachable, each further attempt doubles the wait
+up to 30 seconds, with ±20% jitter so a fleet of clients does not retry in
+step; once a stream opens, the next drop waits 3 seconds again. Pass
+`backoff: .fixed(3)` to `SseClient` / `SseConnection` for mero-js's flat delay.
+
+A `403` — or a `401` whose `x-auth-error` names a dead token family — is
+terminal: the stream finishes with that `MeroError` instead of retrying a
+credential that can never work.
+
+## One connection, changing subscriptions
+
+Each `mero.events(...)` call opens its own connection for a fixed set of ids.
+To add and drop contexts while one connection runs — a chat list whose rooms
+come and go — use the instance's shared `mero.sse`:
+
+```swift
+let sse = mero.sse
+sse.connect()
+try await sse.subscribe(contextIds: [roomA])
+try await sse.subscribe(contextIds: [roomB], groupIds: [team])
+try await sse.unsubscribe(contextIds: [roomA])
+sse.isSubscribed(roomB)   // true
+
+for try await event in sse.events() { … }
+```
+
+`subscribe` and `unsubscribe` send only what changed, to the live session
+(`POST /sse/subscription`, 10 s timeout). Every remembered id is re-subscribed
+after a reconnect, and `.connect(sessionId:)` on `sse.updates()` is announced
+once that has landed.
+
+## Typed events
+
+```swift
+for try await change in mero.appVersionChanges(contextIds: [contextId]) {
+    print(change.fromVersion ?? "?", "→", change.toVersion ?? "?")
+}
+
+for try await migration in mero.migrationEvents(groupIds: [namespaceId]) {
+    switch migration {
+    case .migrationStarted(_, let started): print("to", started.toVersion)
+    case .migrationProgress(_, let progress): print(progress.migrated, "/", progress.total)
+    case .cascadeProgress(_, let cascade): print(cascade.subgroupId)   // admins only
+    case .migrationCompleted(_, let done): print("done at", done.completedAt)
+    }
+}
+```
+
+On a shared connection the same are `sse.appVersionChanges()`,
+`sse.migrationEvents()`, `sse.membershipEvents()`, and the callback forms
+`sse.onAppVersionChanged { … }` / `sse.onMigrationEvent { … }`, which return
+the closure that removes the handler.
 
 ## Closing the stream
 
@@ -80,11 +133,10 @@ to close the SSE connection:
 task.cancel()   // closes the connection
 ```
 
-<Aside type="caution">
-  `mero.close()` and `mero.logout()` do **not** stop an in-flight event stream.
-  Track the `Task` you started the loop in and cancel it on teardown (for
-  example in SwiftUI, start the loop in `.task { }` so the framework cancels it
-  when the view disappears).
+<Aside type="note">
+  `mero.close()` and `mero.logout()` end every event stream the instance
+  started. For a stream tied to one screen, still start the loop in `.task { }`
+  so SwiftUI cancels it when the view disappears.
 </Aside>
 
 ## In SwiftUI
@@ -118,4 +170,5 @@ struct MessagesView: View {
 ## See also
 
 - [RPC client](/reference/rpc/) — trigger the state changes you're observing.
-- [Events reference](/reference/events/) — `SseClient` and the full API surface.
+- [Events reference](/reference/events/) — `SseClient`, `SseConnection`, `WsClient` and the full API surface.
+- [Presence](/guides/presence/) — ephemeral presence over the same connection.

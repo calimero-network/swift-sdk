@@ -80,12 +80,21 @@ public struct RelayChoice: Sendable, Equatable {
     public let note: String?
 }
 
-/// The Calimero Cloud manager, for the reads a device-only mobile client needs:
-/// which relays serve this account, and which nodes serve a namespace.
+/// The Calimero Cloud manager (MDMA). Port of mero-js `CloudClient`.
 ///
-/// Port of the device-proven half of mero-js `CloudClient`. Both reads are
-/// proven by the **device certificate** — a challenge from the cloud, signed by
-/// the device key — not by a cloud login session.
+/// Two halves, proven differently:
+///
+/// - **Device-proven reads** — which relays serve this account, which nodes
+///   serve a namespace — carry a challenge signed by the device key
+///   (``routingCredential``), not a login.
+/// - **Signed-in routes** (`/api/cloud/me/...`, HA, account linking) carry an
+///   MDMA session token as a Bearer. Get one with ``signInWithGoogle(_:)`` or
+///   ``signInWithAccount(_:)``, or hand a stored one in as `sessionToken`. MDMA
+///   rolling-refreshes it in response headers, and the client adopts the
+///   replacement; `sessionStore` and `onSession` see every change.
+///
+/// A struct, but copies share one session: the token lives in a reference the
+/// copies hold together.
 public struct CloudClient: Sendable {
     public static let defaultBaseURL = URL(string: "https://manager.cloud.calimero.network")!
 
@@ -95,17 +104,34 @@ public struct CloudClient: Sendable {
 
     public let baseURL: URL
     public let routingCredential: RoutingCredential?
-    private let session: URLSession
-    private let timeout: TimeInterval
+    let session: URLSession
+    let timeout: TimeInterval
+    let loginState: CloudLoginState
 
+    /// - Parameters:
+    ///   - baseURL: the manager API (``defaultBaseURL``), not the web app.
+    ///   - routingCredential: the device certificate that proves routing reads.
+    ///   - sessionToken: a stored MDMA token to start signed in with. Its
+    ///     expiry is unknown until the server says (`expiresAt == 0`).
+    ///   - sessionStore: where the login session is kept (e.g.
+    ///     ``CloudClient/keychainSessionStore(account:service:accessGroup:)``).
+    ///     Read at start when no `sessionToken` is given; written on every
+    ///     sign-in and rolling refresh, cleared on sign-out.
+    ///   - onSession: called with every new session, and `nil` on sign-out.
     public init(
         baseURL: URL = CloudClient.defaultBaseURL, routingCredential: RoutingCredential? = nil,
+        sessionToken: String? = nil, sessionStore: AnyValueStore<CloudLoginSession>? = nil,
+        onSession: (@Sendable (CloudLoginSession?) -> Void)? = nil,
         session: URLSession = .shared, timeout: TimeInterval = 10
     ) {
         self.baseURL = baseURL
         self.routingCredential = routingCredential
         self.session = session
         self.timeout = timeout
+        let initial =
+            sessionToken.map { CloudLoginSession(sessionToken: $0, expiresAt: 0, user: CloudUser(email: "")) }
+            ?? sessionStore?.load()
+        self.loginState = CloudLoginState(initial: initial, store: sessionStore, onSession: onSession)
     }
 
     // MARK: - Routing proof
@@ -134,7 +160,7 @@ public struct CloudClient: Sendable {
     /// `GET /api/cloud/accounts/{account}/challenge` — public; the nonce is
     /// sealed to this account.
     public func getAccountRelaysChallenge(_ accountId: String) async throws -> RoutingChallenge {
-        let body = try await getJSON("/api/cloud/accounts/\(escape(accountId))/challenge")
+        let body = try await request("GET", "/api/cloud/accounts/\(escape(accountId))/challenge", anonymous: true)
         return RoutingChallenge(
             boundTo: body["account_id"]?.stringValue ?? accountId,
             nonce: body["nonce"]?.stringValue ?? "",
@@ -150,7 +176,8 @@ public struct CloudClient: Sendable {
         }
         let challenge = try await getAccountRelaysChallenge(accountId)
         let headers = try Self.routingProofHeaders(challenge: challenge, credential: routingCredential)
-        let body = try await getJSON("/api/cloud/accounts/\(escape(accountId))/relays", headers: headers)
+        let body = try await request(
+            "GET", "/api/cloud/accounts/\(escape(accountId))/relays", anonymous: true, headers: headers)
         return (body["relays"]?.arrayValue ?? []).map { row in
             CloudAccountRelay(
                 peerId: row["peer_id"]?.stringValue ?? "",
@@ -192,7 +219,7 @@ public struct CloudClient: Sendable {
 
     /// `GET /api/cloud/namespaces/{ns}/challenge` — public.
     public func getRoutingChallenge(_ namespaceId: String) async throws -> RoutingChallenge {
-        let body = try await getJSON("/api/cloud/namespaces/\(escape(namespaceId))/challenge")
+        let body = try await request("GET", "/api/cloud/namespaces/\(escape(namespaceId))/challenge", anonymous: true)
         return RoutingChallenge(
             boundTo: body["namespace_id"]?.stringValue ?? namespaceId,
             nonce: body["nonce"]?.stringValue ?? "",
@@ -208,7 +235,8 @@ public struct CloudClient: Sendable {
             let challenge = try await getRoutingChallenge(namespaceId)
             headers = try Self.routingProofHeaders(challenge: challenge, credential: routingCredential)
         }
-        let body = try await getJSON("/api/cloud/namespaces/\(escape(namespaceId))/admitters", headers: headers)
+        let body = try await request(
+            "GET", "/api/cloud/namespaces/\(escape(namespaceId))/admitters", anonymous: true, headers: headers)
         let nodes = (body["admitters"]?.arrayValue ?? []).map { row -> CloudNamespaceNode in
             let account = row["account"]?.stringValue
             let relayUrl = row["relay_url"]?.stringValue
@@ -247,20 +275,27 @@ public struct CloudClient: Sendable {
 
     // MARK: - HA for a founded namespace
 
-    /// What to tell a person for each `enable-ha` refusal the cloud names. Every
-    /// one leaves the namespace founded; only hosting was refused.
+    /// What an app can tell a person whose account the cloud cannot place.
+    /// (== mero-js `HA_ACCOUNT_NOT_LINKED_MESSAGE`.)
+    public static let haAccountNotLinkedMessage =
+        "link this account to your cloud user in the wallet so the cloud can host this namespace on its fleet"
+
+    /// What to tell a person for each `enable-ha` refusal the cloud names, keyed
+    /// by its code. Every one leaves the namespace founded; only hosting was
+    /// refused. (== mero-js `HA_REFUSAL_MESSAGES`.)
     public static let haRefusalMessages: [String: String] = [
-        "account_not_linked":
-            "Link this account to your cloud user in the wallet so invitees can find this namespace.",
+        "account_not_linked": haAccountNotLinkedMessage,
         "account_linked_to_several_users":
-            "This account is linked to more than one cloud user, so the cloud cannot tell whose plan hosts the "
-            + "namespace: unlink it from all but one in the wallet.",
+            "this account is linked to more than one cloud user, so the cloud cannot tell whose plan hosts the "
+            + "namespace: unlink it from all but one in the wallet",
         "ha_request_pending":
-            "Another namespace of this account is still waiting to be hosted; the cloud hosts one new namespace at "
-            + "a time without a cloud sign-in.",
-        "unknown_relay": "The cloud does not run the relay this namespace was founded on, so it cannot host it.",
+            "another namespace of this account is still waiting to be hosted; the cloud hosts one new namespace at "
+            + "a time without a cloud sign-in. Sign in to the cloud and turn off hosting for the waiting namespace, "
+            + "or wait until it is hosted",
+        "unknown_relay": "the cloud does not run the relay this namespace was founded on, so it cannot host it",
         "relay_not_dialable":
-            "The relay this namespace was founded on has not reported its address to the cloud yet; try again shortly.",
+            "the relay this namespace was founded on has not reported its address to the cloud yet; try enabling "
+            + "hosting again shortly",
     ]
 
     /// Statuses whose `{"error": code}` names an ``AccountError/haRefused(code:status:body:)``.
@@ -308,25 +343,44 @@ public struct CloudClient: Sendable {
 
     // MARK: - Transport
 
-    private func escape(_ segment: String) -> String {
+    func escape(_ segment: String) -> String {
         segment.addingPercentEncoding(
             withAllowedCharacters: .urlPathAllowed.subtracting(CharacterSet(charactersIn: "/")))
             ?? segment
     }
 
-    private func getJSON(_ path: String, headers: [String: String] = [:]) async throws -> JSONValue {
-        var base = baseURL.absoluteString
-        while base.hasSuffix("/") { base.removeLast() }
-        guard let url = URL(string: base + path) else {
-            throw AccountError.invalidInput("bad cloud URL \(base + path)")
+    /// One call to the manager. Signed-in unless `anonymous`: refused locally,
+    /// with no round trip, when nobody is signed in. Caller headers never
+    /// displace `Accept`, `Content-Type` or the session's `Authorization`. A
+    /// rolling-refreshed token in the response — a failed one included — is
+    /// adopted before anything else. `parse: false` ignores the body.
+    func request(
+        _ method: String, _ path: String, body: JSONValue? = nil, anonymous: Bool = false,
+        headers: [String: String] = [:], parse: Bool = true
+    ) async throws -> JSONValue {
+        let current = loginState.get()
+        if !anonymous, current == nil {
+            throw AccountError.notSignedIn(
+                "Not signed in to Calimero Cloud: call signInWithGoogle(_:) or signInWithAccount(_:), or construct "
+                    + "the client with a sessionToken")
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = timeout
-        for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
-        // Set last so a caller header can never displace it.
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        return try await AccountHTTP.send(request, session: session)
+        var urlRequest = AccountHTTP.jsonRequest(
+            try AccountHTTP.url(baseURL.absoluteString, path), method: method, body: body, headers: headers,
+            timeout: timeout)
+        if !anonymous, let current {
+            urlRequest.setValue("Bearer \(current.sessionToken)", forHTTPHeaderField: "Authorization")
+        }
+        let data: Data
+        let head: HeadResult
+        do {
+            (data, head) = try await AccountHTTP.sendRaw(urlRequest, session: session)
+        } catch MeroError.http(let http) {
+            loginState.adoptRollingRefresh(http.headers)
+            throw MeroError.http(http)
+        }
+        loginState.adoptRollingRefresh(head.headers)
+        guard parse else { return .null }
+        return try AccountHTTP.decode(data, status: head.status)
     }
 
     static func accountHexOrNil(_ value: String?) -> String? {
@@ -340,12 +394,17 @@ public struct CloudClient: Sendable {
 enum AccountHTTP {
     static func send(_ request: URLRequest, session: URLSession) async throws -> JSONValue {
         let (data, head) = try await sendRaw(request, session: session)
-        if data.isEmpty || head.status == 204 { return .null }
+        return try decode(data, status: head.status)
+    }
+
+    /// A response body as JSON; empty (or `204`) is `.null`.
+    static func decode(_ data: Data, status: Int) throws -> JSONValue {
+        if data.isEmpty || status == 204 { return .null }
         do {
             return try MeroJSON.decode(JSONValue.self, from: data)
         } catch {
             let snippet = String(decoding: data.prefix(200), as: UTF8.self)
-            throw MeroError.decoding("status \(head.status): \(snippet)")
+            throw MeroError.decoding("status \(status): \(snippet)")
         }
     }
 

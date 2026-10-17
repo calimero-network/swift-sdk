@@ -184,6 +184,9 @@ let attest  = try await mero.admin.teeAttest(
   TeeAttestRequest(nonce: nonce, includeCollateral: true))      // quoteB64, quote, collateral
 ```
 
+`createQuoteVerifier(_:)` and `Dcap.verify(_:collateral:nowSecs:)` do that
+verification on the device — see [TEE trust](/guides/tee-trust/).
+
 ## Upgrades & migration
 
 ```swift

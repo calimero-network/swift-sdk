@@ -1,0 +1,125 @@
+---
+title: Presence
+description: Ephemeral presence — typing, cursors, who is here — with mero.ephemeral on a node and RelayPresenceClient for a Cloud account, both read off the SSE connection.
+sidebar:
+  order: 4
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Presence is transient, never-persisted state — who is online, who is typing,
+where a cursor is — that gossips between members without running the app or
+growing the DAG. Each author has one slot per context, replaced wholesale on
+every write; the node expires a slot 7 seconds after its author was last heard
+from.
+
+You only ever write **your own** slot, and you read **everyone's**. There are
+two writers, depending on how you are connected; both read the same way.
+
+## On a node: `mero.ephemeral`
+
+```swift
+struct Typing: Codable, Sendable { let typing: Bool }
+
+let ephemeral = await mero.ephemeral
+
+// Write your slot (JSON-RPC `set_ephemeral`).
+try await ephemeral.set(contextId: contextId, state: Typing(typing: true))
+
+// Read everyone's.
+for try await entry in ephemeral.subscribe(contextId: contextId, as: Typing.self) {
+    if entry.removed {
+        typing[entry.author] = nil
+    } else {
+        typing[entry.author] = entry.state?.typing
+    }
+}
+```
+
+`set` sends `{contextId, state: [UInt8]}`; the node resolves the author from
+its own identity in the context, which is why the call names none. A slice
+over 16 384 bytes, or a context the node is not a member of, throws
+`MeroError.rpc` with the node's `type` (`SliceTooLarge`, `Unauthorized`) and
+`data`.
+
+Each `EphemeralEntry` carries `author` (the peer's signing key), `account`
+(set when a relay carried an account's update), `state` (`nil` on a removal),
+`removed`, and `ageMs`. `ageMs` is set only on an entry the node **replayed**
+when the context was subscribed — milliseconds since that author was last heard
+from — and is `nil` on a live update; it is never `0` by default.
+
+### Late subscribers still see everyone
+
+The node replays a context's presence once, when the context is first
+subscribed on a connection. `subscribe` reads off the instance's one shared
+connection (`mero.sse`), which keeps that replay and every live update since;
+a presence subscriber that arrives after another view already subscribed the
+context gets the kept entries first, each `ageMs` advanced by the time since
+it arrived. `mero.sse.presenceSeed(contextId)` returns them raw. A reconnect
+clears the kept entries — the re-subscribe brings a fresh replay — and
+`unsubscribe` forgets them.
+
+### Codecs
+
+The node never reads the slice: its encoding travels client to client.
+`JSONCodec<T>` (the default, as mero-js's `jsonCodec`) writes JSON text as
+bytes. For another encoding, conform to `Codec`:
+
+```swift
+struct RawCodec: Codec {
+    func encode(_ value: [UInt8]) throws -> [UInt8] { value }
+    func decode(_ bytes: [UInt8]) throws -> [UInt8] { bytes }
+}
+try await ephemeral.set(contextId: contextId, state: [1, 2, 3], codec: RawCodec())
+```
+
+## As a Cloud account: `RelayPresenceClient`
+
+An account has no node of its own, so its presence goes through its relay.
+Every `CloudConnection` with a relay carries a `presence` client:
+
+```swift
+let connection = await signIn.connect(session)
+guard let presence = connection.presence else { return }  // relayless
+
+try await presence.set(contextId: contextId, state: Typing(typing: true))
+// … resent every 2.5 s while set …
+try await presence.set(contextId: contextId, state: Typing?.none)  // retract
+
+for try await entry in presence.subscribe(contextId: contextId, as: Typing.self) { … }
+
+await presence.close()   // stop every resend
+```
+
+Each update is a `calimero/presence/1` statement the device key signs —
+`domain ‖ context ‖ author ‖ u64le(seq) ‖ u64le(sentAtMs) ‖ sha256(borsh(Option<state>))`,
+byte-identical with core and mero-js — posted to
+`POST /admin-api/contexts/{id}/presence-intents`. The relay checks it, then
+seals and gossips it; other members verify the device signature and
+certificate themselves, so the relay can neither invent nor alter an
+account's presence.
+
+- `seq` starts at the wall clock in milliseconds and only rises, so a relay
+  restart never sees an old one.
+- A `429`, a `5xx` or a network failure is not thrown: the next resend covers
+  it. Any other refusal (`403` not a member or revoked; `400` malformed, or a
+  clock outside the relay's window) is thrown by the first `set` and stops the
+  resends.
+- A newer `set`, a retract or `close()` always wins over an older `set` whose
+  first post is still in flight.
+
+`subscribe` reads the relay `Mero`'s `sse`; it fails at once when the
+connection has no read session (see `CloudConnection.readNote`). Publishing
+needs no read session.
+
+<Aside type="note">
+  To sign a single statement yourself, `PresenceStatement.signedIntent(...)`
+  builds the body, `RelayClient.presenceIntent(contextId:state:seq:sentAtMs:)`
+  signs and posts it, and `AdminApi.postPresenceIntent(_:state:seq:sentAtMs:keys:authorProof:)`
+  does the same over a `Mero`. No caller assembles a signature by hand.
+</Aside>
+
+## See also
+
+- [Live events](/guides/events/) — the SSE connection presence rides on.
+- [Events reference](/reference/events/) — `SseConnection`, `EphemeralClient`, `RelayPresenceClient`.

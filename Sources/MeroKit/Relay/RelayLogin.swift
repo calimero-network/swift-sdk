@@ -112,22 +112,22 @@ public struct RelayAttestation: Sendable {
 /// Decides whether to trust the node key a relay attested to.
 ///
 /// The login statement names the relay's node key, and that key must not come
-/// from the party being logged in to on trust alone. mero-js verifies the TDX
-/// DCAP quote against a signed mero-tee release. **That is not ported yet**: the
-/// default here, ``TLSRelayKeyVerifier``, checks that the quote is bound to this
-/// request and to the key named, and otherwise trusts the TLS connection to the
-/// relay URL the Cloud manager returned.
-///
-/// TODO(follow-up): DCAP quote verification on mobile (Intel PCK chain +
-/// mero-tee release measurements), or a signed node key published by the cloud
-/// beside `relay_url`. Warranted writes do not depend on this — only Bearer
-/// reads and SSE do.
+/// from the party being logged in to on trust alone. The default,
+/// ``DcapRelayKeyVerifier``, does what mero-js does: it verifies the TDX DCAP
+/// quote on the device (Intel's PCK chain, CRLs, TCB info and QE identity, the
+/// QE report and the quote's signature), checks its registers against the
+/// signed mero-tee release the relay names (cosign keyless, verified against
+/// the embedded Sigstore trust root), and only then reads the key binding.
+/// ``TLSRelayKeyVerifier`` is the older TLS-only check, kept for dev rigs and
+/// tests; ``PinnedRelayKeyVerifier`` takes a key pinned out of band.
 public protocol RelayKeyVerifier: Sendable {
     /// Return the node key (64 hex) to log in with, or throw to refuse.
     func verify(_ attestation: RelayAttestation) async throws -> String
 }
 
-/// The v1 mobile verifier: TLS + report-data binding, no quote signature check.
+/// The TLS-only verifier: report-data binding, no quote signature check. It
+/// trusts the TLS connection to the relay URL the Cloud manager returned for
+/// everything the binding does not prove; prefer ``DcapRelayKeyVerifier``.
 ///
 /// It still refuses what it can decide locally:
 /// - a quote whose report data does not carry this request's nonce, or does not
@@ -202,7 +202,7 @@ public enum RelayNodeKey {
 
     /// Ask the relay to attest, and hand the answer to `verifier`.
     public static func attest(
-        relayURL: String, verifier: any RelayKeyVerifier = TLSRelayKeyVerifier(), session: URLSession = .shared,
+        relayURL: String, verifier: any RelayKeyVerifier = DcapRelayKeyVerifier(), session: URLSession = .shared,
         timeout: TimeInterval = 15
     ) async throws -> String {
         let nonce = Hex.encode(randomBytes(32))

@@ -1,0 +1,111 @@
+---
+title: Signing owner ops
+description: Root proofs for owner-level governance (transfer, delete, admin change, TEE policies), minted by the SDK from the account root, and device scopes for a nodeless account.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A device key speaks for its account everywhere in governance — so, before core
+rc.83, a stolen device could promote an accomplice, transfer a group to them
+and remove the owner. Core now refuses the ops that can do that unless they
+carry a proof signed by the account's **root** key, which a device does not hold:
+
+| Op | Who | Route |
+| --- | --- | --- |
+| `transferOwnership` | owner | `POST /admin-api/groups/:id/transfer-ownership` |
+| `ownerDeleteGroup` | owner | `POST /admin-api/groups/:id/owner-delete` |
+| `changeNamespaceAdmin` | owner | `POST /admin-api/namespaces/:id/admin` |
+| `setTeeAdmissionPolicy` | admin's own root | `PUT …/settings/tee-admission-policy` |
+| `setTeeAuthoringPolicy` / `disableTeeAuthoringPolicy` | admin's own root | `PUT`/`DELETE …/settings/tee-authoring-policy` |
+
+A node that holds the account root (`merod init` provisions one) signs the
+proof itself: call these with no proof. For a nodeless account, or a root kept
+on the phone, MeroKit signs it.
+
+## Let the SDK sign
+
+Pass the root (see [Account roots](/guides/account-roots/)) and the SDK does
+the rest: it reads `namespaceId` and `ownerOpCounter` with `getGroupInfo`,
+builds the op exactly as the node will, signs, and sends it as `rootProof`.
+
+```swift
+let admin = await mero.admin
+let root = RootSource.signer(accountRoot.signer)   // or .secret(hex)
+
+try await admin.transferOwnership(groupId, newOwner: newOwnerAccount, root: root)
+try await admin.ownerDeleteGroup(groupId, root: root)
+try await admin.changeNamespaceAdmin(namespaceId, newAdmin: account, root: root)
+try await admin.setTeeAuthoringPolicy(namespaceId, allowedMrtd: mrtds, root: root)
+try await admin.disableTeeAuthoringPolicy(namespaceId, root: root)
+try await admin.setTeeAdmissionPolicy(
+    namespaceId,
+    request: .signedRelease(SignedReleaseTeePolicy(allowedProfiles: ["locked-read-only"]),
+                            allowedTcbStatuses: ["UpToDate"]),
+    root: root)
+```
+
+Each proof is **single-use**: it names the group's guarded-op counter, which
+the node advances once the op applies. A `409` means the counter moved between
+the read and the send — call again. `403` means a proof was needed (or named
+another account), `400` a malformed one. A root that has been handed off signs
+at a later `keyEpoch`, passing the `chain` of `RootKeyHandoff`s (hex) that
+reaches it.
+
+## Sign it yourself
+
+The raw-`rootProof` forms stay for a proof signed elsewhere — offline, by a
+cold root:
+
+```swift
+let info = try await admin.getGroupInfo(groupId)
+let proof = try await signOwnerOpProof(OwnerOpProofInput(
+    root: .secret(rootSecret),
+    namespaceId: info.namespaceId!,
+    groupId: groupId,                         // the namespace root for adminChanged / TEE
+    op: try transferOwnershipOp(newOwner),
+    counter: info.ownerOpCounter!))
+try await admin.transferOwnership(groupId, request: TransferOwnershipRequest(newOwner: newOwner, rootProof: proof))
+```
+
+The encoders are `transferOwnershipOp`, `groupDeleteOp`, `adminChangedOp` (a
+root-plane op), `teeAuthoringPolicyOp`, `teeAdmissionPolicyOp` and
+`teeReleaseAdmissionPolicyOp`; `SetTeeAdmissionPolicyRequest.ownerOp()` builds
+the one the node builds from a request (its `minReleaseVersion` normalised as
+core normalises it). `ownerOpDigest`, `ownerOpSigningPayload` and
+`rootGuardedOpBytes` expose each stage. The proof is the hex borsh of core's
+`AccountProof<OwnerOpAuthorization>`:
+
+```text
+AccountGenesis { version u8 = 2, root_pk [32] }
+chain          u32 count, then 132-byte RootKeyHandoffs
+OwnerOpAuthorization { account [32], namespace_id [32], group_id [32], kind u8,
+                       op_digest [32], counter u64, key_epoch u32, signature [64] }
+```
+
+`OwnerOpKind`'s raw value is the byte signed: `transferOwnership` 0,
+`adminChanged` 1, `groupDelete` 2, `teeAdmissionPolicy` 3,
+`teeAuthoringPolicy` 4, `teeReleaseAdmissionPolicy` 5.
+
+## Scoping a device
+
+The device certificate says *this key is a device of the account*; a **scope**
+says which applications it may speak for. A namespace binds a device only when
+both arrive together.
+
+```swift
+let link = try await admin.linkAccountDevice(
+    namespaceId, credential: deviceCertificateHex,
+    scope: DeviceScopeInput(signer: accountRoot.signer, device: deviceId,
+                            applications: [applicationId]))   // [] = every application
+```
+
+`signDeviceScope(_:)` returns the hex `AccountProof<DeviceScope>` on its own,
+and `deviceScopePayload` the 32 bytes it signs. A higher `scopeEpoch`
+supersedes an earlier scope.
+
+<Aside>
+`rescopeDevice` needs no signature from the app: core signs the new scope on
+the node holding the account root, which is the only node that route runs on.
+</Aside>

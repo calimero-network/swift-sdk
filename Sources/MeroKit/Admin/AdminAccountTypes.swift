@@ -114,6 +114,20 @@ public struct ListMemberDevicesResponseData: Codable, Sendable {
     public init(members: [MemberDevicesEntry]) { self.members = members }
 }
 
+/// What a namespace has revoked: devices tombstoned there, and the slots of
+/// devices their own account withdrew. (== mero-js `NamespaceRevokedDevices`,
+/// core `NamespaceRevokedDevicesApiResponse`.)
+public struct NamespaceRevokedDevices: Codable, Sendable, Equatable {
+    /// Device ids (64 hex) revoked in the namespace.
+    public let revokedDevices: [String]
+    /// Hex `sha256(account || device)` of each device its own account withdrew
+    /// in the namespace without a tombstone.
+    public let withdrawnSlots: [String]
+    public init(revokedDevices: [String], withdrawnSlots: [String]) {
+        self.revokedDevices = revokedDevices; self.withdrawnSlots = withdrawnSlots
+    }
+}
+
 // MARK: - Account: devices, applications, pairing, relink, revoke
 //         (core 0.11.0-rc.26 … rc.28; the routes moved from
 //          /namespaces/{id}/account/* to /account/*)

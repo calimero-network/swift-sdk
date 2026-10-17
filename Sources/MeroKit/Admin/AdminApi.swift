@@ -696,6 +696,17 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "revokeDevice")
     }
 
+    /// The devices revoked in a namespace and the slots withdrawn there
+    /// (`GET /admin-api/namespaces/:namespace_id/revoked-devices`). A subgroup
+    /// id resolves to its namespace. `403` unless this node holds an account
+    /// bound in the namespace.
+    ///
+    /// The handler serializes the payload directly: there is no `{ data }`
+    /// envelope. (== mero-js `listNamespaceRevokedDevices`.)
+    public func listNamespaceRevokedDevices(_ namespaceId: String) async throws -> NamespaceRevokedDevices {
+        try await http.get("/admin-api/namespaces/\(namespaceId.percentEncoded())/revoked-devices")
+    }
+
     // MARK: - Account (devices, applications, pairing)
     //
     // These moved in core 0.11.0-rc.28: pairing used to be namespace-scoped
@@ -1312,6 +1323,19 @@ public struct AdminApi: Sendable {
     public func postPresenceIntent(_ contextId: String, request: PresenceIntentRequest) async throws {
         try await http.sendVoid(
             jsonRequest("/admin-api/contexts/\(contextId)/presence-intents", method: .post, body: request))
+    }
+
+    /// Sign a presence update with the device key in `keys` and post it
+    /// (``PresenceStatement/signedIntent(contextId:state:seq:sentAtMs:keys:authorProof:)``),
+    /// so the caller supplies no signature. `state` is the encoded slice, or
+    /// `nil` to retract; `seq` must rise per context (``RelayPresenceClient``
+    /// seeds it from the clock).
+    public func postPresenceIntent(
+        _ contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64, keys: DeviceKeys, authorProof: String
+    ) async throws {
+        let request = try PresenceStatement.signedIntent(
+            contextId: contextId, state: state, seq: seq, sentAtMs: sentAtMs, keys: keys, authorProof: authorProof)
+        try await postPresenceIntent(contextId, request: request)
     }
 
     /// What this node can do to create a context in `groupId` on a member's

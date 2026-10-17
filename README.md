@@ -3,8 +3,9 @@
 Native Swift SDK for building iOS apps against a **remote** [Calimero](https://calimero.network)
 node. It's a faithful port of [`@calimero-network/mero-js`](https://github.com/calimero-network/mero-js)'s
 wire contract — auth + token refresh, JSON-RPC contract calls, the admin API,
-SSO deep-link login, and live SSE events — in idiomatic `async/await` Swift, with
-an optional SwiftUI layer (`MeroKitUI`).
+SSO deep-link login, live SSE events (and an experimental WebSocket client) and
+ephemeral presence — in idiomatic `async/await` Swift, with
+an optional SwiftUI layer (`MeroKitUI`) that ports mero-react's app layer.
 
 The device is a **thin client**: it never runs a node. Every capability is an
 HTTP(S) call to a remote node's endpoints.
@@ -81,6 +82,19 @@ targets: [
 
 Or in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
 
+For your own tests, the `MeroKitTestSupport` product ships the SDK's test
+doubles — `FakeNode` (a stateful fake node: login, refresh, revoke, logout,
+JSON-RPC) and `MockURLProtocol`. Add it to a test target only:
+
+```swift
+.testTarget(name: "MyAppTests", dependencies: [
+    "MyApp",
+    .product(name: "MeroKitTestSupport", package: "swift-sdk"),
+]),
+```
+
+It is SPM-only, like `MeroKitUI`; the CocoaPods spec ships `MeroKit` alone.
+
 ## Sign in with Calimero Cloud (mobile)
 
 Mobile apps sign in with **Calimero Cloud** only: the person approves this
@@ -107,8 +121,9 @@ relay's Bearer session (admin reads, SSE). See
 
 > The hosted wallet returns only to `https://` callbacks today; app-scheme
 > callbacks are a pending wallet change. The SDK accepts either. The relay's
-> node key is taken from its TEE attestation over TLS; full DCAP quote
-> verification is a follow-up (pluggable via `RelayKeyVerifier`).
+> node key is taken from its TEE attestation only once its DCAP quote verifies
+> on the device against the signed mero-tee release it runs
+> (`DcapRelayKeyVerifier`, the default `RelayKeyVerifier`).
 
 ## Quick start (development node)
 
@@ -156,6 +171,14 @@ if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
 }
 ```
 
+`parseAuthCallback` accepts only a callback for a login `buildAuthLoginUrl`
+began (a single-use `auth_state` in the callback URL, alive 10 minutes); tokens
+nobody asked for are ignored. Pass the same `AuthLoginStateStore.keychain()` to
+both calls if the callback can arrive after a relaunch.
+
+**Find a local node** (development): `await NodeDiscovery.discoverLocalNodes()`
+probes `localhost` ports 2428/2429/2528/2529 and returns the healthy ones.
+
 ### 3. Call a contract (JSON-RPC)
 
 ```swift
@@ -184,7 +207,38 @@ let task = Task {
         await reload()
     }
 }
-// task.cancel() closes the stream.
+// task.cancel() closes the stream; mero.close() closes every stream it started.
+
+// Typed group events (membership, migration), or both kinds on one stream:
+for try await event in mero.groupEvents(groupIds: [groupId]) { print(event.kind) }
+for try await event in mero.nodeEvents(contextIds: [contextId], groupIds: [groupId]) {
+    switch event {
+    case .context(let e): print(e.contextId)
+    case .group(let g): print(g.groupId)
+    }
+}
+
+// One long-lived connection whose subscriptions change while it runs, with
+// typed events (mero.ws is the experimental WebSocket equivalent):
+let sse = mero.sse
+sse.connect()
+try await sse.subscribe(contextIds: [contextId], groupIds: [namespaceId])
+for try await migration in sse.migrationEvents() { print(migration.kind) }
+```
+
+Reconnects wait 3 s, doubling to 30 s (±20%) while the node stays unreachable.
+
+### Presence
+
+```swift
+struct Typing: Codable, Sendable { let typing: Bool }
+let ephemeral = await mero.ephemeral
+try await ephemeral.set(contextId: contextId, state: Typing(typing: true))
+for try await entry in ephemeral.subscribe(contextId: contextId, as: Typing.self) {
+    print(entry.author, entry.state as Any, entry.removed)
+}
+// A Cloud account publishes through its relay, device-signed and resent every 2.5 s:
+try await connection.presence?.set(contextId: contextId, state: Typing(typing: true))
 ```
 
 ### 6. Log out
@@ -206,6 +260,77 @@ await mero.logout() // clears the token bundle from memory and the store
 - **Terminal errors force re-login.** `x-auth-error: token_reuse | token_revoked`
   is never retried — it surfaces as `MeroError.authRevoked` and the token bundle
   is cleared.
+- **Tokens are bound to their node.** The persisted bundle names the node that
+  issued it (`TokenData.nodeOrigin`); a bundle for another node is ignored.
+- **No automatic retries.** Each request is sent once, so a write is never
+  repeated behind your back. Wrap idempotent calls in `withRetry { … }` to retry
+  network/5xx/429 failures with backoff, and use `classifyError(error)` to turn
+  any failure into a `kind` + `retryable` + the node's own message.
+- **Request proofs instead of a session.** `MeroConfig(requestProof:)` signs
+  every call with the device key (`X-Calimero-Proof`, core `proof_auth.rs`); a
+  request carrying a proof never follows a redirect. See
+  [Request proofs](https://calimero-network.github.io/swift-sdk/get-started/authentication/#request-proofs-no-session).
+
+## The Cloud manager, signed in
+
+`CloudClient` also covers the cloud's signed-in routes, as mero-js does:
+`signInWithGoogle` / `signInWithAccount` (root-signed, no Google), a session
+that copies share, follows MDMA's rolling refresh and persists in the Keychain
+(`sessionStore:`), `getMyNamespaces`, `getNamespaceRelays` /
+`findExecutingRelay`, `getMyMachines`, HA (`claimNamespace`,
+`enableNamespaceHa`, `enableFoundedNamespaceHa`, `disableNamespaceHa`, the
+`/enable-ha` page via MeroKitUI), and account linking (`linkAccount`,
+`getMyAccounts`, the consent-page grant flow `CloudLink.beginCloudLink` →
+`completeCloudLink`). `connectCloud(_:)` / `connectCloudWithAccount(_:)` sign
+in and hand back a `CloudConnection` that writes through the namespace's
+relay. See
+[Calimero Cloud](https://calimero-network.github.io/swift-sdk/guides/calimero-cloud/).
+
+## Delegated accounts and the unified transport
+
+An account with no node behaves like one in app code. `MeroTransportClient`
+takes the node or the relay transport at construction, and
+`client.rpc.execute(contextId:method:argsJson:)` is the same call on both
+(`ExecuteTransport`, `RelayTransport`, `RelayObserver`). On top of it:
+the per-account relay map across relays (`DelegatedAccountStore`,
+`listDelegatedContexts` / `listDelegatedNamespaces`), relay node keys learned
+from attestation with backoff (`learnRelayNodeKey`), the delegated client
+(`buildDelegatedClient`: reads by query, writes by warrant), `AdminSurface`
+with an account's admin facade (`AccountAdmin`) and a node's (`NodeAdmin`),
+founding and governance through the namespace's relay, and invitation
+redemption (`redeemInvitation`, step-typed `bootstrapFromInvitation`,
+`joinAsAccount`). See
+[Delegated accounts](https://calimero-network.github.io/swift-sdk/guides/delegated-accounts/)
+and [Transport](https://calimero-network.github.io/swift-sdk/reference/transport/).
+
+## TEE trust, sealed transport and private agents
+
+Everything a TEE node proves is checked on the device, CryptoKit only:
+`Dcap.verify` (Intel's PCK chain, CRLs, TCB info, QE identity, the quote's
+signatures — a port of dcap-qvl), `createQuoteVerifier` /
+`trustedMeasurementsFromReleases` (the measurements of a trusted image), and
+signed mero-tee releases (`verifySignedNodeRelease`, `trustSignedRelease`,
+`createSignedReleaseVerifier`) against the embedded Sigstore trust root. Relay
+node keys are verified by quote (`DcapRelayKeyVerifier`, `attestRelayNodeKey`).
+`SealedTransport` seals requests end to end to a node's attested key (Noise NK
++ AES-GCM frames, byte for byte with core's `sealed.rs`) and hands any
+`URLSession` consumer a sealed session; `connectCloud(seal:)` and delegated
+sessions seal the relay. `attestAgent` / `provisionAgent` / `releaseAgent`
+drive mero-agent-gate with HPKE Auth mode, and `verifySignedAgentPolicy` /
+`agentQuoteVerifier` say which agent images to trust. See
+[TEE trust](https://calimero-network.github.io/swift-sdk/guides/tee-trust/),
+[Sealed transport](https://calimero-network.github.io/swift-sdk/guides/sealed-transport/)
+and [Private agents](https://calimero-network.github.io/swift-sdk/guides/agent-gate/).
+
+## Holding the account root
+
+For a nodeless account, or a root kept on the device: `generateAccountRoot()` /
+`accountRootFromPhrase(_:)` (24 BIP39 words that *are* the Ed25519 seed),
+`createAccountRootSigner(vault: KeychainRootSeedVault())` (a `Signer` that never
+hands the seed out), `signAccountLink` / `signAccountLogin` for Calimero Cloud,
+`signDeviceScope`, and root proofs for owner-level governance
+(`admin.transferOwnership(groupId, newOwner:, root:)` and friends,
+`signOwnerOpProof`). All pinned to core's vectors.
 
 ## Frontend (`MeroKitUI`)
 
@@ -230,9 +355,34 @@ struct MyApp: App {
 `MeroClient` is an `@MainActor ObservableObject` exposing `isAuthenticated`,
 `signInWithCloud(callbackScheme:)`, `handleEnrolmentCallback(_:)`, the session
 (`account`, `relayURL`, `isSignedInWithoutRelay`, `connection`),
-`runSampleRpc(...)`, `logout()`, and friendly error text. `LoginView` is a single
-"Continue with Calimero" button (accessibility ids `loginTitle`,
-`cloudSignInButton`, `loginError`, and `loginButton` on the sign-in panel).
+`runSampleRpc(...)`, `logout()`, and friendly error text. `LoginView` has a
+**Cloud** tab ("Continue with Calimero"; accessibility ids `loginTitle`,
+`cloudSignInButton`, `loginError`, `loginButton`) and a **Node** tab (local
+node discovery plus a URL field).
+
+The rest of mero-react is here too, as SwiftUI view models and views:
+
+- **Provider state** — `MeroProviderConfig` (`AppMode`, package, registry,
+  `allowedNodeURLs`), `connectToNode(_:callbackScheme:)` with the SSO callback
+  checked by `NodeTrust` and adopted by `TokenAdoption`, `connectWithAccount`,
+  `isDelegated`, `can` (`MeroCapabilities`), `admin` (`NodeAdmin` /
+  `AccountAdmin`), `transport`, `isOnline` over the node's event stream,
+  `applicationId` / `contextId` / `contextIdentity`, `MeroAppStorage`.
+- **Hooks** — `AsyncResource` reads (`client.contexts()`, `groupInfo`,
+  `groupMembers`, `namespaces`, `nodeIdentity`, metadata, blob info, …) and
+  `AsyncMutation` write families (`ContextActions`, `JoinActions`,
+  `GroupActions`, `MetadataActions`, `NamespaceActions`, `UpgradeActions`,
+  `BlobActions`), plus `ContextExecutor`, `EventSubscription`,
+  `EphemeralPresence`, `ContextDiscovery`, `MigrationStatusModel`,
+  `AppVersionModel`, `LatestVersionModel`, `GroupAppVersionModel`,
+  `MyAuthoredMigrationModel` and `BlobFileModel`.
+- **Invitations** — `InvitationCapture` (`onOpenURL` links, persisted until
+  acked), `InviteRedemption`, `InvitationDialog`, `InvitationGate`, `JoinSync` /
+  `JoinSyncBanner`, `JoinInvitation`, `DelegatedBootstrap`, `buildInviteLink`.
+- **Views** — `ConnectButton`, `MigrationPendingBanner`, `MigrationAdminPanel`,
+  `CalimeroLogo`, and `MeroTheme` (`defaultMeroTheme`, `.meroTheme(_:)`).
+
+See the [SwiftUI app layer](https://calimero-network.github.io/swift-sdk/guides/swiftui-app-layer/) guide.
 
 A full SwiftUI sample app lives in `Examples/MeroSampleApp`: Cloud sign-in, a
 chat example running on the relay, and an explorer for every SDK method, in the
@@ -254,8 +404,10 @@ swift run MeroExample                       # full online flow: auth → identit
 
 The suite is a Swift test pyramid:
 
-- **Unit tests** (`Tests/MeroKitTests`) — JWT/token parsing, JSONValue, SSO, capabilities,
-  retry, and per-method admin request-shape checks.
+- **Unit tests** (`Tests/MeroKitTests`) — JWT/token parsing, JSONValue, SSO (and its
+  single-use login state), token node binding, capabilities and presets, error
+  classification, retry, node discovery, typed event streams, and per-method admin
+  request-shape checks.
 - **Mocked end-to-end** (`FakeNode` + `EndToEndMockTests`) — a stateful in-memory node
   (the Swift analog of nock/msw) drives whole journeys: login → refresh mid-flight →
   concurrent single-flight refresh → revoked-family re-login → logout. No node needed.

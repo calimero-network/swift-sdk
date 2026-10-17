@@ -68,7 +68,7 @@ final class MeroClientCloudTests: XCTestCase {
     private func makeClient(wallet: InProcessWallet = InProcessWallet()) -> MeroClient {
         let session = MockURLProtocol.makeSession()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true)),
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(), sessionStore: .memory(), nonces: MemoryWarrantNonceStore(), urlSession: session)
         return MeroClient(session: session, cloud: cloud, webAuthenticator: wallet)
     }
@@ -118,7 +118,7 @@ final class MeroClientCloudTests: XCTestCase {
         let sessions = AnyValueStore<CloudSession>.memory()
         let keys = AnyValueStore<DeviceKeys>.memory()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true)),
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: keys, sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
         let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
         await first.signInWithCloud(callbackScheme: "mero-sample")

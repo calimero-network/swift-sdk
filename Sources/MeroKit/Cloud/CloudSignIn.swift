@@ -14,15 +14,20 @@ public struct CloudConfig: Sendable {
     public var audience: LoginAudience
     /// `client_name` on the relay token request (defaults to the relay URL).
     public var clientName: String?
-    /// Decides whether to trust a relay's attested node key.
+    /// Decides whether to trust a relay's attested node key: by its DCAP
+    /// quote and signed release (``DcapRelayKeyVerifier``) unless told otherwise.
     public var relayKeyVerifier: any RelayKeyVerifier
     /// Warrant lifetime.
     public var warrantTTLSeconds: UInt64
+    /// Seal the delegated calls to a hosted relay to its attested TD
+    /// (``DelegatedEnvironment/sealRelays``).
+    public var sealRelays: Bool
 
     public init(
         walletURL: URL = DeviceEnrolment.defaultWalletURL, cloudBaseURL: URL = CloudClient.defaultBaseURL,
         audience: LoginAudience = .current, clientName: String? = nil,
-        relayKeyVerifier: any RelayKeyVerifier = TLSRelayKeyVerifier(), warrantTTLSeconds: UInt64 = 300
+        relayKeyVerifier: any RelayKeyVerifier = DcapRelayKeyVerifier(), warrantTTLSeconds: UInt64 = 300,
+        sealRelays: Bool = true
     ) {
         self.walletURL = walletURL
         self.cloudBaseURL = cloudBaseURL
@@ -30,6 +35,7 @@ public struct CloudConfig: Sendable {
         self.clientName = clientName
         self.relayKeyVerifier = relayKeyVerifier
         self.warrantTTLSeconds = warrantTTLSeconds
+        self.sealRelays = sealRelays
     }
 }
 
@@ -79,6 +85,37 @@ public struct CloudConnection: Sendable {
     public let nodeKey: String?
     /// Why reads are unavailable, when they are.
     public let readNote: String?
+    /// The account's presence through the relay: device-signed updates,
+    /// resent every 2.5 s while set, read off ``mero``'s ``Mero/sse``.
+    /// `nil` when relayless.
+    public let presence: RelayPresenceClient?
+    /// The signed-in cloud API (namespaces, HA, linking, sign-out), when the
+    /// connection came from ``connectCloud(_:)``; `nil` from ``CloudSignIn``.
+    public let cloud: CloudClient?
+    /// The owned namespace writes land in (``connectCloud(_:)`` only).
+    public let namespace: CloudNamespace?
+    /// What the cloud reported about the chosen relay (``connectCloud(_:)`` only).
+    public let relayInfo: CloudRelay?
+
+    public init(
+        session: CloudSession, relay: RelayClient?, mero: Mero?, nodeKey: String?, readNote: String?,
+        presence: RelayPresenceClient? = nil, cloud: CloudClient? = nil, namespace: CloudNamespace? = nil,
+        relayInfo: CloudRelay? = nil
+    ) {
+        self.session = session
+        self.relay = relay
+        self.mero = mero
+        self.nodeKey = nodeKey
+        self.readNote = readNote
+        self.cloud = cloud
+        self.namespace = namespace
+        self.relayInfo = relayInfo
+        self.presence =
+            presence
+            ?? relay.map { relay in
+                RelayPresenceClient(relay: relay, events: { mero?.sse })
+            }
+    }
 }
 
 /// Cloud sign-in, end to end, for a native app:
@@ -100,6 +137,8 @@ public actor CloudSignIn {
     private let nonces: any WarrantNonceStore
     private let urlSession: URLSession
     private var pendingState: String?
+    /// The account's relay map, subgroup namespaces and pinned relay keys.
+    public let delegatedStore: DelegatedAccountStore
 
     public init(
         config: CloudConfig = CloudConfig(),
@@ -107,7 +146,8 @@ public actor CloudSignIn {
         sessionStore: AnyValueStore<CloudSession>,
         tokenStore: any TokenStore = MemoryTokenStore(),
         nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(),
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        delegatedStore: DelegatedAccountStore = .shared
     ) {
         self.config = config
         self.keyStore = keyStore
@@ -115,6 +155,17 @@ public actor CloudSignIn {
         self.tokenStore = tokenStore
         self.nonces = nonces
         self.urlSession = urlSession
+        self.delegatedStore = delegatedStore
+    }
+
+    /// What the ``DelegatedAccounts`` helpers run with for this sign-in.
+    public nonisolated var delegatedEnvironment: DelegatedEnvironment {
+        DelegatedEnvironment(config, store: delegatedStore, nonces: nonces, urlSession: urlSession)
+    }
+
+    /// The signed-in session as a ``DelegatedSession`` (this device's keys).
+    public func delegatedSession() -> DelegatedSession? {
+        sessionStore.load().map { DelegatedSession($0, keys: deviceKeys()) }
     }
 
     #if canImport(Security)
@@ -211,54 +262,37 @@ public actor CloudSignIn {
     /// — once the relay's node key is established — a Bearer ``Mero`` for
     /// admin reads and events.
     public func connect(_ session: CloudSession) async -> CloudConnection {
-        guard let relayUrl = session.relayUrl else {
-            return CloudConnection(session: session, relay: nil, mero: nil, nodeKey: nil, readNote: session.note)
-        }
-        let keys = deviceKeys()
-        let mero: Mero?
-        let nodeKey: String?
-        var readNote: String?
-        do {
-            let key = try await RelayNodeKey.attest(
-                relayURL: relayUrl, verifier: config.relayKeyVerifier, session: urlSession)
-            let tokens = try await RelayLogin.login(
-                relayURL: relayUrl, nodeKey: key, credential: session.credential, keys: keys,
-                audience: config.audience, clientName: config.clientName, session: urlSession)
-            guard let base = URL(string: relayUrl) else { throw AccountError.invalidInput("bad relay URL") }
-            let client = Mero(config: MeroConfig(baseURL: base, tokenStore: tokenStore), session: urlSession)
-            await client.setTokenData(tokens)
-            mero = client
-            nodeKey = key
-        } catch {
-            mero = nil
-            nodeKey = nil
-            readNote =
-                "Writes work; reads and live events are off until the relay's session is established: "
-                + "\((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-        }
-        let tokenSource = mero
-        let relay = RelayClient(
-            relayURL: relayUrl, authorAccount: session.account, authorProof: session.credential, keys: keys,
-            nonces: nonces, executorAccount: session.executorAccount, ttlSeconds: config.warrantTTLSeconds,
-            tokenProvider: { await tokenSource?.currentTokenData()?.accessToken }, session: urlSession)
-        return CloudConnection(session: session, relay: relay, mero: mero, nodeKey: nodeKey, readNote: readNote)
+        await CloudConnection.open(
+            session, nodeKey: nil,
+            context: RelaySessionContext(
+                config: config, keys: deviceKeys(), tokenStore: tokenStore, nonces: nonces, urlSession: urlSession))
     }
 
     // MARK: - Join
 
     /// Redeem a namespace invitation as this account: resolve the admitting
     /// relay through the Cloud manager, sign the join, and send it. A relayless
-    /// session adopts the admitting relay.
+    /// session adopts the admitting relay, and the relay is recorded as the
+    /// namespace's (``DelegatedAccountStore/rememberRelay(account:relayURL:namespaceId:contextId:)``).
+    ///
+    /// Throws a ``BootstrapFailure`` naming the step that stopped it
+    /// (``BootstrapStep/noCredential`` when nobody is signed in).
     @discardableResult
     public func join(
         namespaceId: String, invitation: SignedGroupOpenInvitation, nodeURL: String? = nil
     ) async throws -> (session: CloudSession, outcome: JoinOutcome) {
-        guard var session = sessionStore.load() else { throw AccountError.notSignedIn("not signed in") }
+        guard var session = sessionStore.load() else {
+            throw BootstrapFailure(
+                step: .noCredential,
+                reason: "This device holds no enrolled account, so there is nothing to admit: sign in first.")
+        }
         let keys = deviceKeys()
         let outcome = try await AccountJoin.bootstrapFromInvitation(
             namespaceId: namespaceId, invitation: invitation, account: session.account,
             credential: session.credential, keys: keys, nonce: nonces.next(relay: "join:\(session.account)"),
-            nodeURL: nodeURL, cloud: cloudClient(keys: keys, credential: session.credential), session: urlSession)
+            nodeURL: nodeURL, cloud: cloudClient(keys: keys, credential: session.credential), session: urlSession
+        ).get()
+        delegatedStore.rememberRelay(account: session.account, relayURL: outcome.relayUrl, namespaceId: namespaceId)
         if session.relayUrl == nil {
             session.relayUrl = outcome.relayUrl
             session.note = nil
@@ -273,12 +307,14 @@ public actor CloudSignIn {
     /// it up the way mero-react's `createNamespace` does: the application it
     /// runs (resolved from the registry unless given), a default capability
     /// mask, a name, and — when the relay attested the founding — HA in the
-    /// cloud so invitees with no node can find it.
+    /// cloud so the fleet can host it.
     ///
-    /// Port of mero-js `foundDelegatedNamespace` + `createAccountAdmin().createNamespace`.
-    /// The relay's executor key is its **attested** node key; its account comes
-    /// from the cloud (`executor_account`), or else from discovery on a
-    /// namespace the account is already in, checked against that key.
+    /// ``DelegatedAccounts/foundDelegatedNamespace(_:defaultCapabilities:application:env:)``
+    /// does the founding: the relay's executor key is its node key **attested
+    /// now**, its account the cloud's (`executor_account`) or else discovery's
+    /// on a namespace the account is in there, checked against that key. The
+    /// namespaces the relay session lists are recorded first, so a session
+    /// with no executor still finds one.
     ///
     /// HA is best-effort (`haEnabled`/`haError`): the namespace exists whatever
     /// the cloud answers. A namespace that could not be given its application
@@ -289,12 +325,18 @@ public actor CloudSignIn {
         defaultCapabilities: UInt32? = CloudSignIn.defaultNamespaceCapabilities,
         registryURL: String = ApplicationRegistry.defaultURL
     ) async throws -> FoundedDelegatedNamespace {
-        guard let relayUrl = connection.session.relayUrl, let relay = connection.relay else {
+        guard let relayUrl = connection.session.relayUrl, connection.relay != nil else {
             throw AccountError.notSignedIn(
                 "no relay serves this account yet, so there is nowhere to found a namespace: join from an invitation first"
             )
         }
-        let executor = try await foundingExecutor(connection, relay: relay, relayUrl: relayUrl)
+        let session = DelegatedSession(connection.session, keys: deviceKeys())
+        if session.executorAccount == nil, let listed = try? await connection.mero?.admin.listNamespaces() {
+            for namespace in listed {
+                delegatedStore.rememberRelay(
+                    account: session.account, relayURL: relayUrl, namespaceId: namespace.namespaceId)
+            }
+        }
         let app: FoundingApplication
         if let application {
             app = application
@@ -304,82 +346,34 @@ public actor CloudSignIn {
             app = FoundingApplication(
                 applicationId: resolved.applicationId, package: package, version: resolved.version)
         }
-        let founded = try await relay.foundNamespace(
-            executor: executor, defaultCapabilities: defaultCapabilities, application: app)
-        if founded.applicationSet != true {
-            throw AccountError.intentRefused(
-                reason: "founded \(founded.namespaceId) but could not give it its application: "
-                    + (founded.applicationError ?? "unknown reason"),
-                retryable: false, status: 409)
-        }
-        var ha: (enabled: Bool, error: String?) = (false, nil)
-        if founded.teeEnabled {
-            do {
-                try await cloudClient(keys: deviceKeys(), credential: connection.session.credential).enableHaAsAccount(
-                    namespaceId: founded.namespaceId, salt: founded.salt, accountId: connection.session.account,
-                    credential: connection.session.credential, keys: deviceKeys(), relayURL: relayUrl)
-                ha = (true, nil)
-            } catch {
-                ha = (false, RelayClient.message(error))
-            }
-        } else {
-            ha.error =
-                "the relay did not attest the founding, so no fleet node could be admitted for HA"
-                + (founded.teeError.map { ": \($0)" } ?? "")
-        }
+        let env = delegatedEnvironment
+        let founded = try await DelegatedAccounts.foundDelegatedNamespace(
+            session, defaultCapabilities: defaultCapabilities, application: app, env: env)
         if let name, !name.isEmpty {
-            try await relay.govern(groupId: founded.namespaceId, op: GovernanceOps.groupMetadataSet(name: name))
+            try await DelegatedAccounts.governGroup(
+                session, groupId: founded.namespaceId, op: GovernanceOps.groupMetadataSet(name: name), env: env)
         }
-        return FoundedDelegatedNamespace(
-            namespaceId: founded.namespaceId, salt: founded.salt, teeEnabled: founded.teeEnabled,
-            haEnabled: ha.enabled, haError: ha.error, defaultCapabilitiesSet: founded.defaultCapabilitiesSet)
+        return founded
     }
 
     /// What mero-react founds a namespace with: create contexts, invite, join
     /// open subgroups, create/delete subgroups, manage visibility and metadata.
     public static let defaultNamespaceCapabilities: UInt32 = 231
 
-    /// The relay's attested node key, and its account: the cloud's, or else
-    /// discovery's on a namespace the account is in — but only when discovery
-    /// names that same key (discovery is unauthenticated).
-    private func foundingExecutor(
-        _ connection: CloudConnection, relay: RelayClient, relayUrl: String
-    ) async throws -> RelayExecutor {
-        let nodeKey: String
-        if let known = connection.nodeKey {
-            nodeKey = known
-        } else {
-            nodeKey = try await RelayNodeKey.attest(
-                relayURL: relayUrl, verifier: config.relayKeyVerifier, session: urlSession)
-        }
-        if let account = connection.session.executorAccount {
-            return RelayExecutor(executorAccount: account, executorKey: nodeKey)
-        }
-        guard let known = try? await connection.mero?.admin.listNamespaces().first?.namespaceId else {
-            throw AccountError.relayKeyUnavailable(
-                "the executor account of this relay is not known: join a namespace on it first, or refresh the "
-                    + "relay from the cloud, which names it")
-        }
-        let described = try await relay.describeGovernance(groupId: known)
-        guard described.executorKey.lowercased() == nodeKey.lowercased() else {
-            throw AccountError.relayKeyUnavailable(
-                "the relay's discovery names signing key \(described.executorKey), not its attested node key "
-                    + "\(nodeKey): refusing to found through it")
-        }
-        return RelayExecutor(executorAccount: described.executorAccount, executorKey: nodeKey)
-    }
-
     // MARK: - Invite
 
     /// Mint an invitation to `namespaceId` as the account, signed with this
     /// device's key — no node involved. Port of mero-js
-    /// `createAccountAdmin().createNamespaceInvitation`.
+    /// `createAccountAdmin().createNamespaceInvitation`
+    /// (``AccountAdmin/mintInvitation(namespaceId:session:read:routing:invitedRole:validForSeconds:sign:)``).
     ///
     /// The namespace's TEE relays are named as admitters (only a relay can
-    /// admit a joiner with no node); with none, its admins. When the cloud
-    /// routes the namespace nowhere but a relay is in it, the session's relay
-    /// URL rides along as `admitter_addrs`. An invitation nobody could claim is
-    /// refused (``AccountError/invitationNotClaimable(namespaceId:reason:)``).
+    /// admit a joiner with no node); with none, its admins. An invitation
+    /// nobody could claim is refused
+    /// (``AccountError/invitationNotClaimable(namespaceId:reason:)``): the cloud
+    /// lists no node holding the namespace (`not-hosted` — an address on the
+    /// invitation is unsigned, so it cannot stand in), or none it would name
+    /// (`no-named-node`).
     public func createNamespaceInvitation(
         _ connection: CloudConnection, namespaceId: String, invitedRole: GroupInvitations.InvitedRole = .member,
         validForSeconds: Int = GroupInvitations.maxValiditySeconds
@@ -389,33 +383,11 @@ public actor CloudSignIn {
                 "reading the namespace's members needs the relay session, which is not established: "
                     + (connection.readNote ?? "no relay"))
         }
-        async let membersCall = mero.admin.listGroupMembers(namespaceId)
-        async let infoCall = mero.admin.getGroupInfo(namespaceId)
-        let members = try await membersCall.members
-        let info = try await infoCall
-        let relays = members.filter { $0.role == "RelayTee" }.map { $0.identity.lowercased() }
-        let named = Set(relays.isEmpty ? GroupInvitations.defaultAdmitters(members) : relays)
-        var admitterAddrs: [String] = []
-        let session = connection.session
-        if let nodes = try? await cloudClient(keys: deviceKeys(), credential: session.credential)
-            .getNamespaceRouting(namespaceId).nodes
-        {
-            if nodes.isEmpty {
-                // Unhosted, but the relay that founded it serves it and admits
-                // through its own `/admit`: the invitation says where it is.
-                guard !relays.isEmpty, let relayUrl = session.relayUrl else {
-                    throw AccountError.invitationNotClaimable(namespaceId: namespaceId, reason: "not-hosted")
-                }
-                admitterAddrs = [relayUrl]
-            } else if !nodes.contains(where: { $0.account.map { named.contains($0.lowercased()) } == true }) {
-                throw AccountError.invitationNotClaimable(namespaceId: namespaceId, reason: "no-named-node")
-            }
-        }
-        return try GroupInvitations.sign(
-            groupId: namespaceId, inviterAccount: session.account, keys: deviceKeys(), admitters: relays,
-            members: members, invitedRole: invitedRole, validForSeconds: validForSeconds,
-            applicationId: Hex.is32(info.targetApplicationId) ? info.targetApplicationId : nil,
-            appKey: Hex.is32(info.appKey) ? info.appKey : nil, admitterAddrs: admitterAddrs)
+        let cloud = cloudClient(keys: deviceKeys(), credential: connection.session.credential)
+        return try await AccountAdmin.mintInvitation(
+            namespaceId: namespaceId, session: DelegatedSession(connection.session, keys: deviceKeys()),
+            read: await mero.admin, routing: { try await cloud.getNamespaceRouting($0).nodes.map(\.account) },
+            invitedRole: invitedRole, validForSeconds: validForSeconds)
     }
 
     /// A ``CloudClient`` proving reads with this device's certificate.

@@ -56,6 +56,15 @@ public struct GovernanceDescription: Codable, Sendable, Equatable {
     public let canActOnBehalf: Bool
 }
 
+/// What ``RelayPresenceClient`` needs of a relay: the device's key and a
+/// signed post. ``RelayClient`` is one; tests substitute a fake.
+public protocol PresenceRelay: Sendable {
+    /// The device's signing key, hex.
+    var authorKey: String { get }
+    /// Sign and post one presence statement.
+    func presenceIntent(contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64) async throws
+}
+
 /// A warranted write's outcome.
 public struct IntentResult: Sendable, Equatable {
     /// The context root after the run.
@@ -125,7 +134,7 @@ public struct CreatedRelayContext: Codable, Sendable, Equatable {
 ///
 /// Reads go through ``query(contextId:method:argsJson:)``, which needs the
 /// relay session's Bearer token (`tokenProvider`).
-public struct RelayClient: Sendable {
+public struct RelayClient: PresenceRelay {
     public let relayURL: String
     public let authorAccount: String
     /// The device certificate (`AccountProof<DeviceCert>`), hex.
@@ -263,6 +272,42 @@ public struct RelayClient: Sendable {
                 retryable: false, status: 409)
         }
         nonces.advance(relay: relayURL, to: next)
+    }
+
+    // MARK: - Presence
+
+    /// This device's signing key, hex: the `author` its presence statements name.
+    public var authorKey: String { keys.signPublicKey }
+
+    /// The device keys this client signs with: the same device authors and
+    /// observes (``RelayObserver``).
+    var deviceKeys: DeviceKeys { keys }
+
+    /// Sign one presence statement with the device key and post it to the
+    /// relay (`POST /admin-api/contexts/{ctx}/presence-intents`). `state` is
+    /// the encoded slice, or `nil` to retract.
+    ///
+    /// Sent once: not retried on `429` (``RelayPresenceClient`` resends every
+    /// 2.5 s anyway). A refusal throws ``MeroError/http(_:)`` with its status.
+    public func presenceIntent(contextId: String, state: Data?, seq: UInt64, sentAtMs: UInt64) async throws {
+        let signed = try PresenceStatement.signedIntent(
+            contextId: contextId, state: state, seq: seq, sentAtMs: sentAtMs, keys: keys, authorProof: authorProof)
+        try await presenceIntent(contextId: contextId, request: signed)
+    }
+
+    /// Post an already-signed presence statement as given.
+    public func presenceIntent(contextId: String, request: PresenceIntentRequest) async throws {
+        let url = try AccountHTTP.url(relayURL, "/admin-api/contexts/\(escape(contextId))/presence-intents")
+        let body: JSONValue = [
+            "state": request.state.map(JSONValue.string) ?? .null,
+            "seq": .number(Double(request.seq)),
+            "sentAtMs": .number(Double(request.sentAtMs)),
+            "signature": .string(request.signature),
+            "authorProof": .string(request.authorProof),
+        ]
+        // `presence-intents` answers an accepted update with no body.
+        _ = try await AccountHTTP.send(
+            AccountHTTP.jsonRequest(url, method: "POST", body: body, timeout: timeout), session: session)
     }
 
     // MARK: - Context creation

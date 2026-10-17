@@ -124,8 +124,18 @@ A brand-new account is a member of nothing, so no relay serves it yet.
 a relay:
 
 ```swift
-let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
+do {
+    let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
+} catch let failure as BootstrapFailure {
+    // failure.step says what to do: .notInvited → ask for a fresh invitation,
+    // .noRelayURL → try shortly, .admit → the node's refusal (failure.status)…
+}
 ```
+
+The admitting node comes from the cloud's routing for the namespace, narrowed
+to the invitation's signed admitters — never from an address the invitation
+carries. See [Delegated accounts](/guides/delegated-accounts/) for the rest of
+the account layer.
 
 ### The relay's node key
 
@@ -137,6 +147,14 @@ quote signature**; it trusts the TLS connection to the relay URL the Cloud
 manager returned. Supply your own `RelayKeyVerifier` (or a
 `PinnedRelayKeyVerifier`) in `CloudConfig` to tighten it. Warranted writes do not
 depend on the node key; only Bearer reads and events do.
+
+### Signed in to the cloud as a user
+
+The routes above are proven by the device certificate. The cloud's
+signed-in routes — owned namespaces and their relays, HA, linking accounts —
+take a cloud login instead (Google, or the account root), and
+`connectCloud` / `connectCloudWithAccount` reach a relay from one. See
+[Calimero Cloud](/guides/calimero-cloud/).
 
 ## Development nodes
 
@@ -251,6 +269,31 @@ if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
 }
 ```
 
+<Aside type="caution">
+  **Only a callback for a login this app began is accepted.** Anyone can open
+  your app with a URL carrying tokens of their choosing; adopting them would
+  sign the person in to the sender's node and account. So `buildAuthLoginUrl`
+  records a random, single-use `auth_state` (alive 10 minutes) and adds it to the
+  callback URL's query, and `parseAuthCallback` returns `nil` unless the callback
+  carries a pending one — and consumes it, so a replay is refused too.
+
+  The state lives in an `AuthLoginStateStore`: `.shared` (in memory) by default,
+  which covers a login begun and finished in one launch. If the callback can
+  arrive after a relaunch or in an extension, pass the same Keychain-backed
+  store to both calls:
+
+  ```swift
+  let states = AuthLoginStateStore.keychain()     // or AuthLoginStateStore(store: yourAnyValueStore)
+  let loginURL = Mero.buildAuthLoginUrl(nodeUrl: node, options: options, stateStore: states)
+  // …
+  let callback = Mero.parseAuthCallback(url.absoluteString, stateStore: states)
+  ```
+
+  A host that injects tokens itself, with no login to begin, can opt out with
+  `ParseAuthCallbackOptions(allowUnsolicited: true)` — anyone who can open the
+  URL then chooses the session.
+</Aside>
+
 <SeqDiagram
   id="d-sso"
   title="Hosted SSO via ASWebAuthenticationSession"
@@ -272,8 +315,69 @@ if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
 
 `parseAuthCallback` reads the URL hash fragment
 (`access_token`, `refresh_token`, `application_id`, `context_id`,
-`context_identity`, `node_url`) and returns `nil` if no access token is present.
-Both SSO helpers are `static` on `Mero`.
+`context_identity`, `node_url`) and returns `nil` if no access token is present
+or the callback answers no pending login. Both SSO helpers are `static` on `Mero`.
+
+## Request proofs (no session)
+
+A keyholder can skip the session entirely: the device key signs **each
+request**, and the certificate its account signed says whose key that is. The
+node verifies both from the `X-Calimero-Proof` header with no store read
+(core `proof_auth.rs`), which is how a relay serves a caller it has never seen.
+The node honours it only with `--delegated-access`; one without answers `403`,
+distinct from the `401` a bad proof gets.
+
+```swift
+// Mint proofs from the device key and its certificate.
+let mero = Mero(config: MeroConfig(
+    baseURL: relayURL,
+    requestProof: .keys(ProofSignerOptions(credential: certificateHex, signerSecret: keys.deviceSecret))))
+
+// Or a three-link chain: a session key under a device-signed login statement.
+//   .keys(ProofSignerOptions(credential: cert, session: statementHex, signerSecret: sessionKeyHex))
+// Or your own signer, when the key must not reach the SDK: .custom { request in … }
+// Or an authorizer: .authorizer(try createProofAuthorizer(ProofCredential(credential: cert, keys: keys)))
+```
+
+Every `auth`, `admin` and `rpc` call is then signed over its method, its path
+**and query** exactly as sent (`signedPath(_:)`), and its exact body
+(`requestBodyHash`). Each signature is valid for a short window (120 s for
+`.keys`, 300 s for a `ProofCredential`) — that window is what bounds replay.
+A file upload (`HttpBody.file`) cannot be signed; send bytes, or use a session.
+
+A request carrying a proof **never follows a redirect**: it would carry the
+header to a location it was not signed for. The `3xx` surfaces as
+`MeroError.http` with status `0` ("Redirect Not Followed"), and nothing is
+re-sent.
+
+The event streams are long-lived connections, not requests, so `Mero.sse`
+still uses the session. For a proof-authorized stream, build the connection
+with an authorizer — the stream and every subscription `POST` are signed:
+
+```swift
+let sse = SseConnection(baseURL: relayURL, authorize: try createProofAuthorizer(credential))
+sse.connect()
+```
+
+The pieces are public: `signRequest` (a borsh `RequestSig`), `callerProof`
+(concatenates the links), `createProofSigner`, `signRequestProof`,
+`createProofAuthorizer`, and `requestProofHeader`. They are pinned to core's
+`request_wire_fixture.rs`.
+
+## Find a local node
+
+A development or desktop node answers `GET /admin-api/health` unauthenticated.
+`NodeDiscovery` probes the usual local ports (`2428`, `2429`, `2528`, `2529`) in
+parallel, each capped at 2 s, and returns the ones that report `alive`, in port
+order (port of mero-js `discoverLocalNodes`):
+
+```swift
+let nodes = await NodeDiscovery.discoverLocalNodes()          // [http://localhost:2428, …]
+let custom = await NodeDiscovery.discoverLocalNodes(ports: [3000], timeout: 1)
+let ok = await NodeDiscovery.probeNodeHealth(URL(string: "http://host/node1")!)  // keeps the /node1 prefix
+```
+
+Probes never throw; cancelling the calling task cancels them all.
 
 ## Persistence
 
@@ -296,6 +400,12 @@ let ephemeral = Mero(config: MeroConfig(
   tokenStore: MemoryTokenStore()
 ))
 ```
+
+The bundle `Mero` persists is **bound to its node**: it carries
+`TokenData.nodeOrigin` (origin plus path prefix), and an instance pointed at
+another node — or a bundle saved by an earlier SDK release, which names no
+node — reads the store as empty. So one shared Keychain item never sends one
+node's tokens to another; after upgrading, sign in once.
 
 Conform to `TokenStore` (`getTokens` / `setTokens` / `clear`) to back tokens with
 anything else — see the [reference](/reference/mero/#token-stores).
