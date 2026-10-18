@@ -10,8 +10,9 @@ import FoundationNetworking
 /// Port of mero-js `src/namespace-op/namespace-op.ts` and
 /// `src/account/{join-with-node,bootstrap-from-invitation,relay-from-invitation}.ts`.
 public enum NamespaceOps {
-    /// core's `SIGNED_NAMESPACE_OP_SCHEMA_VERSION`.
-    public static let schemaVersion: UInt8 = 24
+    /// core's `SIGNED_NAMESPACE_OP_SCHEMA_VERSION`: 25 since core rc.85
+    /// (calimero-network/core#4552). A node refuses any other value.
+    public static let schemaVersion: UInt8 = 25
     static let signDomain = "calimero.namespace.v1"
     static let opRoot: UInt8 = 0
     static let memberJoined: UInt8 = 5

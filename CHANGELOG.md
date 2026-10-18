@@ -2,6 +2,15 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: sign namespace ops at schema version 25
+
+`NamespaceOps.signMemberJoinOp` signed at schema version 24, so every node on
+core 0.11.0-rc.85 or later (calimero-network/core#4552) refused the join with
+`signed_op signature does not verify: schema version mismatch: expected 25,
+got 24`: a keyholder could not join a namespace from an invitation through a
+current relay. `NamespaceOps.schemaVersion` is 25 now, matching mero-js (its
+#261). Found by Mero Chat's live tests against a real relay.
+
 ## Unreleased: drop the warrant-nonce routes
 
 ### Breaking
