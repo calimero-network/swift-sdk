@@ -142,7 +142,7 @@ final class AccountJoinBootstrapTests: XCTestCase {
         let sent = try XCTUnwrap(rig.requests("POST", "/admin-api/namespaces/\(ns)/admit").first)
         XCTAssertNil(sent.headers["authorization"])
         XCTAssertNil(sent.headers["x-calimero-proof"])
-        XCTAssertEqual(sent.json?["signedOp"]?.stringValue?.prefix(2), "18")
+        XCTAssertEqual(sent.json?["signedOp"]?.stringValue?.prefix(2), "19")
         XCTAssertNotNil(sent.json?["invitation"]?["invitation"])
     }
 
