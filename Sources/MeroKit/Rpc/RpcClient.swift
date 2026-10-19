@@ -105,10 +105,14 @@ public struct RpcClient: Sendable {
                 ))
         }
 
-        guard let output = decoded.result?.output else {
-            throw MeroError.emptyResponse("JSON-RPC result had no output")
+        if let output = decoded.result?.output { return output }
+        // A method that returns nothing (`()` in Rust) answers `output: null`,
+        // or no `output` at all. That is a success: a caller asking for an
+        // optional or a `JSONValue` gets `nil` / `.null` back.
+        if decoded.result != nil, let none = try? MeroJSON.decode(T.self, from: Data("null".utf8)) {
+            return none
         }
-        return output
+        throw MeroError.emptyResponse("JSON-RPC result had no output")
     }
 
     private struct CallRequest<Params: Encodable>: Encodable {

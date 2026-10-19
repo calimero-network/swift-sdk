@@ -65,6 +65,21 @@ final class AppE2ETests: XCTestCase {
         XCTAssertTrue(app.staticTexts["RESPONSE"].waitForExistence(timeout: 15), "no RESPONSE from getContexts")
     }
 
+    /// SDK → Run all: every read plus the kv-store lifecycle, against the
+    /// live node. Prints the report and fails on any failed method.
+    func testRunAllPasses() throws {
+        tap(app.buttons["exploreSDK"], "Explore SDK entry")
+        tap(app.buttons["runAllEntry"], "Run all entry")
+        tap(app.buttons["runAllButton"], "Run all button")
+        let again = app.buttons["Run again"]
+        XCTAssertTrue(again.waitForExistence(timeout: 300), "Run all did not finish")
+        let reportText = app.staticTexts["runAllReport"]
+        XCTAssertTrue(reportText.waitForExistence(timeout: 5), "no report")
+        let report = reportText.label
+        print("RUN-ALL-REPORT-BEGIN\n\(report)\nRUN-ALL-REPORT-END")
+        XCTAssertFalse(report.contains("\nFAIL "), "Run all reported failures:\n\(report)")
+    }
+
     /// Chat: install mero-chat, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         try Self.skipUnlessChatAppIsPublished()
