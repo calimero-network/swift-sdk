@@ -2,19 +2,26 @@
 import MeroKit
 import SwiftUI
 
-/// Sign-in, bound to ``MeroClient``: a **Cloud** tab — one "Continue with
-/// Calimero" button that opens the Calimero wallet in the system auth sheet,
-/// the same shape as "Sign in with Google" — and a **Node** tab with the local
-/// nodes discovery found and a URL field, which opens the node's own login
-/// page. (== mero-react `LoginModal` with its `node` and `cloud` tabs.)
+/// Sign-in, bound to ``MeroClient``. (== mero-react `LoginModal`.)
 ///
-/// It opens on the Cloud tab unless told otherwise; pass `tabs: [.cloud]` for
-/// the Cloud sign-in alone. Colours come from the environment's ``MeroTheme``.
+/// - **Cloud**: one "Continue with Calimero Cloud" button that opens the
+///   Calimero wallet in the system auth sheet, the same shape as "Sign in with
+///   Google".
+/// - **Node**: the local nodes discovery found and a URL field. By default
+///   Connect opens the node's own login page; with `nodeSignIn: .password` it
+///   asks for the node's admin username and password instead.
+///
+/// `mode` picks which are offered: ``LoginMode/cloudAndNode`` (Cloud, with a
+/// small "Manually enter node URL" link under it), ``LoginMode/cloudOnly`` or
+/// ``LoginMode/nodeOnly``. Colours, radii and type come from the environment's
+/// ``MeroTheme``; words and the logo from ``LoginBranding``.
 ///
 /// Accessibility identifiers for UI tests: `loginTitle`, `loginError`,
 /// `cloudSignInButton` (the button), `loginButton` (the Cloud panel),
-/// `loginTabs`, and on the Node tab `nodeDiscovering`, `nodeOption-<host:port>`,
-/// `nodeOption-custom`, `nodeUrlInput`, `rescanButton` and `nodeConnectButton`.
+/// `manualNode` / `useCloud` (the link between them), and on the node side
+/// `nodeDiscovering`, `nodeOption-<host:port>`, `nodeOption-custom`,
+/// `nodeUrlInput`, `nodeUserInput`, `nodePasswordInput`, `rescanButton` and
+/// `nodeConnectButton`.
 @MainActor
 public struct LoginView: View {
     @EnvironmentObject private var client: MeroClient
@@ -22,31 +29,55 @@ public struct LoginView: View {
 
     private let callback: CloudCallback
     private let nodeCallback: CloudCallback
-    private let tabs: [LoginModalTab]
+    private let mode: LoginMode
+    private let nodeSignIn: NodeSignInMethod
+    private let branding: LoginBranding
     @State private var tab: LoginModalTab
 
     /// - Parameters:
     ///   - callbackScheme: the app's URL scheme the wallet (`<scheme>://enrol`)
     ///     and a node's login page (`<scheme>://auth`) return to.
-    ///   - tabs: which tabs to offer, in order.
-    ///   - initialTab: the tab it opens on.
-    public init(callbackScheme: String, tabs: [LoginModalTab] = [.cloud, .node], initialTab: LoginModalTab = .cloud) {
+    ///   - mode: which ways to sign in to offer.
+    ///   - nodeSignIn: how a node sign-in authenticates.
+    ///   - branding: titles, button label and logo.
+    public init(
+        callbackScheme: String, mode: LoginMode = .cloudAndNode, nodeSignIn: NodeSignInMethod = .loginPage,
+        branding: LoginBranding = LoginBranding()
+    ) {
         self.init(
-            callback: .scheme(callbackScheme), nodeCallback: .scheme(callbackScheme, path: "auth"), tabs: tabs,
-            initialTab: initialTab)
+            callback: .scheme(callbackScheme), nodeCallback: .scheme(callbackScheme, path: "auth"), mode: mode,
+            nodeSignIn: nodeSignIn, branding: branding)
     }
 
     /// Return through `callback` (an https Universal Link, say), and from a
     /// node's login page through `nodeCallback` (the same host's `/auth` by default).
     public init(
-        callback: CloudCallback, nodeCallback: CloudCallback? = nil, tabs: [LoginModalTab] = [.cloud, .node],
-        initialTab: LoginModalTab = .cloud
+        callback: CloudCallback, nodeCallback: CloudCallback? = nil, mode: LoginMode = .cloudAndNode,
+        nodeSignIn: NodeSignInMethod = .loginPage, branding: LoginBranding = LoginBranding()
     ) {
         self.callback = callback
         self.nodeCallback = nodeCallback ?? Self.authCallback(for: callback)
-        let offered = tabs.isEmpty ? [.cloud] : tabs
-        self.tabs = offered
-        _tab = State(initialValue: offered.contains(initialTab) ? initialTab : offered[0])
+        self.mode = mode
+        self.nodeSignIn = nodeSignIn
+        self.branding = branding
+        _tab = State(initialValue: mode.tabs[0])
+    }
+
+    /// The `tabs:` form, kept for existing callers: the tabs offered become a
+    /// ``LoginMode`` and `initialTab` the side it opens on.
+    public init(callbackScheme: String, tabs: [LoginModalTab], initialTab: LoginModalTab = .cloud) {
+        self.init(
+            callback: .scheme(callbackScheme), nodeCallback: .scheme(callbackScheme, path: "auth"), tabs: tabs,
+            initialTab: initialTab)
+    }
+
+    public init(
+        callback: CloudCallback, nodeCallback: CloudCallback? = nil, tabs: [LoginModalTab],
+        initialTab: LoginModalTab = .cloud
+    ) {
+        let mode = LoginMode(tabs: tabs)
+        self.init(callback: callback, nodeCallback: nodeCallback, mode: mode)
+        _tab = State(initialValue: mode.tabs.contains(initialTab) ? initialTab : mode.tabs[0])
     }
 
     static func authCallback(for callback: CloudCallback) -> CloudCallback {
@@ -57,57 +88,99 @@ public struct LoginView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 20) {
-            Spacer(minLength: 24)
-
-            CalimeroLogo(size: 28, color: theme.primaryText)
-                .frame(width: 44, height: 44)
-                .background(RoundedRectangle(cornerRadius: theme.radius + 2).fill(theme.primary))
-
-            VStack(spacing: 8) {
-                Text(tab == .node ? "Connect to a node" : "Sign in to Calimero")
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("loginTitle")
+        ZStack(alignment: .top) {
+            theme.background.ignoresSafeArea()
+            if theme.showsGlow {
+                RadialGradient(
+                    colors: [theme.primary.opacity(0.35), theme.primary.opacity(0.08), .clear],
+                    center: .top, startRadius: 0, endRadius: 420
+                )
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
             }
-
-            if tabs.count > 1 {
-                Picker("How to connect", selection: $tab) {
-                    ForEach(tabs) { option in
-                        Text(option.title).tag(option)
+            ScrollView {
+                VStack(spacing: 26) {
+                    hero.padding(.top, tab == .node ? 36 : 88)
+                    VStack(spacing: 14) {
+                        if let error = client.errorMessage {
+                            Label(error, systemImage: "exclamationmark.circle")
+                                .font(.footnote)
+                                .foregroundColor(theme.error)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(12)
+                                .background(RoundedRectangle(cornerRadius: theme.radius).fill(theme.error.opacity(0.1)))
+                                .accessibilityIdentifier("loginError")
+                        }
+                        switch tab {
+                        case .cloud:
+                            AccountSignInPanel(
+                                note: client.cloudNote, isWorking: client.isLoading, buttonTitle: branding.cloudButton
+                            ) {
+                                Task { await client.signInWithCloud(callback: callback) }
+                            }
+                        case .node:
+                            NodeLoginPanel(callback: nodeCallback, method: nodeSignIn)
+                                .padding(18)
+                                .background(RoundedRectangle(cornerRadius: theme.cardRadius).fill(theme.surface))
+                                .overlay(RoundedRectangle(cornerRadius: theme.cardRadius).stroke(theme.border))
+                        }
+                        if mode == .cloudAndNode {
+                            Button {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                    tab = tab == .cloud ? .node : .cloud
+                                    client.clearError()
+                                }
+                            } label: {
+                                Text(tab == .cloud ? "Manually enter node URL" : "Use Calimero Cloud instead")
+                                    .font(.footnote.weight(.medium))
+                                    .underline(tab == .cloud, color: theme.textTertiary.opacity(0.5))
+                                    .foregroundColor(theme.textSecondary)
+                                    .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier(tab == .cloud ? "manualNode" : "useCloud")
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("loginTabs")
+                .frame(maxWidth: 440)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
             }
-
-            if let error = client.errorMessage {
-                Label(error, systemImage: "exclamationmark.circle")
-                    .font(.footnote)
-                    .foregroundColor(theme.error)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(RoundedRectangle(cornerRadius: theme.radius + 2).fill(theme.error.opacity(0.1)))
-                    .accessibilityIdentifier("loginError")
-            }
-
-            switch tab {
-            case .cloud:
-                AccountSignInPanel(note: client.cloudNote, isWorking: client.isLoading) {
-                    Task { await client.signInWithCloud(callback: callback) }
-                }
-            case .node:
-                NodeLoginPanel(callback: nodeCallback)
-            }
-
-            Spacer()
         }
-        .padding(.horizontal, 24)
-        .frame(maxWidth: 480)
+    }
+
+    private var hero: some View {
+        VStack(spacing: 18) {
+            Group {
+                if let logo = branding.logo {
+                    logo.resizable().scaledToFit().padding(16)
+                } else {
+                    CalimeroLogo(size: 40, color: theme.primaryText)
+                }
+            }
+            .frame(width: 76, height: 76)
+            .background(RoundedRectangle(cornerRadius: 22).fill(theme.primary))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.black.opacity(0.06), lineWidth: 1))
+            .shadow(color: theme.primary.opacity(0.35), radius: 18, y: 8)
+            .accessibilityHidden(true)
+            VStack(spacing: 8) {
+                Text(tab == .node ? branding.nodeTitle : branding.cloudTitle)
+                    .font(.system(.largeTitle, design: theme.titleDesign).weight(.bold))
+                    .foregroundColor(theme.text)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("loginTitle")
+                Text(tab == .node ? branding.nodeSubtitle : branding.cloudSubtitle)
+                    .font(.callout)
+                    .foregroundColor(theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
 
-/// The Cloud tab: one button to the wallet, and what the last enrolment had
+/// The Cloud side: one button to the wallet, and what the last enrolment had
 /// to say. Presentational; the flow is ``MeroClient/signInWithCloud(callback:)``
 /// (or ``AccountEnrolment``). (== mero-react `AccountSignInPanel`.)
 ///
@@ -120,64 +193,59 @@ public struct AccountSignInPanel: View {
     public var isWorking: Bool
     /// Shown when enrolment goes to a wallet other than the hosted one.
     public var customWalletURL: URL?
+    public var buttonTitle: String
     public var onEnrol: () -> Void
 
     public init(
-        note: String? = nil, isWorking: Bool = false, customWalletURL: URL? = nil, onEnrol: @escaping () -> Void
+        note: String? = nil, isWorking: Bool = false, customWalletURL: URL? = nil,
+        buttonTitle: String = "Continue with Calimero Cloud", onEnrol: @escaping () -> Void
     ) {
         self.note = note
         self.isWorking = isWorking
         self.customWalletURL = customWalletURL
+        self.buttonTitle = buttonTitle
         self.onEnrol = onEnrol
     }
 
     public var body: some View {
-        VStack(spacing: 12) {
-            Text(
-                "You'll approve this device with your passkey on the Calimero wallet, then come straight back. "
-                    + "Your account key never leaves the wallet; this app only receives a certificate for its own "
-                    + "device key."
-            )
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
-
-            if let note {
-                Text(note)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .accessibilityIdentifier("accountNote")
-            }
-
+        VStack(spacing: 10) {
             Button(action: onEnrol) {
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     if isWorking {
                         ProgressView().tint(theme.primaryText)
                     } else {
-                        Image(systemName: "key.fill").font(.system(size: 14, weight: .semibold))
+                        Image(systemName: "cloud.fill").font(.callout)
                     }
-                    Text("Continue with Calimero").font(.body.weight(.semibold))
+                    Text(buttonTitle).font(.body.weight(.semibold))
                 }
                 .foregroundColor(theme.primaryText)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .background(RoundedRectangle(cornerRadius: theme.radius + 2).fill(theme.primary))
-                .overlay(
-                    RoundedRectangle(cornerRadius: theme.radius + 2).stroke(Color.black.opacity(0.06), lineWidth: 1))
+                .frame(maxWidth: .infinity, minHeight: theme.controlHeight)
+                .background(RoundedRectangle(cornerRadius: theme.radius).fill(theme.primary))
+                .overlay(RoundedRectangle(cornerRadius: theme.radius).stroke(Color.black.opacity(0.06), lineWidth: 1))
+                .opacity(isWorking ? 0.6 : 1)
             }
             .buttonStyle(.plain)
             .disabled(isWorking)
             .accessibilityIdentifier("cloudSignInButton")
 
-            Text("Uses the system sign-in sheet. Nothing to paste in.")
-                .font(.caption)
-                .foregroundColor(.secondary)
+            HStack(spacing: 6) {
+                Image(systemName: "person.badge.key").font(.caption)
+                Text("Opens the Calimero wallet to approve this device")
+            }
+            .font(.caption)
+            .foregroundColor(theme.textTertiary)
 
+            if let note {
+                Text(note)
+                    .font(.footnote)
+                    .foregroundColor(theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("accountNote")
+            }
             if let customWalletURL {
                 Text("Enrolling at \(customWalletURL.absoluteString), not the hosted wallet.")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(theme.textTertiary)
             }
         }
         .accessibilityElement(children: .contain)
@@ -185,17 +253,26 @@ public struct AccountSignInPanel: View {
     }
 }
 
-/// The Node tab: discovered local nodes and a URL field; Connect opens the
-/// chosen node's login page. (== mero-react `LoginModal`'s node section.)
+/// The node side: discovered local nodes and a URL field. Connect opens the
+/// chosen node's login page, or with ``NodeSignInMethod/password`` signs in
+/// with the node's admin username and password. (== mero-react
+/// `LoginModal`'s node section.)
 @MainActor
 public struct NodeLoginPanel: View {
     @EnvironmentObject private var client: MeroClient
     @Environment(\.meroTheme) private var theme
     @StateObject private var model: NodeLoginModel
+    @State private var username = ""
+    @State private var password = ""
     private let callback: CloudCallback
+    private let method: NodeSignInMethod
 
-    public init(callback: CloudCallback, ports: [Int] = NodeDiscovery.defaultLocalNodePorts) {
+    public init(
+        callback: CloudCallback, method: NodeSignInMethod = .loginPage,
+        ports: [Int] = NodeDiscovery.defaultLocalNodePorts
+    ) {
         self.callback = callback
+        self.method = method
         _model = StateObject(wrappedValue: NodeLoginModel(ports: ports))
     }
 
@@ -204,20 +281,11 @@ public struct NodeLoginPanel: View {
             if model.isDiscovering {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("Searching for local nodes…").font(.subheadline).foregroundColor(.secondary)
+                    Text("Searching for local nodes…").font(.subheadline).foregroundColor(theme.textSecondary)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("nodeDiscovering")
             } else {
-                Text(
-                    model.discovered.isEmpty
-                        ? "No local node found. Enter a node URL to continue."
-                        : "Select your Calimero node to continue."
-                )
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-
                 ForEach(model.discovered, id: \.self) { url in
                     option(NodeLoginModel.display(url), meta: "local", selected: model.selected == url) {
                         model.selected = url
@@ -231,64 +299,110 @@ public struct NodeLoginPanel: View {
                     .accessibilityIdentifier("nodeOption-custom")
                 }
                 if model.selected == nil {
-                    urlField
+                    field("Node URL", text: $model.customURL, placeholder: "http://localhost:4001")
+                        .nodeURLKeyboard()
+                        .onSubmit { Task { await connect() } }
+                        .accessibilityIdentifier("nodeUrlInput")
+                }
+                if method == .password {
+                    field("Username", text: $username, placeholder: "dev")
+                        .accessibilityIdentifier("nodeUserInput")
+                    field("Password", text: $password, placeholder: "Admin password", secure: true)
+                        .onSubmit { Task { await connect() } }
+                        .accessibilityIdentifier("nodePasswordInput")
                 }
                 if let error = model.error {
                     Text(error).font(.footnote).foregroundColor(theme.error)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                Button("↻ Rescan local nodes") { model.rescan() }
-                    .font(.footnote)
-                    .accessibilityIdentifier("rescanButton")
             }
 
             Button {
                 Task { await connect() }
             } label: {
-                HStack(spacing: 8) {
-                    if model.isChecking || client.isLoading { ProgressView().tint(theme.primaryText) }
-                    Text("Connect").font(.body.weight(.semibold))
+                HStack(spacing: 10) {
+                    if model.isChecking || client.isLoading {
+                        ProgressView().tint(theme.primaryText)
+                    } else {
+                        Image(systemName: "server.rack").font(.callout)
+                    }
+                    Text("Connect to node").font(.body.weight(.semibold))
                 }
                 .foregroundColor(theme.primaryText)
-                .frame(maxWidth: .infinity, minHeight: 48)
-                .background(RoundedRectangle(cornerRadius: theme.radius + 2).fill(theme.primary))
-                .opacity(model.canConnect ? 1 : 0.5)
+                .frame(maxWidth: .infinity, minHeight: theme.controlHeight)
+                .background(RoundedRectangle(cornerRadius: theme.radius).fill(theme.primary))
+                .opacity(canConnect ? 1 : 0.5)
             }
             .buttonStyle(.plain)
-            .disabled(!model.canConnect || client.isLoading)
+            .disabled(!canConnect || client.isLoading)
             .accessibilityIdentifier("nodeConnectButton")
+
+            if !model.isDiscovering {
+                Button {
+                    model.rescan()
+                } label: {
+                    Label("Rescan local nodes", systemImage: "arrow.clockwise")
+                        .font(.footnote.weight(.medium))
+                        .foregroundColor(theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("rescanButton")
+            }
         }
         .onAppear { model.rescan() }
         .onDisappear { model.stop() }
     }
 
-    private var urlField: some View {
-        TextField("https://your-node-url.calimero.network", text: $model.customURL)
-            .textFieldStyle(.roundedBorder)
+    private var canConnect: Bool {
+        model.canConnect && (method == .loginPage || (!username.isEmpty && !password.isEmpty))
+    }
+
+    private func field(_ title: String, text: Binding<String>, placeholder: String, secure: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.footnote.weight(.medium)).foregroundColor(theme.text)
+            Group {
+                if secure {
+                    SecureField(placeholder, text: text)
+                } else {
+                    TextField(placeholder, text: text)
+                }
+            }
             .disableAutocorrection(true)
-            .nodeURLKeyboard()
-            .onSubmit { Task { await connect() } }
-            .accessibilityIdentifier("nodeUrlInput")
+            .nodeURLKeyboardless()
+            .foregroundColor(theme.text)
+            .padding(.horizontal, 14)
+            .frame(minHeight: theme.controlHeight - 4)
+            .background(RoundedRectangle(cornerRadius: theme.radius).fill(theme.surface))
+            .overlay(RoundedRectangle(cornerRadius: theme.radius).stroke(theme.border))
+        }
     }
 
     private func option(_ title: String, meta: String?, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .foregroundColor(selected ? theme.primary : .secondary)
-                Text(title)
+                    .foregroundColor(selected ? theme.text : theme.textTertiary)
+                Text(title).foregroundColor(theme.text)
                 Spacer()
-                if let meta { Text(meta).font(.caption).foregroundColor(.secondary) }
+                if let meta { Text(meta).font(.caption).foregroundColor(theme.textTertiary) }
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: theme.radius).stroke(Color.secondary.opacity(0.3)))
+            .padding(12)
+            .background(
+                RoundedRectangle(cornerRadius: theme.radius).fill(
+                    selected ? theme.primary.opacity(0.15) : theme.surface)
+            )
+            .overlay(RoundedRectangle(cornerRadius: theme.radius).stroke(theme.border))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func connect() async {
-        guard model.canConnect, let target = await model.resolveTarget() else { return }
-        await client.connectToNode(target, callback: callback)
+        guard canConnect, let target = await model.resolveTarget() else { return }
+        switch method {
+        case .loginPage: await client.connectToNode(target, callback: callback)
+        case .password: await client.login(nodeURL: target, username: username, password: password)
+        }
     }
 }
 
@@ -298,6 +412,16 @@ extension View {
     func nodeURLKeyboard() -> some View {
         #if os(iOS)
         self.textInputAutocapitalization(.never).keyboardType(.URL)
+        #else
+        self
+        #endif
+    }
+
+    /// No autocapitalisation on iOS; unchanged elsewhere.
+    @ViewBuilder
+    func nodeURLKeyboardless() -> some View {
+        #if os(iOS)
+        self.textInputAutocapitalization(.never)
         #else
         self
         #endif

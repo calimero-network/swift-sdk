@@ -189,14 +189,30 @@ final class RunAllModel: ObservableObject {
 
     struct Result: Identifiable {
         let id: Int
-        let op: SDKOperation
+        /// The explorer operation, or nil for a contract test case.
+        let op: SDKOperation?
+        let title: String
+        let subtitle: String
+        let summary: String
         let phase: String
+        /// The contract case, for a "Contract" row.
+        var contractCase: ContractSpec.Case?
         /// Index into the lifecycle steps, for a lifecycle row.
         var step: Int?
         var inputs: [String: String] = [:]
         var status: Status = .pending
         var output = ""
         var millis = 0
+
+        init(id: Int, op: SDKOperation, phase: String, step: Int? = nil) {
+            self.id = id; self.op = op; self.phase = phase; self.step = step
+            title = op.name; subtitle = op.category; summary = op.summary
+        }
+
+        init(id: Int, contractCase: ContractSpec.Case) {
+            self.id = id; op = nil; phase = "Contract"; self.contractCase = contractCase
+            title = contractCase.name; subtitle = contractCase.group; summary = "scaffolding-e2e · \(contractCase.id)"
+        }
     }
 
     @Published private(set) var results: [Result] = []
@@ -229,7 +245,11 @@ final class RunAllModel: ObservableObject {
                 planned.append(Result(id: planned.count, op: op, phase: "Lifecycle", step: index))
             }
         }
-        let covered = Set(planned.map(\.op.id))
+        let covered = Set(planned.compactMap { $0.op?.id })
+        let spec = signedInToNode ? ContractSpec.load() : nil
+        for testCase in spec?.cases ?? [] {
+            planned.append(Result(id: planned.count, contractCase: testCase))
+        }
         for op in sdkOperations where !covered.contains(op.id) {
             var r = Result(id: planned.count, op: op, phase: "Skipped")
             r.status = .skipped(RunAllPlan.skipReason(op, signedInToNode: signedInToNode))
@@ -253,6 +273,7 @@ final class RunAllModel: ObservableObject {
         }
 
         for i in results.indices where results[i].status == .pending {
+            guard let op = results[i].op else { continue }
             let step: RunStep? = results[i].step.map { steps[$0] }
 
             if let step, let missing = step.needs.first(where: { fixtures[$0] == nil }) {
@@ -267,7 +288,7 @@ final class RunAllModel: ObservableObject {
             results[i].status = .running
             let started = Date()
             do {
-                let output = try await results[i].op.run(mero, inputs)
+                let output = try await op.run(mero, inputs)
                 results[i].output = output
                 results[i].millis = Int(Date().timeIntervalSince(started) * 1000)
                 if let reason = step?.expect?(output) {
@@ -283,6 +304,56 @@ final class RunAllModel: ObservableObject {
                 let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 results[i].output = message
                 results[i].status = .failed(message)
+            }
+        }
+
+        if let spec { await runContract(spec, mero: mero) }
+
+    }
+
+    /// The scaffolding-e2e contract tests: install the app from the registry,
+    /// make a namespace, group and context, run every case in order with one
+    /// shared `${run}` prefix, then delete what was made.
+    private func runContract(_ spec: ContractSpec, mero: Mero) async {
+        let rows = results.indices.filter { results[$0].phase == "Contract" }
+        func skipAll(_ why: String) { for i in rows { results[i].status = .skipped(why) } }
+        do {
+            let installedBefore = (try? await mero.admin.listApplications())?.apps.contains {
+                $0.package == spec.package
+            }
+            guard
+                let version = try await mero.admin.getRegistryVersions(
+                    registryUrl: RunAllPlan.registry, packageName: spec.package
+                ).first
+            else { return skipAll("\(spec.package) is not on the registry") }
+            let app = try await mero.admin.installFromRegistry(packageName: spec.package, version: version)
+            let ns = try await mero.admin.createNamespace(
+                CreateNamespaceRequest(applicationId: app.applicationId, name: "run-all-contract"))
+            let group = try await mero.admin.createGroupInNamespace(
+                ns.namespaceId, request: CreateGroupInNamespaceRequest(groupName: "contract", visibility: "open"))
+            let context = try await mero.admin.createContext(
+                CreateContextRequest(applicationId: app.applicationId, groupId: group.groupId, name: "contract"))
+
+            let runner = ContractCaseRunner(
+                mero: mero, contextId: context.contextId,
+                run: "e2e_" + String(Int(Date().timeIntervalSince1970), radix: 36))
+            for i in rows {
+                guard let testCase = results[i].contractCase else { continue }
+                results[i].status = .running
+                let started = Date()
+                let why = await runner.run(testCase)
+                results[i].millis = Int(Date().timeIntervalSince(started) * 1000)
+                results[i].status = why.map { .failed($0) } ?? .passed
+                results[i].output = why ?? "passed"
+            }
+
+            _ = try? await mero.admin.deleteContext(context.contextId, request: nil)
+            _ = try? await mero.admin.deleteNamespace(ns.namespaceId, request: nil)
+            if installedBefore == false { _ = try? await mero.admin.uninstallApplication(app.applicationId) }
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            for i in rows where results[i].status == .pending {
+                results[i].status = .failed("Setup failed: \(message)")
             }
         }
     }
@@ -311,10 +382,10 @@ final class RunAllModel: ObservableObject {
         var lines = ["MeroKit Run all — \(passed) passed, \(failed) failed, \(skipped) skipped"]
         for r in results {
             switch r.status {
-            case .passed: lines.append("PASS  \(r.op.name) (\(r.millis) ms)")
-            case .failed(let why): lines.append("FAIL  \(r.op.name): \(why)")
-            case .skipped(let why): lines.append("SKIP  \(r.op.name): \(why)")
-            case .pending, .running: lines.append("....  \(r.op.name)")
+            case .passed: lines.append("PASS  \(r.title) (\(r.millis) ms)")
+            case .failed(let why): lines.append("FAIL  \(r.title): \(why)")
+            case .skipped(let why): lines.append("SKIP  \(r.title): \(why)")
+            case .pending, .running: lines.append("....  \(r.title)")
             }
         }
         return lines.joined(separator: "\n")
@@ -412,7 +483,7 @@ struct RunAllView: View {
         }
     }
 
-    private let phases = ["Reads", "Lifecycle", "Skipped"]
+    private let phases = ["Reads", "Lifecycle", "Contract", "Skipped"]
 
     private var visible: [RunAllModel.Result] {
         model.results.filter { r in
@@ -431,8 +502,9 @@ struct RunAllView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text(
                     signedInToNode
-                        ? "Runs every read, then a full lifecycle on a throwaway kv-store app (install, namespace, "
-                            + "context, RPC, aliases, blob), and deletes what it made."
+                        ? "Runs every read, a full lifecycle on a throwaway kv-store app (install, namespace, "
+                            + "context, RPC, aliases, blob), then the scaffolding-e2e contract tests, and deletes "
+                            + "what it made."
                         : "Runs every read through your Cloud session. The lifecycle needs a node you sign in to "
                             + "directly (Manually enter node URL)."
                 )
@@ -506,7 +578,7 @@ private struct RunResultRow: View {
         HStack(spacing: 12) {
             statusIcon.frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(result.op.name).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+                Text(result.title).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
                 Text(detail).font(.caption).foregroundColor(detailColor).lineLimit(2)
             }
             Spacer(minLength: 8)
@@ -533,7 +605,7 @@ private struct RunResultRow: View {
     private var detail: String {
         switch result.status {
         case .failed(let why), .skipped(let why): return why
-        default: return result.op.category
+        default: return result.subtitle
         }
     }
 
@@ -549,8 +621,8 @@ private struct RunResultDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(result.op.name).font(.title3.bold()).foregroundColor(Cal.text)
-                    Text(result.op.summary).font(.subheadline).foregroundColor(Cal.textDim)
+                    Text(result.title).font(.title3.bold()).foregroundColor(Cal.text)
+                    Text(result.summary).font(.subheadline).foregroundColor(Cal.textDim)
                 }
                 if !result.inputs.isEmpty {
                     block(
@@ -571,7 +643,7 @@ private struct RunResultDetail: View {
             .padding(.vertical, 16)
         }
         .background(Cal.bg.ignoresSafeArea())
-        .navigationTitle(result.op.name)
+        .navigationTitle(result.title)
         .navigationBarTitleDisplayMode(.inline)
     }
 

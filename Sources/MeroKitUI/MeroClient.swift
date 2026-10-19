@@ -599,6 +599,10 @@ public final class MeroClient: ObservableObject {
         if let delegatedSession { connectWithAccount(delegatedSession) }
     }
 
+    /// Dismiss the last error (``LoginView`` does, when switching between
+    /// Cloud and node sign-in).
+    public func clearError() { errorMessage = nil }
+
     // MARK: - Development node login
 
     /// Log in with username/password against `nodeURL` — a development node you

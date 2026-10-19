@@ -80,6 +80,27 @@ final class AppE2ETests: XCTestCase {
         XCTAssertFalse(report.contains("\nFAIL "), "Run all reported failures:\n\(report)")
     }
 
+    /// SDK → Login component: MeroKitUI's LoginView renders, and its
+    /// "Manually enter node URL" link swaps Cloud for the node form.
+    func testLoginComponentSwitchesBetweenCloudAndNode() throws {
+        tap(app.buttons["exploreSDK"], "Explore SDK entry")
+        tap(app.buttons["componentsEntry"], "Login component entry")
+        XCTAssertTrue(app.buttons["cloudSignInButton"].waitForExistence(timeout: 10), "Cloud button missing")
+        pauseForScreenshot()
+        tap(app.buttons["manualNode"], "Manually enter node URL")
+        XCTAssertTrue(app.buttons["nodeConnectButton"].waitForExistence(timeout: 10), "node form missing")
+        XCTAssertTrue(app.secureTextFields["nodePasswordInput"].exists, "password field missing")
+        pauseForScreenshot()
+        tap(app.buttons["useCloud"], "Use Calimero Cloud instead")
+        XCTAssertTrue(app.buttons["cloudSignInButton"].waitForExistence(timeout: 10), "Cloud button did not return")
+    }
+
+    /// Holds the screen still when `PAUSE_FOR_SCREENSHOT` is set
+    /// (`TEST_RUNNER_PAUSE_FOR_SCREENSHOT=1 xcodebuild test …`).
+    private func pauseForScreenshot() {
+        if ProcessInfo.processInfo.environment["PAUSE_FOR_SCREENSHOT"] != nil { Thread.sleep(forTimeInterval: 12) }
+    }
+
     /// Chat: install mero-chat, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         try Self.skipUnlessChatAppIsPublished()

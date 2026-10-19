@@ -1,0 +1,3963 @@
+{
+  "package": "com.calimero.scaffolding-e2e",
+  "source": "apps/apps/scaffolding-e2e/app/src/sections/TestRunner.tsx@a7f2340a2",
+  "conventions": {
+    "run": "${run} is ONE per-run prefix shared by every case in a run (TS: `e2e_${Date.now().toString(36)}`). Run cases in listed order: a few read state an earlier case created (see each case's `note`).",
+    "substitution": "${run}/${var} are substituted in every string of `args` and `expect` (including object keys and `path`). A string that is EXACTLY \"${var}\", \"${var}+N\" or \"${var}-N\" is replaced by the saved value itself, keeping its JSON type (numbers: arithmetic applied), e.g. {\"index\": \"${len}-1\"} sends a number.",
+    "path": "Dot-separated. Object segment = key; numeric segment = array index (negative counts from the end, -1 = last); segment `length` = element count of an array, character count of a string, or key count of an object.",
+    "output": "Output = JSON-RPC result.output; missing/undefined output is treated as null. Every op except `error`, `any` and `okOrErrorMatches` also fails if the call returned an error.",
+    "save": "`save` stores the (path-selected) output; it is only stored when the expectation passes."
+  },
+  "ops": {
+    "contains": "value: string → output string contains it as substring; output array → contains an element equal (deep JSON equality) to value.",
+    "containsWhere": "key, value: output is an array with at least one object whose field `key` equals `value`.",
+    "notContainsWhere": "key, value: output is an array with no object whose field `key` equals `value`.",
+    "isSorted": "output is an array of strings in non-decreasing order (compare by Unicode code point, same as Rust String Ord).",
+    "okOrErrorMatches": "pattern: the call succeeds, or fails with an error message matching `pattern` (regex, case-insensitive).",
+    "any": "ignore the result entirely, success or error (fire-and-forget step)."
+  },
+  "cases": [
+    {
+      "id": "whoami-shape",
+      "name": "whoami returns a 64-hex device id and a 64-hex account id",
+      "group": "Identity",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "device_id",
+          "expect": {
+            "op": "matches",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "save": "dev"
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "matches",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "neq",
+            "value": "${dev}"
+          }
+        }
+      ],
+      "note": "whoami is a view; called once per assertion."
+    },
+    {
+      "id": "whoami-stable",
+      "name": "whoami is stable across calls",
+      "group": "Identity",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "device_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "dev"
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "acct"
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "device_id",
+          "expect": {
+            "op": "eq",
+            "value": "${dev}"
+          }
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "eq",
+            "value": "${acct}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "my-account-agrees-with-whoami",
+      "name": "my_account returns exactly whoami's account_id",
+      "group": "Identity",
+      "steps": [
+        {
+          "call": "my_account",
+          "args": {},
+          "expect": {
+            "op": "matches",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "save": "scalar"
+        },
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "eq",
+            "value": "${scalar}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "tracing-probe-commits-its-write",
+      "name": "tracing_probe runs and commits its KV write",
+      "group": "Identity",
+      "steps": [
+        {
+          "call": "tracing_probe",
+          "args": {
+            "debug": false
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "probe_key"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "probe_value"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-set-get",
+      "name": "set + get round-trip",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_k",
+            "value": "hello"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_k"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "hello"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-get-missing",
+      "name": "get missing key → null",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_missing_xyzzy"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-entries",
+      "name": "entries contains set key",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_ent",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "entries",
+          "args": {},
+          "expect": {
+            "op": "hasKey",
+            "key": "${run}_ent"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-len",
+      "name": "len increases after set",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_len",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "len",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-remove",
+      "name": "remove + get → null",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_rm",
+            "value": "bye"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "remove",
+          "args": {
+            "key": "${run}_rm"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_rm"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-clear",
+      "name": "clear runs without error",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-set-with-handler",
+      "name": "set_with_handler sets key (handler fires on peer nodes)",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set_with_handler",
+          "args": {
+            "key": "${run}_hwk",
+            "value": "hwv"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_hwk"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "hwv"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-get-result",
+      "name": "get_result returns value after set",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_gr",
+            "value": "result-val"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_result",
+          "args": {
+            "key": "${run}_gr"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "result-val"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-overwrite",
+      "name": "overwrite key → get returns latest value",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_ow",
+            "value": "first"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_ow",
+            "value": "second"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_ow"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "second"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-remove-missing",
+      "name": "remove non-existent key → null (no error)",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "remove",
+          "args": {
+            "key": "${run}_no_such_xyzzy"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-get-after-clear",
+      "name": "key is gone after clear",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_clr",
+            "value": "before"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_clr"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "kv-len-after-remove",
+      "name": "len decreases after remove",
+      "group": "KV Operations",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_lenrm",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "after_set"
+        },
+        {
+          "call": "remove",
+          "args": {
+            "key": "${run}_lenrm"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "len",
+          "args": {},
+          "expect": {
+            "op": "lt",
+            "value": "${after_set}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "handler-insert",
+      "name": "insert_handler increments counter",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "get_handler_execution_count",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "insert_handler",
+          "args": {
+            "key": "${run}_ih",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_handler_execution_count",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "handler-update",
+      "name": "update_handler increments counter",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_uh",
+            "value": "old"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_handler_execution_count",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "update_handler",
+          "args": {
+            "key": "${run}_uh",
+            "value": "new"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_handler_execution_count",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "handler-remove",
+      "name": "remove_with_handler removes key",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_rh",
+            "value": "todel"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "remove_with_handler",
+          "args": {
+            "key": "${run}_rh"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_rh"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "handler-count",
+      "name": "execution count > 0 after handler calls",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "get_handler_execution_count",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ],
+      "note": "Relies on handler-insert / handler-update having run earlier in the same run."
+    },
+    {
+      "id": "handler-clear-with-handler",
+      "name": "clear_with_handler clears store (handler fires on peer nodes)",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "set",
+          "args": {
+            "key": "${run}_cwh",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "clear_with_handler",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get",
+          "args": {
+            "key": "${run}_cwh"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "handler-remove-missing-with-handler",
+      "name": "remove_with_handler on missing key → null without error",
+      "group": "KV Handlers",
+      "steps": [
+        {
+          "call": "remove_with_handler",
+          "args": {
+            "key": "${run}_no_rh_xyz"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "user-simple",
+      "name": "set_user_simple + get_user_simple round-trip",
+      "group": "User Storage",
+      "steps": [
+        {
+          "call": "set_user_simple",
+          "args": {
+            "value": "usr_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_user_simple",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "usr_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "user-nested",
+      "name": "set_user_nested + get_user_nested round-trip",
+      "group": "User Storage",
+      "steps": [
+        {
+          "call": "set_user_nested",
+          "args": {
+            "key": "nk_${run}",
+            "value": "nv_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_user_nested",
+          "args": {
+            "key": "nk_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "nv_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "user-simple-for-self",
+      "name": "get_user_simple_for own account id returns stored value",
+      "group": "User Storage",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "set_user_simple",
+          "args": {
+            "value": "self_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_user_simple_for",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "self_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "user-nested-multiple",
+      "name": "multiple nested keys are independent",
+      "group": "User Storage",
+      "steps": [
+        {
+          "call": "set_user_nested",
+          "args": {
+            "key": "nk1_${run}",
+            "value": "nv1_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_user_nested",
+          "args": {
+            "key": "nk2_${run}",
+            "value": "nv2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_user_nested",
+          "args": {
+            "key": "nk1_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "nv1_${run}"
+          }
+        },
+        {
+          "call": "get_user_nested",
+          "args": {
+            "key": "nk2_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "nv2_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "user-overwrite-simple",
+      "name": "overwrite user_simple → get returns new value",
+      "group": "User Storage",
+      "steps": [
+        {
+          "call": "set_user_simple",
+          "args": {
+            "value": "first_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_user_simple",
+          "args": {
+            "value": "second_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_user_simple",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "second_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "frozen-hash",
+      "name": "add_frozen returns non-empty hash",
+      "group": "Frozen Storage",
+      "steps": [
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "frozen_${run}"
+          },
+          "expect": {
+            "op": "nonEmptyString"
+          }
+        }
+      ]
+    },
+    {
+      "id": "frozen-get",
+      "name": "get_frozen returns original value",
+      "group": "Frozen Storage",
+      "steps": [
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "content_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "h"
+        },
+        {
+          "call": "get_frozen",
+          "args": {
+            "hash_hex": "${h}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "content_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "frozen-dedup",
+      "name": "duplicate add returns same hash",
+      "group": "Frozen Storage",
+      "steps": [
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "dedup_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "h1"
+        },
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "dedup_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "${h1}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "frozen-different-values",
+      "name": "distinct inputs produce distinct hashes",
+      "group": "Frozen Storage",
+      "steps": [
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "fa_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "h1"
+        },
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "fb_${run}"
+          },
+          "expect": {
+            "op": "neq",
+            "value": "${h1}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "frozen-large-value",
+      "name": "100-char value round-trips correctly",
+      "group": "Frozen Storage",
+      "steps": [
+        {
+          "call": "add_frozen",
+          "args": {
+            "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "h"
+        },
+        {
+          "call": "get_frozen",
+          "args": {
+            "hash_hex": "${h}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "private-correct",
+      "name": "correct guess → true",
+      "group": "Private Storage",
+      "steps": [
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "g_${run}",
+            "secret": "secret"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_guess",
+          "args": {
+            "game_id": "g_${run}",
+            "guess": "secret"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "private-wrong",
+      "name": "wrong guess → false",
+      "group": "Private Storage",
+      "steps": [
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "g2_${run}",
+            "secret": "secret"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_guess",
+          "args": {
+            "game_id": "g2_${run}",
+            "guess": "wrong"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ]
+    },
+    {
+      "id": "private-my-secrets",
+      "name": "my_secrets returns object",
+      "group": "Private Storage",
+      "steps": [
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "gs_${run}",
+            "secret": "s"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "my_secrets",
+          "args": {},
+          "expect": {
+            "op": "isObject"
+          }
+        }
+      ]
+    },
+    {
+      "id": "private-games",
+      "name": "games returns object with public hashes",
+      "group": "Private Storage",
+      "steps": [
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "gg_${run}",
+            "secret": "s"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "games",
+          "args": {},
+          "expect": {
+            "op": "isObject"
+          }
+        }
+      ]
+    },
+    {
+      "id": "private-multiple-games",
+      "name": "secrets for two game IDs are tracked independently",
+      "group": "Private Storage",
+      "steps": [
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "gA_${run}",
+            "secret": "secretA"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_secret",
+          "args": {
+            "game_id": "gB_${run}",
+            "secret": "secretB"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_guess",
+          "args": {
+            "game_id": "gA_${run}",
+            "guess": "secretA"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "add_guess",
+          "args": {
+            "game_id": "gB_${run}",
+            "guess": "secretB"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "add_guess",
+          "args": {
+            "game_id": "gA_${run}",
+            "guess": "secretB"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ]
+    },
+    {
+      "id": "blob-list",
+      "name": "list_files returns array",
+      "group": "Blob Storage",
+      "steps": [
+        {
+          "call": "list_files",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        }
+      ]
+    },
+    {
+      "id": "blob-search",
+      "name": "search_files returns array",
+      "group": "Blob Storage",
+      "steps": [
+        {
+          "call": "search_files",
+          "args": {
+            "query": "test"
+          },
+          "expect": {
+            "op": "isArray"
+          }
+        }
+      ]
+    },
+    {
+      "id": "blob-get-nonexistent",
+      "name": "getFile for unknown id → error response",
+      "group": "Blob Storage",
+      "steps": [
+        {
+          "call": "get_file",
+          "args": {
+            "file_id": "nonexistent_file_id_xyz_123"
+          },
+          "expect": {
+            "op": "error"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gctr-increment",
+      "name": "increment returns >= 1",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gc_${run}"
+          },
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "gctr-monotone",
+      "name": "second increment > first",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gc2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "v1"
+        },
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gc2_${run}"
+          },
+          "expect": {
+            "op": "gt",
+            "value": "${v1}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gctr-get",
+      "name": "get_g_counter matches last increment",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gc3_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "inc"
+        },
+        {
+          "call": "get_g_counter",
+          "args": {
+            "key": "gc3_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "${inc}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "pnctr-increment",
+      "name": "increment returns >= 1",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_pn_counter",
+          "args": {
+            "key": "pn_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_pn_counter",
+          "args": {
+            "key": "pn_${run}"
+          },
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "pnctr-decrement",
+      "name": "decrement lowers value",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_pn_counter",
+          "args": {
+            "key": "pn2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "increment_pn_counter",
+          "args": {
+            "key": "pn2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_pn_counter",
+          "args": {
+            "key": "pn2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "decrement_pn_counter",
+          "args": {
+            "key": "pn2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_pn_counter",
+          "args": {
+            "key": "pn2_${run}"
+          },
+          "expect": {
+            "op": "lt",
+            "value": "${before}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "gctr-independent-keys",
+      "name": "two fresh g-counter keys start at 1 after first increment each",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gcia_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": 1
+          }
+        },
+        {
+          "call": "increment_g_counter",
+          "args": {
+            "key": "gcib_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "pnctr-net-result",
+      "name": "increment + increment + decrement → net value >= 1",
+      "group": "CRDT Counters",
+      "steps": [
+        {
+          "call": "increment_pn_counter",
+          "args": {
+            "key": "pnn_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "increment_pn_counter",
+          "args": {
+            "key": "pnn_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "decrement_pn_counter",
+          "args": {
+            "key": "pnn_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_pn_counter",
+          "args": {
+            "key": "pnn_${run}"
+          },
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "reg-set-get",
+      "name": "set + get round-trip",
+      "group": "CRDT Registers",
+      "steps": [
+        {
+          "call": "set_register",
+          "args": {
+            "key": "reg_${run}",
+            "value": "val_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_register",
+          "args": {
+            "key": "reg_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "val_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reg-overwrite",
+      "name": "overwrite returns new value",
+      "group": "CRDT Registers",
+      "steps": [
+        {
+          "call": "set_register",
+          "args": {
+            "key": "reg2_${run}",
+            "value": "old"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_register",
+          "args": {
+            "key": "reg2_${run}",
+            "value": "new"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_register",
+          "args": {
+            "key": "reg2_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "new"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reg-independent-keys",
+      "name": "two register keys are independent",
+      "group": "CRDT Registers",
+      "steps": [
+        {
+          "call": "set_register",
+          "args": {
+            "key": "ri1_${run}",
+            "value": "alpha"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_register",
+          "args": {
+            "key": "ri2_${run}",
+            "value": "beta"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_register",
+          "args": {
+            "key": "ri1_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "alpha"
+          }
+        },
+        {
+          "call": "get_register",
+          "args": {
+            "key": "ri2_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "beta"
+          }
+        }
+      ]
+    },
+    {
+      "id": "reg-exact-value",
+      "name": "register stores exact string including spaces and symbols",
+      "group": "CRDT Registers",
+      "steps": [
+        {
+          "call": "set_register",
+          "args": {
+            "key": "re_${run}",
+            "value": "hello world! 123 ${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_register",
+          "args": {
+            "key": "re_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "hello world! 123 ${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "meta-set-get",
+      "name": "set_metadata + get_metadata round-trip",
+      "group": "CRDT Metadata",
+      "steps": [
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "o_${run}",
+            "inner_key": "i_${run}",
+            "value": "mv_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "o_${run}",
+            "inner_key": "i_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "mv_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "meta-overwrite",
+      "name": "overwrite inner key returns new value",
+      "group": "CRDT Metadata",
+      "steps": [
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "o2_${run}",
+            "inner_key": "i2_${run}",
+            "value": "old"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "o2_${run}",
+            "inner_key": "i2_${run}",
+            "value": "new"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "o2_${run}",
+            "inner_key": "i2_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "new"
+          }
+        }
+      ]
+    },
+    {
+      "id": "meta-multiple-inner-keys",
+      "name": "three inner keys under same outer key are all readable",
+      "group": "CRDT Metadata",
+      "steps": [
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i1_${run}",
+            "value": "v1"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i2_${run}",
+            "value": "v2"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i3_${run}",
+            "value": "v3"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i1_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "v1"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i2_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "v2"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "mo_${run}",
+            "inner_key": "i3_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "v3"
+          }
+        }
+      ]
+    },
+    {
+      "id": "meta-outer-isolated",
+      "name": "different outer keys share same inner key name without collision",
+      "group": "CRDT Metadata",
+      "steps": [
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "ox1_${run}",
+            "inner_key": "ik_${run}",
+            "value": "vx1"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "set_metadata",
+          "args": {
+            "outer_key": "ox2_${run}",
+            "inner_key": "ik_${run}",
+            "value": "vx2"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "ox1_${run}",
+            "inner_key": "ik_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "vx1"
+          }
+        },
+        {
+          "call": "get_metadata",
+          "args": {
+            "outer_key": "ox2_${run}",
+            "inner_key": "ik_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "vx2"
+          }
+        }
+      ]
+    },
+    {
+      "id": "metrics-len",
+      "name": "push increases length",
+      "group": "CRDT Metrics",
+      "steps": [
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 42
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "metrics-get",
+      "name": "push + get at last index = pushed value",
+      "group": "CRDT Metrics",
+      "steps": [
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 77
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "len"
+        },
+        {
+          "call": "get_metric",
+          "args": {
+            "index": "${len}-1"
+          },
+          "expect": {
+            "op": "eq",
+            "value": 77
+          }
+        }
+      ]
+    },
+    {
+      "id": "metrics-batch",
+      "name": "push three values → length increases by at least three",
+      "group": "CRDT Metrics",
+      "steps": [
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 10
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 20
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 30
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+3"
+          }
+        }
+      ]
+    },
+    {
+      "id": "metrics-specific-value",
+      "name": "push specific value → get at last index returns it",
+      "group": "CRDT Metrics",
+      "steps": [
+        {
+          "call": "push_metric",
+          "args": {
+            "value": 13
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "metrics_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "len"
+        },
+        {
+          "call": "get_metric",
+          "args": {
+            "index": "${len}-1"
+          },
+          "expect": {
+            "op": "eq",
+            "value": 13
+          }
+        }
+      ]
+    },
+    {
+      "id": "tags-has",
+      "name": "add + has → true",
+      "group": "CRDT Tags",
+      "steps": [
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "t_${run}",
+            "tag": "mytag"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "has_tag",
+          "args": {
+            "key": "t_${run}",
+            "tag": "mytag"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "tags-missing",
+      "name": "has non-existent tag → false",
+      "group": "CRDT Tags",
+      "steps": [
+        {
+          "call": "has_tag",
+          "args": {
+            "key": "t_${run}",
+            "tag": "no-such-tag-xyzzy"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ],
+      "note": "Depends on tags-has having created key t_${run} earlier in the same run (has_tag errors on an unknown key)."
+    },
+    {
+      "id": "tags-count",
+      "name": "add + count >= 1",
+      "group": "CRDT Tags",
+      "steps": [
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "t2_${run}",
+            "tag": "counted"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_tag_count",
+          "args": {
+            "key": "t2_${run}"
+          },
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "tags-multiple-tags",
+      "name": "three tags on same key → count >= 3",
+      "group": "CRDT Tags",
+      "steps": [
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "tm_${run}",
+            "tag": "alpha"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "tm_${run}",
+            "tag": "beta"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "tm_${run}",
+            "tag": "gamma"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "get_tag_count",
+          "args": {
+            "key": "tm_${run}"
+          },
+          "expect": {
+            "op": "gte",
+            "value": 3
+          }
+        }
+      ]
+    },
+    {
+      "id": "tags-different-keys",
+      "name": "tags on key A do not appear on key B",
+      "group": "CRDT Tags",
+      "steps": [
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "ta_${run}",
+            "tag": "only-on-a"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "add_tag",
+          "args": {
+            "key": "tb_${run}",
+            "tag": "unrelated"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "has_tag",
+          "args": {
+            "key": "tb_${run}",
+            "tag": "only-on-a"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-set-get",
+      "name": "sorted_set + sorted_get round-trip",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "s_${run}",
+            "value": "v_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_get",
+          "args": {
+            "key": "s_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "v_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-keys-ascending",
+      "name": "sorted_keys returns keys in ascending order",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "k_${run}_c",
+            "value": "3"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "k_${run}_a",
+            "value": "1"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "k_${run}_b",
+            "value": "2"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "k_${run}_a"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "k_${run}_b"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "k_${run}_c"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "isSorted"
+          }
+        }
+      ],
+      "note": "TS filters to the k_${run}_ prefix and checks count==3 + ascending; here: each of the 3 keys present + the whole list ascending (implies the subset is ascending)."
+    },
+    {
+      "id": "sorted-range-half-open",
+      "name": "sorted_range is half-open: start in, end out",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "r_${run}_a",
+            "value": "1"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "r_${run}_b",
+            "value": "2"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "r_${run}_c",
+            "value": "3"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_range",
+          "args": {
+            "start": "r_${run}_a",
+            "end": "r_${run}_c"
+          },
+          "expect": {
+            "op": "eq",
+            "value": {
+              "r_${run}_a": "1",
+              "r_${run}_b": "2"
+            }
+          }
+        }
+      ],
+      "note": "TS compares only the key set; values are deterministic so the whole map is compared."
+    },
+    {
+      "id": "sorted-last-key",
+      "name": "sorted_last_key returns the largest key",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "zzz_${run}",
+            "value": "last"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_last_key",
+          "args": {},
+          "expect": {
+            "op": "nonEmptyString"
+          },
+          "save": "last"
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "expect": {
+            "op": "isSorted"
+          }
+        },
+        {
+          "call": "sorted_keys",
+          "args": {},
+          "path": "-1",
+          "expect": {
+            "op": "eq",
+            "value": "${last}"
+          }
+        }
+      ],
+      "note": "TS sorts sorted_keys locally and compares its max; here: list is ascending AND its last element equals sorted_last_key."
+    },
+    {
+      "id": "sorted-remove",
+      "name": "sorted_remove reports whether the key was there",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "rm_${run}",
+            "value": "x"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_remove",
+          "args": {
+            "key": "rm_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "sorted_remove",
+          "args": {
+            "key": "rm_${run}"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        },
+        {
+          "call": "sorted_get",
+          "args": {
+            "key": "rm_${run}"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-len",
+      "name": "sorted_len grows with an insert",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "sorted_set",
+          "args": {
+            "key": "len_${run}",
+            "value": "x"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_len",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-tag-add-idempotent",
+      "name": "sorted_tag_add returns true once, then false",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "tag_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "tag_${run}"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        },
+        {
+          "call": "sorted_tag_contains",
+          "args": {
+            "tag": "tag_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-tag-readd-after-remove",
+      "name": "a removed element can be re-added and is present again",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "re_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "sorted_tag_remove",
+          "args": {
+            "tag": "re_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "sorted_tag_contains",
+          "args": {
+            "tag": "re_${run}"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "re_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "sorted_tag_contains",
+          "args": {
+            "tag": "re_${run}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-tags-ascending",
+      "name": "sorted_tags_all returns elements in ascending order",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "ord_${run}_c"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "ord_${run}_a"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "ord_${run}_b"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tags_all",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        },
+        {
+          "call": "sorted_tags_all",
+          "args": {},
+          "expect": {
+            "op": "isSorted"
+          }
+        }
+      ],
+      "note": "TS checks only the ord_${run}_ subset is ascending; here the whole list (implies the subset)."
+    },
+    {
+      "id": "sorted-tags-range",
+      "name": "sorted_tags_range is half-open too",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "tr_${run}_a"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "tr_${run}_b"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "tr_${run}_c"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tags_range",
+          "args": {
+            "start": "tr_${run}_a",
+            "end": "tr_${run}_c"
+          },
+          "expect": {
+            "op": "eq",
+            "value": [
+              "tr_${run}_a",
+              "tr_${run}_b"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sorted-tags-last",
+      "name": "sorted_tags_last returns the largest element",
+      "group": "Sorted Collections",
+      "steps": [
+        {
+          "call": "sorted_tag_add",
+          "args": {
+            "tag": "zzz_tag_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "sorted_tags_last",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "last"
+        },
+        {
+          "call": "sorted_tags_all",
+          "args": {},
+          "expect": {
+            "op": "isSorted"
+          }
+        },
+        {
+          "call": "sorted_tags_all",
+          "args": {},
+          "path": "-1",
+          "expect": {
+            "op": "eq",
+            "value": "${last}"
+          }
+        }
+      ],
+      "note": "TS sorts sorted_tags_all locally and compares its max; here: list is ascending AND its last element equals sorted_tags_last."
+    },
+    {
+      "id": "shared-rotate-writers",
+      "name": "shared_rotate_writers keeps the caller able to write",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "shared_rotate_writers",
+          "args": {
+            "account_hexes": [
+              "${me}"
+            ]
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_is_writer",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "shared_set",
+          "args": {
+            "value": "rotated_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_get",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "rotated_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-roles-defined",
+      "name": "acl_roles lists the roles the contract defines",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "acl_roles",
+          "args": {},
+          "expect": {
+            "op": "isObject"
+          }
+        },
+        {
+          "call": "acl_roles",
+          "args": {},
+          "path": "length",
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        },
+        {
+          "call": "acl_roles",
+          "args": {},
+          "path": "editor",
+          "expect": {
+            "op": "eq",
+            "value": [
+              "write"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-init-seeds-one-admin",
+      "name": "init seeds exactly one admin, and it is the caller",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "acl_admins",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        },
+        {
+          "call": "acl_admins",
+          "args": {},
+          "path": "length",
+          "expect": {
+            "op": "eq",
+            "value": 1
+          }
+        },
+        {
+          "call": "acl_admins",
+          "args": {},
+          "path": "0",
+          "expect": {
+            "op": "eq",
+            "value": "${me}"
+          }
+        },
+        {
+          "call": "acl_is_admin",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-grant-then-has-role",
+      "name": "acl_grant + acl_has_role + acl_members_of agree",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "acl_grant",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_has_role",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "acl_members_of",
+          "args": {
+            "role": "editor"
+          },
+          "expect": {
+            "op": "contains",
+            "value": "${me}"
+          }
+        },
+        {
+          "call": "acl_my_roles",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "editor"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-unknown-role-rejected",
+      "name": "an undefined role name is rejected, not stored",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "acl_grant",
+          "args": {
+            "role": "nonsense_${run}",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "error"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-projection-is-separate",
+      "name": "a grant reaches the capability map only after acl_project",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "acl_grant",
+          "args": {
+            "role": "moderator",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_project",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        },
+        {
+          "call": "acl_capabilities",
+          "args": {},
+          "path": "${me}",
+          "expect": {
+            "op": "contains",
+            "value": "write"
+          }
+        },
+        {
+          "call": "acl_capabilities",
+          "args": {},
+          "path": "${me}",
+          "expect": {
+            "op": "contains",
+            "value": "delete"
+          }
+        },
+        {
+          "call": "acl_capabilities",
+          "args": {},
+          "path": "${me}",
+          "expect": {
+            "op": "contains",
+            "value": "admin"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-revoke-then-regrant",
+      "name": "revoke then re-grant converges (no tombstone)",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "acl_grant",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_revoke",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_has_role",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        },
+        {
+          "call": "acl_grant",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_has_role",
+          "args": {
+            "role": "editor",
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "acl-doc-write-as-admin",
+      "name": "the admin can write the guarded document",
+      "group": "Access Control",
+      "steps": [
+        {
+          "call": "acl_project",
+          "args": {},
+          "expect": {
+            "op": "any"
+          }
+        },
+        {
+          "call": "acl_doc_set",
+          "args": {
+            "value": "guarded_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "acl_doc_get",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "guarded_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ownable-init-owner",
+      "name": "init makes the caller the owner",
+      "group": "Ownable",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "owned_owner",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "${me}"
+          }
+        },
+        {
+          "call": "owned_is_owner",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ownable-owner-writes",
+      "name": "the owner can write and read back",
+      "group": "Ownable",
+      "steps": [
+        {
+          "call": "owned_set",
+          "args": {
+            "value": "owned_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "owned_get",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "owned_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ownable-transfer-is-one-way",
+      "name": "owned_transfer moves the single writer, with no undo",
+      "group": "Ownable",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "owned_owner",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "${me}"
+          }
+        },
+        {
+          "call": "owned_is_owner",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        },
+        {
+          "call": "owned_transfer",
+          "args": {
+            "account_hex": "not-an-account"
+          },
+          "expect": {
+            "op": "error"
+          }
+        },
+        {
+          "call": "owned_owner",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "${me}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-title",
+      "name": "set_title + get_title round-trip",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_set_title",
+          "args": {
+            "new_title": "doc_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_title",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "doc_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-insert-get",
+      "name": "clear + insert_text + get_text",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_insert_text",
+          "args": {
+            "position": 0,
+            "text": "hi_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "hi_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-append",
+      "name": "append_text + get_text contains appended",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "app_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "app_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-length",
+      "name": "get_length matches text length",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "len_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "path": "length",
+          "expect": {
+            "op": "noError"
+          },
+          "save": "textLen"
+        },
+        {
+          "call": "rga_get_length",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "${textLen}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-is-empty",
+      "name": "is_empty → true after clear",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_is_empty",
+          "args": {},
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-delete",
+      "name": "delete_text shrinks length",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "abcde_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_length",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "rga_delete_text",
+          "args": {
+            "start": 0,
+            "end": 2
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_length",
+          "args": {},
+          "expect": {
+            "op": "lt",
+            "value": "${before}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-title-overwrite",
+      "name": "set_title twice → get_title returns second value",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_set_title",
+          "args": {
+            "new_title": "first_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_set_title",
+          "args": {
+            "new_title": "second_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_title",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "second_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-multiple-appends",
+      "name": "two appends → both strings present in get_text",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "part1_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "part2_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "part1_${run}"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "part2_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "rga-insert-at-start",
+      "name": "insert at position 0 prepends to document",
+      "group": "RGA Document",
+      "steps": [
+        {
+          "call": "rga_clear",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_append_text",
+          "args": {
+            "text": "suffix_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_insert_text",
+          "args": {
+            "position": 0,
+            "text": "prefix_"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "prefix_"
+          }
+        },
+        {
+          "call": "rga_get_text",
+          "args": {},
+          "expect": {
+            "op": "contains",
+            "value": "suffix_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-get-info",
+      "name": "ws_get_info responds (initialized or not)",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_get_info",
+          "args": {},
+          "expect": {
+            "op": "okOrErrorMatches",
+            "pattern": "not initialized"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-list-channels",
+      "name": "ws_list_channels returns array",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_list_channels",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-list-groups",
+      "name": "ws_list_groups returns array",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_list_groups",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-list-members",
+      "name": "ws_list_members returns array",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_list_members",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-init",
+      "name": "ws_init succeeds or is already initialized",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_init",
+          "args": {
+            "name": "E2E Workspace"
+          },
+          "expect": {
+            "op": "okOrErrorMatches",
+            "pattern": "already initialized"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-channel-register",
+      "name": "register_channel + list → channel appears",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_register_channel",
+          "args": {
+            "context_id": "ctx_${run}_fake",
+            "name": "#chan_${run}",
+            "topic": "test topic"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_list_channels",
+          "args": {},
+          "expect": {
+            "op": "containsWhere",
+            "key": "context_id",
+            "value": "ctx_${run}_fake"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-channel-unregister",
+      "name": "unregister_channel → channel removed from list",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_register_channel",
+          "args": {
+            "context_id": "ctx_unreg_${run}",
+            "name": "#tmp_${run}",
+            "topic": ""
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_unregister_channel",
+          "args": {
+            "context_id": "ctx_unreg_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_list_channels",
+          "args": {},
+          "expect": {
+            "op": "notContainsWhere",
+            "key": "context_id",
+            "value": "ctx_unreg_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-group-register",
+      "name": "register_group + list → group appears",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_register_group",
+          "args": {
+            "group_id": "grp_${run}_fake",
+            "name": "Group ${run}",
+            "description": "desc"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_list_groups",
+          "args": {},
+          "expect": {
+            "op": "containsWhere",
+            "key": "group_id",
+            "value": "grp_${run}_fake"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-group-unregister",
+      "name": "unregister_group → group removed from list",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_register_group",
+          "args": {
+            "group_id": "grp_unreg_${run}",
+            "name": "Tmp ${run}",
+            "description": ""
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_unregister_group",
+          "args": {
+            "group_id": "grp_unreg_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_list_groups",
+          "args": {},
+          "expect": {
+            "op": "notContainsWhere",
+            "key": "group_id",
+            "value": "grp_unreg_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-my-role",
+      "name": "ws_my_role returns 'admin' after ws_init",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_my_role",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "admin"
+          }
+        }
+      ],
+      "note": "Depends on ws-init having run earlier (by this identity)."
+    },
+    {
+      "id": "ws-set-get-role",
+      "name": "set_member_role + get_member_role round-trip",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_set_member_role",
+          "args": {
+            "identity": "fakemember_${run}",
+            "role": "member"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "ws_get_member_role",
+          "args": {
+            "identity": "fakemember_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "member"
+          }
+        }
+      ]
+    },
+    {
+      "id": "ws-list-members-count",
+      "name": "list_members has at least 1 entry after init (the admin)",
+      "group": "Workspace",
+      "steps": [
+        {
+          "call": "ws_list_members",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        },
+        {
+          "call": "ws_list_members",
+          "args": {},
+          "path": "length",
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-insert-get",
+      "name": "authored_insert + authored_get round-trip",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "am_${run}",
+            "value": "amv_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_get",
+          "args": {
+            "key": "am_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "amv_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-update",
+      "name": "authored_update changes the value (owner-only)",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "amu_${run}",
+            "value": "first"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_update",
+          "args": {
+            "key": "amu_${run}",
+            "value": "second"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_get",
+          "args": {
+            "key": "amu_${run}"
+          },
+          "expect": {
+            "op": "eq",
+            "value": "second"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-remove",
+      "name": "authored_remove deletes the entry",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "amr_${run}",
+            "value": "todel"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_remove",
+          "args": {
+            "key": "amr_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_get",
+          "args": {
+            "key": "amr_${run}"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-get-missing",
+      "name": "authored_get on unknown key → null",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_get",
+          "args": {
+            "key": "am_no_such_${run}"
+          },
+          "expect": {
+            "op": "isNull"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-entries",
+      "name": "authored_entries contains inserted key",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "ame_${run}",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_entries",
+          "args": {},
+          "expect": {
+            "op": "hasKey",
+            "key": "ame_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-len",
+      "name": "authored_len increases after insert",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_len",
+          "args": {},
+          "expect": {
+            "op": "noError"
+          },
+          "save": "before"
+        },
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "aml_${run}",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_len",
+          "args": {},
+          "expect": {
+            "op": "gte",
+            "value": "${before}+1"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-get-owner",
+      "name": "authored_get_owner returns non-empty owner key",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "amo_${run}",
+            "value": "v"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_get_owner",
+          "args": {
+            "key": "amo_${run}"
+          },
+          "expect": {
+            "op": "nonEmptyString"
+          }
+        }
+      ]
+    },
+    {
+      "id": "amap-duplicate-insert",
+      "name": "duplicate authored_insert on same key → error",
+      "group": "Authored Map",
+      "steps": [
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "amd_${run}",
+            "value": "first"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "authored_insert",
+          "args": {
+            "key": "amd_${run}",
+            "value": "second"
+          },
+          "expect": {
+            "op": "error"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-set-get",
+      "name": "shared_set + shared_get round-trip",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "shared_set",
+          "args": {
+            "value": "sv_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_get",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "sv_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-overwrite",
+      "name": "shared_set twice → shared_get returns latest",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "shared_set",
+          "args": {
+            "value": "first_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_set",
+          "args": {
+            "value": "second_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_get",
+          "args": {},
+          "expect": {
+            "op": "eq",
+            "value": "second_${run}"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-writers-array",
+      "name": "shared_get_writers returns a non-empty array",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "shared_get_writers",
+          "args": {},
+          "expect": {
+            "op": "isArray"
+          }
+        },
+        {
+          "call": "shared_get_writers",
+          "args": {},
+          "path": "length",
+          "expect": {
+            "op": "gte",
+            "value": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-is-writer-self",
+      "name": "shared_is_writer for our own account → true (after a successful set)",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "whoami",
+          "args": {},
+          "path": "account_id",
+          "expect": {
+            "op": "notNull"
+          },
+          "save": "me"
+        },
+        {
+          "call": "shared_set",
+          "args": {
+            "value": "iw_${run}"
+          },
+          "expect": {
+            "op": "noError"
+          }
+        },
+        {
+          "call": "shared_is_writer",
+          "args": {
+            "account_hex": "${me}"
+          },
+          "expect": {
+            "op": "isTrue"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-is-writer-unknown",
+      "name": "shared_is_writer for unknown account → false",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "shared_is_writer",
+          "args": {
+            "account_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ]
+    },
+    {
+      "id": "shared-is-frozen",
+      "name": "shared_is_frozen returns boolean (false at runtime)",
+      "group": "Shared Storage",
+      "steps": [
+        {
+          "call": "shared_is_frozen",
+          "args": {},
+          "expect": {
+            "op": "isFalse"
+          }
+        }
+      ]
+    }
+  ],
+  "skipped": [
+    {
+      "id": "acl-last-admin-protected",
+      "name": "revoking the last admin is refused",
+      "reason": "Conditional: returns early (passes) unless acl_admins has exactly 1 entry; the vocabulary has no guard/early-exit. (If 1 admin: acl_revoke_admin(me) must error, then acl_is_admin(me) is true.)"
+    }
+  ]
+}

@@ -413,7 +413,8 @@ struct SDKListView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 if search.isEmpty {
-                    RunAllEntry().padding(.bottom, 8)
+                    RunAllEntry()
+                    ComponentsEntry().padding(.bottom, 8)
                 }
                 searchField
                 sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
