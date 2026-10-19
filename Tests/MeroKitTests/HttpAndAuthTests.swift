@@ -297,6 +297,31 @@ final class RpcClientTests: XCTestCase {
         XCTAssertEqual(summary.remaining, 1)
     }
 
+    /// A method returning `()` answers `output: null`; that is not an error.
+    func testExecuteReturnsNullForAMethodThatReturnsNothing() async throws {
+        MockURLProtocol.setHandler { _ in
+            .init(status: 200, headers: [:], body: json(["jsonrpc": "2.0", "id": 1, "result": ["output": NSNull()]]))
+        }
+        let sdk = mero()
+        let value: JSONValue = try await sdk.rpc.execute(contextId: "ctx", method: "set")
+        XCTAssertEqual(value, .null)
+        let optional: String? = try await sdk.rpc.execute(contextId: "ctx", method: "set")
+        XCTAssertNil(optional)
+    }
+
+    /// A non-optional type still refuses a missing output.
+    func testExecuteStillRefusesAMissingOutputForARequiredType() async {
+        MockURLProtocol.setHandler { _ in
+            .init(status: 200, headers: [:], body: json(["jsonrpc": "2.0", "id": 1, "result": [String: Any]()]))
+        }
+        let sdk = mero()
+        do {
+            let _: Int = try await sdk.rpc.execute(contextId: "ctx", method: "get")
+            XCTFail("expected emptyResponse")
+        } catch MeroError.emptyResponse {
+        } catch { XCTFail("wrong error: \(error)") }
+    }
+
     func testExecuteMapsRpcError() async {
         MockURLProtocol.setHandler { _ in
             .init(

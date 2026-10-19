@@ -1084,18 +1084,18 @@ private let cloudOps: [SDKOperation] = [
     .cloud(
         id: "registry.resolve", name: "ApplicationRegistry.resolve",
         summary: "Application id + latest version an account founds on",
-        fields: [.line("package", "Package", "com.calimero.curb")]
+        fields: [.line("package", "Package", "com.calimero.chat")]
     ) { _, i in
-        let r = try await ApplicationRegistry.resolve(package: i.opt("package") ?? "com.calimero.curb")
+        let r = try await ApplicationRegistry.resolve(package: i.opt("package") ?? "com.calimero.chat")
         return "applicationId: \(r.applicationId)\nversion: \(r.version)\nsigner: \(r.signerId)"
     },
     .cloud(
         id: "account.foundNamespace", name: "foundNamespace",
         summary: "Found a namespace as the account (app, caps, name, HA)",
-        fields: [.line("name", "Name", "Team"), .line("package", "Package", "com.calimero.curb")]
+        fields: [.line("name", "Name", "Team"), .line("package", "Package", "com.calimero.chat")]
     ) { c, i in
         let f = try await c.signIn.foundNamespace(
-            try c.requireConnection(), name: i.opt("name"), package: i.opt("package") ?? "com.calimero.curb")
+            try c.requireConnection(), name: i.opt("name"), package: i.opt("package") ?? "com.calimero.chat")
         return "namespaceId: \(f.namespaceId)\nsalt: \(f.salt)\nteeEnabled: \(f.teeEnabled)\n"
             + "haEnabled: \(f.haEnabled)\(f.haError.map { "\nhaError: \($0)" } ?? "")"
     },

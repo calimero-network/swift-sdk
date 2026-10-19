@@ -106,6 +106,40 @@ final class AppLayerViewLogicTests: XCTestCase {
         XCTAssertEqual(tweaked.radius, 12)
     }
 
+    func testLoginModesOfferTheRightSides() {
+        XCTAssertEqual(LoginMode.cloudAndNode.tabs, [.cloud, .node])
+        XCTAssertEqual(LoginMode.cloudOnly.tabs, [.cloud])
+        XCTAssertEqual(LoginMode.nodeOnly.tabs, [.node])
+        // The older `tabs:` form maps onto a mode.
+        XCTAssertEqual(LoginMode(tabs: [.node, .cloud]), .cloudAndNode)
+        XCTAssertEqual(LoginMode(tabs: [.cloud]), .cloudOnly)
+        XCTAssertEqual(LoginMode(tabs: [.node]), .nodeOnly)
+        XCTAssertEqual(LoginMode(tabs: []), .cloudOnly)
+    }
+
+    func testThemePresetsAndOverrides() {
+        let light = MeroTheme.calimeroLight
+        XCTAssertEqual(light.primary, Color(meroHex: 0xA5FF11))
+        XCTAssertEqual(light.surface, .white)
+        XCTAssertEqual(light.cardRadius, 18)
+        XCTAssertEqual(light.controlHeight, 52)
+        XCTAssertTrue(light.showsGlow)
+        // Tokens a caller leaves out follow from the ones it gives.
+        let custom = MeroTheme(
+            primary: .indigo, primaryHover: .indigo, primaryText: .white, background: .black,
+            backgroundSecondary: .gray, backgroundTertiary: .gray, border: .gray, text: .white,
+            textSecondary: .gray, error: .red, overlay: .black, radius: 10)
+        XCTAssertEqual(custom.surface, .gray)
+        XCTAssertEqual(custom.textTertiary, .gray)
+        XCTAssertEqual(custom.cardRadius, 20)
+        let flat = light.with {
+            $0.showsGlow = false; $0.titleDesign = .default
+        }
+        XCTAssertFalse(flat.showsGlow)
+        XCTAssertEqual(flat.titleDesign, .default)
+        XCTAssertEqual(EnvironmentValues().meroTheme, .calimeroLight)
+    }
+
     func testSmallFormatting() {
         XCTAssertEqual(ConnectButton.shortAccount(String(repeating: "ab", count: 32)), "ababab…ababab")
         XCTAssertEqual(MigrationPendingBannerContent.prompt(1), "You have 1 entry to re-sign after a recent upgrade.")

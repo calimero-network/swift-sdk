@@ -3,12 +3,13 @@ import MeroKit
 import MeroKitUI
 
 /// The explorer's session: Cloud sign-in (wallet passkey → device certificate
-/// → hosted relay), the live relay connection, and a diagnostics log.
+/// → hosted relay), or a node you run yourself (URL + admin username and
+/// password), plus a diagnostics log.
 ///
-/// There is no node URL and no password in the UI. The one exception is the
-/// development hook for the real-node e2e harnesses: launched with `E2E_NODE`,
-/// `E2E_NODE_USER` and `E2E_NODE_PASS` in the environment, the app signs in to
-/// that node directly at launch. Nothing in the UI exposes it.
+/// Cloud is the default. "Manually enter node URL" on the sign-in screen signs
+/// in to a node directly — a local `merod`, say — with no Cloud account. The
+/// real-node e2e harnesses use the same path at launch through `E2E_NODE`,
+/// `E2E_NODE_USER` and `E2E_NODE_PASS`.
 @MainActor
 final class MeroSession: ObservableObject {
     struct LogLine: Identifiable {
@@ -54,8 +55,12 @@ final class MeroSession: ObservableObject {
     @Published private(set) var relayURL: String?
     /// A note about the relay or reads, to show as a callout.
     @Published private(set) var note: String?
-    /// The development node, when signed in through the e2e hook.
+    /// The node, when signed in to one directly rather than through Cloud.
     @Published private(set) var devNodeURL: String?
+    /// The node URL and username last used, prefilled on the sign-in screen.
+    /// The password is never stored.
+    @Published var lastNodeURL: String = UserDefaults.standard.string(forKey: "lastNodeURL") ?? "http://localhost:4001"
+    @Published var lastNodeUser: String = UserDefaults.standard.string(forKey: "lastNodeUser") ?? "dev"
     @Published private(set) var logs: [LogLine] = []
     /// One chat service for the whole session.
     @Published private(set) var chat: ChatService?
@@ -74,7 +79,7 @@ final class MeroSession: ObservableObject {
     var displayName: String {
         if let name = ProcessInfo.processInfo.environment["E2E_USERNAME"], !name.isEmpty { return name }
         if let account { return "Account \(account.prefix(6))" }
-        return devMero == nil ? "" : "dev"
+        return devMero == nil ? "" : lastNodeUser
     }
 
     init(signIn: CloudSignIn, web: any WebAuthenticating, urlSession: URLSession = .shared) {
@@ -107,7 +112,7 @@ final class MeroSession: ObservableObject {
     func start() async {
         let env = ProcessInfo.processInfo.environment
         if let node = env["E2E_NODE"], !node.isEmpty, let user = env["E2E_NODE_USER"], let pass = env["E2E_NODE_PASS"] {
-            await connectDevelopmentNode(node, username: user, password: pass)
+            await connectNode(node, username: user, password: pass)
             return
         }
         guard let stored = await signIn.restoreSession() else { return }
@@ -174,13 +179,27 @@ final class MeroSession: ObservableObject {
         adopt(await signIn.connect(stored))
     }
 
-    // MARK: - Development node (e2e hook only)
+    // MARK: - A node, signed in to directly
 
-    private func connectDevelopmentNode(_ urlString: String, username: String, password: String) async {
-        guard let url = URL(string: urlString) else { return }
+    /// Sign in to a node with its admin username and password.
+    func connectNode(_ rawURL: String, username: String, password: String) async {
+        errorMessage = nil
+        let urlString = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: urlString), url.scheme == "http" || url.scheme == "https", url.host != nil else {
+            errorMessage = "Enter a full node URL, like http://localhost:4001."
+            return
+        }
+        guard !username.isEmpty, !password.isEmpty else {
+            errorMessage = "Enter the node's admin username and password."
+            return
+        }
+        lastNodeURL = urlString
+        lastNodeUser = username
+        UserDefaults.standard.set(urlString, forKey: "lastNodeURL")
+        UserDefaults.standard.set(username, forKey: "lastNodeUser")
         isLoading = true
         defer { isLoading = false }
-        log(.req, "development node \(urlString)")
+        log(.req, "node \(urlString)")
         let client = Mero(config: MeroConfig(baseURL: url, tokenStore: MemoryTokenStore()), session: urlSession)
         do {
             _ = try await client.authenticate(Credentials(username: username, password: password))
@@ -188,10 +207,13 @@ final class MeroSession: ObservableObject {
             devNodeURL = urlString
             chat = ChatService(backend: .node(client), username: displayName)
             isAuthenticated = true
-            log(.ok, "authenticated on the development node")
+            log(.ok, "authenticated on the node")
+        } catch MeroError.network {
+            errorMessage = "Can't reach a node at \(urlString). Is merod running?"
+            log(.err, "node unreachable: \(urlString)")
         } catch {
             errorMessage = friendly(error)
-            log(.err, "development node login failed: \(detail(error))")
+            log(.err, "node login failed: \(detail(error))")
         }
     }
 
@@ -221,6 +243,7 @@ final class MeroSession: ObservableObject {
         case AccountError.credentialRejected:
             return "The wallet's answer could not be verified, so nothing was saved."
         case MeroError.network(let m): return "Can't reach Calimero: \(m)"
+        case MeroError.authenticationFailed: return "The node refused that username or password."
         default: return (error as? LocalizedError)?.errorDescription ?? "Something went wrong."
         }
     }

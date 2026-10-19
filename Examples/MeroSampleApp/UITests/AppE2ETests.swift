@@ -22,8 +22,8 @@ final class AppE2ETests: XCTestCase {
         continueAfterFailure = false
         app = XCUIApplication()
         app.launchEnvironment["E2E_NODE"] = Self.nodeURL
-        // The app's login is Cloud only; this suite signs in to its node
-        // through the development hook instead (no fields in the UI).
+        // Signs in to the node at launch, the same path as "Manually enter
+        // node URL" on the sign-in screen, without typing into it.
         app.launchEnvironment["E2E_NODE_USER"] = "dev"
         app.launchEnvironment["E2E_NODE_PASS"] = "dev-password"
         app.launch()
@@ -65,13 +65,49 @@ final class AppE2ETests: XCTestCase {
         XCTAssertTrue(app.staticTexts["RESPONSE"].waitForExistence(timeout: 15), "no RESPONSE from getContexts")
     }
 
-    /// Chat: install curb, create a space + channel, send and read a message.
+    /// SDK → Run all: every read plus the kv-store lifecycle, against the
+    /// live node. Prints the report and fails on any failed method.
+    func testRunAllPasses() throws {
+        tap(app.buttons["exploreSDK"], "Explore SDK entry")
+        tap(app.buttons["runAllEntry"], "Run all entry")
+        tap(app.buttons["runAllButton"], "Run all button")
+        let again = app.buttons["Run again"]
+        XCTAssertTrue(again.waitForExistence(timeout: 300), "Run all did not finish")
+        let reportText = app.staticTexts["runAllReport"]
+        XCTAssertTrue(reportText.waitForExistence(timeout: 5), "no report")
+        let report = reportText.label
+        print("RUN-ALL-REPORT-BEGIN\n\(report)\nRUN-ALL-REPORT-END")
+        XCTAssertFalse(report.contains("\nFAIL "), "Run all reported failures:\n\(report)")
+    }
+
+    /// SDK → Login component: MeroKitUI's LoginView renders, and its
+    /// "Manually enter node URL" link swaps Cloud for the node form.
+    func testLoginComponentSwitchesBetweenCloudAndNode() throws {
+        tap(app.buttons["exploreSDK"], "Explore SDK entry")
+        tap(app.buttons["componentsEntry"], "Login component entry")
+        XCTAssertTrue(app.buttons["cloudSignInButton"].waitForExistence(timeout: 10), "Cloud button missing")
+        pauseForScreenshot()
+        tap(app.buttons["manualNode"], "Manually enter node URL")
+        XCTAssertTrue(app.buttons["nodeConnectButton"].waitForExistence(timeout: 10), "node form missing")
+        XCTAssertTrue(app.secureTextFields["nodePasswordInput"].exists, "password field missing")
+        pauseForScreenshot()
+        tap(app.buttons["useCloud"], "Use Calimero Cloud instead")
+        XCTAssertTrue(app.buttons["cloudSignInButton"].waitForExistence(timeout: 10), "Cloud button did not return")
+    }
+
+    /// Holds the screen still when `PAUSE_FOR_SCREENSHOT` is set
+    /// (`TEST_RUNNER_PAUSE_FOR_SCREENSHOT=1 xcodebuild test …`).
+    private func pauseForScreenshot() {
+        if ProcessInfo.processInfo.environment["PAUSE_FOR_SCREENSHOT"] != nil { Thread.sleep(forTimeInterval: 12) }
+    }
+
+    /// Chat: install mero-chat, create a space + channel, send and read a message.
     func testChatEndToEnd() throws {
         try Self.skipUnlessChatAppIsPublished()
         login()
         tap(app.buttons["openChat"], "Open Chat entry")
         // Fresh node shows the install gate; a reused one (e.g. on a test retry)
-        // may already have curb — tolerate both.
+        // may already have mero-chat — tolerate both.
         if app.buttons["installChat"].waitForExistence(timeout: 8) {
             tap(app.buttons["installChat"], "install button")
         }
@@ -117,18 +153,13 @@ final class AppE2ETests: XCTestCase {
     }
     /// Skip when the chat app this suite installs is not on the registry.
     ///
-    /// The sample app's chat feature installs `com.calimero.curb`, and that
-    /// package is no longer published on apps.calimero.network — mero-chat was
-    /// abandoned on 2026-08-19, and the registry now serves `com.calimero.chat`
-    /// 3.1.1 instead, a different contract with a different model. `setup()`
-    /// treats "no versions" as a status line rather than an error, so without
-    /// this the test sits on the install gate and fails after 240 seconds with
-    /// "chat home did not load" — which reads as an app or node problem.
-    ///
-    /// A skip that names the cause is the honest report while the port is
-    /// outstanding, and it lets the rest of this suite give a real signal.
+    /// The sample app's chat installs `com.calimero.chat` (mero-chat, from
+    /// `apps/mero-chat`). `setup()` treats "no versions" as a status line rather
+    /// than an error, so without this a missing package would sit on the install
+    /// gate and fail after 240 seconds with "chat home did not load", which
+    /// reads as an app or node problem.
     static func skipUnlessChatAppIsPublished() throws {
-        let package = "com.calimero.curb"
+        let package = "com.calimero.chat"
         let url = URL(string: "https://apps.calimero.network/api/v2/bundles?package=\(package)")!
         var request = URLRequest(url: url)
         request.timeoutInterval = 20
@@ -151,10 +182,8 @@ final class AppE2ETests: XCTestCase {
             (try? JSONSerialization.jsonObject(with: payload ?? Data())) as? [[String: Any]] ?? []
         if versions.isEmpty {
             throw XCTSkip(
-                "\(package) is no longer published on apps.calimero.network, so the sample app "
-                    + "cannot install it. The registry serves com.calimero.chat 3.1.1 instead — a "
-                    + "different contract, so porting the chat feature to it is real work. "
-                    + "Skipping rather than timing out on the install gate.")
+                "\(package) is not published on apps.calimero.network, so the sample app "
+                    + "cannot install it. Skipping rather than timing out on the install gate.")
         }
     }
 

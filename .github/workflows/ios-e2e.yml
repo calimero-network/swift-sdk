@@ -1,9 +1,11 @@
 name: iOS E2E (vs live merod)
 
-# End-to-end iOS tests against a REAL merod node + registry (heavier than the
-# mock XCUITest in ui.yml, so this runs on master pushes / manually / weekly,
-# not on every PR). Two jobs:
-#   * single-node — full-feature AppE2ETests (login → explorer → chat).
+# End-to-end iOS tests against a REAL merod node + registry. Two jobs:
+#   * single-node — full-feature AppE2ETests: node sign-in → explorer → chat →
+#     Run all (every read, the kv-store lifecycle and the scaffolding-e2e
+#     contract tests) → the MeroKitUI login component. Runs on PRs that touch
+#     the SDK or the sample app, so a change that breaks the live path fails
+#     before merge, not after.
 #   * multi-node  — two nodes + two simulators, cross-user chat (ChatMultiUserTests),
 #     driven by chat-multi-e2e.sh. Allowed to fail: cross-node gossipsub between
 #     two co-located merods is unreliable on a single host, so this job is
@@ -18,8 +20,22 @@ on:
   push:
     branches:
       - master
+  pull_request:
+    branches:
+      - master
+    paths:
+      - 'Sources/**'
+      - 'Examples/MeroSampleApp/**'
+      - 'Package.swift'
+      - 'ci/core-version'
+      - 'e2e-ios.sh'
+      - '.github/workflows/ios-e2e.yml'
   schedule:
     - cron: '0 7 * * 1'  # Mondays 07:00 UTC
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -28,9 +44,9 @@ jobs:
   single-node-e2e:
     name: Full-feature e2e (1 node)
     runs-on: macos-15
-    # A healthy run is ~6 minutes. See the note on the chat job for why the
-    # STEP timeout below is the one that matters.
-    timeout-minutes: 20
+    # A healthy run is ~8 minutes with Run all and the contract tests. See the
+    # note on the chat job for why the STEP timeout below is the one that matters.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -65,8 +81,22 @@ jobs:
       - name: Run AppE2ETests (boots node + sim)
         # Tighter than the job timeout so a hang FAILS the step and still lets
         # the log upload run — see the note on the chat job.
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: ./e2e-ios.sh
+
+      # The Run all report (PASS / FAIL / SKIP per method and contract case),
+      # on the run's summary page.
+      - name: Run all report
+        if: always()
+        run: |
+          if [ -f .e2e-ios.log ]; then
+            {
+              echo '### Run all'
+              echo '```'
+              sed -n '/RUN-ALL-REPORT-BEGIN/,/RUN-ALL-REPORT-END/p' .e2e-ios.log | grep -v 'RUN-ALL-REPORT' | head -400
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload logs
         if: always()
@@ -100,6 +130,8 @@ jobs:
     timeout-minutes: 35
     # Informational: cross-node sync between co-located merods is flaky on one host.
     continue-on-error: true
+    # Too slow and flaky for a PR check; master pushes, weekly and manual only.
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v7
 

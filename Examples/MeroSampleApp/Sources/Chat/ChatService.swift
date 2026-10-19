@@ -1,15 +1,20 @@
 import Foundation
 import MeroKit
 
-// MARK: - Wire models (curb contract, snake_case)
+// MARK: - Wire models (mero-chat contract, snake_case)
 
-/// A single message as returned by curb's `get_messages` / `send_message`.
+/// A single message as returned by mero-chat's `get_messages` / `send_message`.
 /// Only the fields the UI needs are decoded; the rest are ignored.
+///
+/// mero-chat no longer puts the sender's name on a message; it is looked up
+/// in `get_profiles` by the sender's identity (see ``ChatService/loadMessages(_:)``).
+/// A `sender_username`, when an older contract sends one, is still read.
 struct ChatMessage: Decodable, Identifiable {
     let id: String
     let text: String
-    let senderUsername: String
+    var senderUsername: String
     let sender: String
+    /// Seconds since the epoch.
     let timestamp: Int
     let deleted: Bool?
 
@@ -17,6 +22,22 @@ struct ChatMessage: Decodable, Identifiable {
         case id, text, sender, timestamp, deleted
         case senderUsername = "sender_username"
     }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        sender = try c.decode(String.self, forKey: .sender)
+        timestamp = try c.decode(Int.self, forKey: .timestamp)
+        deleted = try c.decodeIfPresent(Bool.self, forKey: .deleted)
+        senderUsername = try c.decodeIfPresent(String.self, forKey: .senderUsername) ?? ""
+    }
+}
+
+/// mero-chat `get_profiles`: a member's identity and chosen name.
+struct ChatProfile: Decodable {
+    let identity: String
+    let username: String
 }
 
 struct ChatMessagePage: Decodable {
@@ -31,7 +52,7 @@ struct ChatMessagePage: Decodable {
     }
 }
 
-/// curb `get_info` → the channel/DM shape.
+/// mero-chat `get_info` → the channel/DM shape.
 struct ChatContextInfo: Decodable {
     let name: String
     let contextType: String
@@ -105,7 +126,7 @@ struct ChatInvite: Codable {
 
 // MARK: - ChatService
 
-/// A native curb (mero-chat) frontend: spaces (namespaces), channels
+/// A native mero-chat frontend: spaces (namespaces), channels
 /// (contexts), messages (contract calls), invite and join — on the same WASM
 /// contract as mero-chat.
 ///
@@ -122,7 +143,8 @@ final class ChatService: ObservableObject {
     }
 
     nonisolated static let registryURL = "https://apps.calimero.network"
-    nonisolated static let packageName = "com.calimero.curb"
+    /// mero-chat (`apps/mero-chat`), as the app registry publishes it.
+    nonisolated static let packageName = "com.calimero.chat"
 
     @Published var appId: String?
     @Published var spaces: [ChatSpace] = []
@@ -171,13 +193,13 @@ final class ChatService: ObservableObject {
         }
     }
 
-    /// Adopt curb's app id if it is already installed on the node.
+    /// Adopt mero-chat's app id if it is already installed on the node.
     func detectInstalled() async {
         guard appId == nil, case .node(let mero) = backend else { return }
         if let apps = try? await mero.admin.listApplications(),
-            let curb = apps.apps.first(where: { $0.package == Self.packageName })
+            let chatApp = apps.apps.first(where: { $0.package == Self.packageName })
         {
-            appId = curb.id
+            appId = chatApp.id
             await loadSpaces()
         }
     }
@@ -215,7 +237,7 @@ final class ChatService: ObservableObject {
         switch backend {
         case .relay(let connection, let signIn):
             await run("Creating space \(name)…") {
-                // Founds the namespace as the account: curb from the registry,
+                // Founds the namespace as the account: mero-chat from the registry,
                 // mero-react's default capabilities, the name, then HA.
                 let founded = try await signIn.foundNamespace(connection, name: name, package: Self.packageName)
                 self.say(
@@ -346,13 +368,23 @@ final class ChatService: ObservableObject {
             let page: ChatMessagePage = try await read(
                 channel.contextId, "get_messages", executor: channel.executorId,
                 args: ["parent_message": .null, "limit": .number(50), "offset": .number(0), "search_term": .null])
-            messages = page.messages.filter { $0.deleted != true }
+            // Names come from the channel's profiles, keyed by sender identity.
+            let profiles: [ChatProfile] =
+                (try? await read(channel.contextId, "get_profiles", executor: channel.executorId, args: [:])) ?? []
+            let names = Dictionary(profiles.map { ($0.identity, $0.username) }, uniquingKeysWith: { first, _ in first })
+            messages = page.messages.filter { $0.deleted != true }.map { message in
+                var named = message
+                if named.senderUsername.isEmpty, let name = names[message.sender] { named.senderUsername = name }
+                return named
+            }
         } catch { say("Couldn't load messages: \(short(error))", error: true) }
     }
 
     func sendMessage(_ channel: ChatChannel, _ text: String) async {
         guard !text.isEmpty, isRelay || !channel.executorId.isEmpty else { return }
-        let ts = Int(Date().timeIntervalSince1970 * 1000)
+        // Seconds: mero-chat refuses a timestamp more than 5 minutes ahead of
+        // the node's clock, and milliseconds read as ~50,000 years ahead.
+        let ts = Int(Date().timeIntervalSince1970)
         do {
             let _: ChatMessage = try await write(
                 channel.contextId, "send_message", executor: channel.executorId,
@@ -362,7 +394,6 @@ final class ChatService: ObservableObject {
                     "mentions_usernames": .array([]),
                     "parent_message": .null,
                     "timestamp": .number(Double(ts)),
-                    "sender_username": .string(username),
                     "files": .null,
                     "images": .null,
                 ])
