@@ -2,6 +2,19 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: core 0.11.0-rc.89
+
+The SDK now targets core `0.11.0-rc.89` (`ci/core-version` and the merod image
+in every merobox scenario). No route this SDK calls changed between rc.83 and
+rc.89. The two changes that touch the wire were already taken:
+
+- request proofs sign the path and query under `calimero.auth.request.v2`
+  (core#4549);
+- namespace ops are signed at schema version 25 (core#4552, rc.85).
+
+Not wrapped yet, both additive: listing a namespace's revoked and withdrawn
+devices (core#4589) and the TD event log from `tee/attest` (core#4591).
+
 ## Unreleased: sign namespace ops at schema version 25
 
 `NamespaceOps.signMemberJoinOp` signed at schema version 24, so every node on
