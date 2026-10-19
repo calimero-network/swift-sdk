@@ -384,9 +384,14 @@ The rest of mero-react is here too, as SwiftUI view models and views:
 
 See the [SwiftUI app layer](https://calimero-network.github.io/swift-sdk/guides/swiftui-app-layer/) guide.
 
-A full SwiftUI sample app lives in `Examples/MeroSampleApp`: Cloud sign-in, a
-chat example running on the relay, and an explorer for every SDK method, in the
-Calimero light design. Its wallet callback scheme is `mero-sample`.
+A full SwiftUI sample app lives in `Examples/MeroSampleApp`, in the Calimero
+light design. It signs in with Calimero Cloud, or with "Manually enter node URL"
+signs in to a node you run (a local `merod`: URL plus its admin username and
+password). It has Home, Chat and SDK tabs: chat installs Mero Chat
+(`com.calimero.chat`) from the app registry, and the explorer runs every SDK
+method. Its wallet callback scheme is `mero-sample`. `./run-app.sh` boots a
+local node and launches it in the Simulator; sign in to `http://localhost:4001`
+as `dev` / `dev-password`.
 
 ## Runnable example
 

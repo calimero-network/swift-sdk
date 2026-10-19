@@ -43,9 +43,9 @@ enum Cal {
     /// Screen gutter.
     static let screenPad: CGFloat = 16
     /// Buttons and inputs.
-    static let controlRadius: CGFloat = 8
+    static let controlRadius: CGFloat = 12
     /// Cards.
-    static let cardRadius: CGFloat = 14
+    static let cardRadius: CGFloat = 18
 }
 
 extension Color {
@@ -67,7 +67,7 @@ struct CalPrimaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.semibold))
             .foregroundColor(Cal.text)
-            .frame(maxWidth: .infinity, minHeight: 46)
+            .frame(maxWidth: .infinity, minHeight: 52)
             .background(configuration.isPressed ? Cal.limePressed : Cal.lime)
             .overlay(
                 RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Color.black.opacity(0.06), lineWidth: 1)
@@ -83,7 +83,7 @@ struct CalSecondaryButtonStyle: ButtonStyle {
         configuration.label
             .font(.subheadline.weight(.medium))
             .foregroundColor(Cal.text)
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 48)
             .background(configuration.isPressed ? Cal.surfaceHover : Cal.surface)
             .overlay(RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Cal.borderStrong, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: Cal.controlRadius))
@@ -101,7 +101,7 @@ struct CalCard<Content: View>: View {
             .background(Cal.surface)
             .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
-            .shadow(color: Cal.text.opacity(0.05), radius: 1, y: 1)
+            .shadow(color: Cal.text.opacity(0.04), radius: 12, y: 4)
     }
 }
 
@@ -115,7 +115,7 @@ struct IconTile: View {
             .font(.system(size: size * 0.45, weight: .regular))
             .foregroundColor(accent ? Cal.accentInk : Cal.textDim)
             .frame(width: size, height: size)
-            .background(RoundedRectangle(cornerRadius: 9).fill(accent ? Cal.accentSoft : Cal.bgSubtle))
+            .background(RoundedRectangle(cornerRadius: size * 0.3).fill(accent ? Cal.accentSoft : Cal.bgSubtle))
             .accessibilityHidden(true)
     }
 }
@@ -171,8 +171,8 @@ struct CalField: View {
             .textInputAutocapitalization(.never)
             .disableAutocorrection(true)
             .foregroundColor(Cal.text)
-            .padding(.horizontal, 12)
-            .frame(minHeight: 40)
+            .padding(.horizontal, 14)
+            .frame(minHeight: 48)
             .background(Cal.surface)
             .overlay(RoundedRectangle(cornerRadius: Cal.controlRadius).stroke(Cal.borderStrong, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: Cal.controlRadius))
@@ -277,4 +277,74 @@ struct Callout: View {
         case .success: return Color(hex: 0xEEF8E4)
         }
     }
+}
+
+/// A borderless text button for secondary actions ("Manually enter node URL").
+struct CalTextButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.footnote.weight(.medium))
+            .foregroundColor(Cal.textDim)
+            .padding(.vertical, 8)
+            .opacity(configuration.isPressed ? 0.6 : 1)
+    }
+}
+
+/// A soft lime glow behind the top of a screen.
+struct LimeGlow: View {
+    var body: some View {
+        RadialGradient(
+            colors: [Cal.lime.opacity(0.35), Cal.lime.opacity(0.08), .clear],
+            center: .top, startRadius: 0, endRadius: 420
+        )
+        .ignoresSafeArea()
+        .accessibilityHidden(true)
+    }
+}
+
+/// A grouped list section: an eyebrow over a card of divided rows.
+struct CalSection<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Eyebrow(text: title).padding(.leading, 4)
+            VStack(spacing: 0) { content }
+                .background(Cal.surface)
+                .overlay(RoundedRectangle(cornerRadius: Cal.cardRadius).stroke(Cal.border, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: Cal.cardRadius))
+        }
+    }
+}
+
+/// One row in a ``CalSection``: icon tile, title, optional subtitle, chevron.
+struct CalRow: View {
+    let icon: String
+    let title: String
+    var subtitle: String?
+    var accent = false
+    var chevron = true
+    var body: some View {
+        HStack(spacing: 12) {
+            IconTile(systemName: icon, accent: accent, size: 36)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundColor(Cal.text)
+                if let subtitle {
+                    Text(subtitle).font(.footnote).foregroundColor(Cal.textFaint).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if chevron {
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundColor(Cal.textFaint)
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(minHeight: 60)
+        .contentShape(Rectangle())
+    }
+}
+
+/// A hairline between rows of a ``CalSection``, inset past the icon.
+struct RowDivider: View {
+    var body: some View { Divider().overlay(Cal.border).padding(.leading, 62) }
 }
