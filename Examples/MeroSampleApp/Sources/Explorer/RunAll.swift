@@ -303,7 +303,15 @@ final class RunAllModel: ObservableObject {
                 results[i].millis = Int(Date().timeIntervalSince(started) * 1000)
                 let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 results[i].output = message
-                results[i].status = .failed(message)
+                // A node without TDX answers its TEE reads with 500; that is
+                // the node, not the SDK.
+                if op.category == "TEE",
+                    message.contains("500") || message.localizedCaseInsensitiveContains("not configured")
+                {
+                    results[i].status = .skipped("No TEE on this node (\(message))")
+                } else {
+                    results[i].status = .failed(message)
+                }
             }
         }
 
