@@ -12,8 +12,10 @@ rc.89. The two changes that touch the wire were already taken:
   (core#4549);
 - namespace ops are signed at schema version 25 (core#4552, rc.85).
 
-Not wrapped yet, both additive: listing a namespace's revoked and withdrawn
-devices (core#4589) and the TD event log from `tee/attest` (core#4591).
+New: `TeeAttestRequest.eventLog` asks `tee/attest` for the TD event log, which
+comes back as `TeeAttestResponseData.eventLogB64` (core#4591). A node on a mock
+TEE answers `400`. Listing a namespace's revoked and withdrawn devices
+(core#4589) was already wrapped.
 
 ## Unreleased: sign namespace ops at schema version 25
 

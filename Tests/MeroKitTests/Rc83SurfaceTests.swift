@@ -137,6 +137,28 @@ final class Rc83SurfaceTests: XCTestCase {
         XCTAssertNil(data.boundPublicKey, "not asked for, so not sent")
     }
 
+    /// core rc.88 (core#4591): `eventLog` asks for the TD event log, which
+    /// comes back as `eventLogB64`.
+    func testTeeAttestAsksForAndDecodesTheEventLog() async throws {
+        let req = await capture {
+            _ = try await self.admin.teeAttest(TeeAttestRequest(nonce: "00", eventLog: true))
+        }
+        XCTAssertEqual(Set((jsonBody(req) ?? [:]).keys), ["nonce", "eventLog"])
+
+        serve(
+            """
+            {"data":{"quoteB64":"cXVvdGU=","quote":{
+              "header":{"version":4,"attestationKeyType":2,"teeType":129,"qeVendorId":"aa","userData":"bb"},
+              "body":{"tdxVersion":"1.5","teeTcbSvn":"00","mrseam":"00","mrsignerseam":"00","seamattributes":"00",
+                "tdattributes":"00","xfam":"00","mrtd":"11","mrconfigid":"00","mrowner":"00","mrownerconfig":"00",
+                "rtmr0":"00","rtmr1":"00","rtmr2":"00","rtmr3":"00","reportdata":"00"},
+              "signature":"ss","attestationKey":"kk","certificationData":null},
+             "eventLogB64":"Q0NFTA=="}}
+            """)
+        let data = try await admin.teeAttest(TeeAttestRequest(nonce: "00", eventLog: true))
+        XCTAssertEqual(data.eventLogB64, "Q0NFTA==")
+    }
+
     func testRegistrationAttestPostsTheNonce() async {
         let req = await capture {
             _ = try await self.admin.teeRegistrationAttest(TeeRegistrationAttestRequest(nonce: "ab"))

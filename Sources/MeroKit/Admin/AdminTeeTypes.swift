@@ -25,12 +25,16 @@ public struct TeeAttestRequest: Codable, Sendable {
     /// Return the DCAP collateral needed to verify the quote offline, as
     /// ``TeeAttestResponseData/collateral``. New in rc.83.
     public var includeCollateral: Bool
+    /// Return the TD's event log as ``TeeAttestResponseData/eventLogB64``.
+    /// A node running a mock TEE answers `400`: it has no event log. New in rc.88.
+    public var eventLog: Bool
     public init(
         nonce: String, applicationId: String? = nil, bindNodeKey: Bool = false,
-        bindTransportKey: Bool = false, includeCollateral: Bool = false
+        bindTransportKey: Bool = false, includeCollateral: Bool = false, eventLog: Bool = false
     ) {
         self.nonce = nonce; self.applicationId = applicationId; self.bindNodeKey = bindNodeKey
         self.bindTransportKey = bindTransportKey; self.includeCollateral = includeCollateral
+        self.eventLog = eventLog
     }
 
     // The flags are sent only when set, so an unflagged request is the exact
@@ -42,6 +46,7 @@ public struct TeeAttestRequest: Codable, Sendable {
         if bindNodeKey { try c.encode(true, forKey: .bindNodeKey) }
         if bindTransportKey { try c.encode(true, forKey: .bindTransportKey) }
         if includeCollateral { try c.encode(true, forKey: .includeCollateral) }
+        if eventLog { try c.encode(true, forKey: .eventLog) }
     }
 
     public init(from decoder: Decoder) throws {
@@ -51,10 +56,11 @@ public struct TeeAttestRequest: Codable, Sendable {
         bindNodeKey = try c.decodeIfPresent(Bool.self, forKey: .bindNodeKey) ?? false
         bindTransportKey = try c.decodeIfPresent(Bool.self, forKey: .bindTransportKey) ?? false
         includeCollateral = try c.decodeIfPresent(Bool.self, forKey: .includeCollateral) ?? false
+        eventLog = try c.decodeIfPresent(Bool.self, forKey: .eventLog) ?? false
     }
 
     enum CodingKeys: String, CodingKey {
-        case nonce, applicationId, bindNodeKey, bindTransportKey, includeCollateral
+        case nonce, applicationId, bindNodeKey, bindTransportKey, includeCollateral, eventLog
     }
 }
 
@@ -137,12 +143,15 @@ public struct TeeAttestResponseData: Codable, Sendable {
     /// DCAP collateral for offline quote verification, when
     /// `includeCollateral` was set. Kept as raw JSON.
     public let collateral: JSONValue?
+    /// Base64 of the TD's CCEL event log, when `eventLog` was set. New in rc.88.
+    public let eventLogB64: String?
     public init(
         quoteB64: String, quote: Quote, boundPublicKey: String? = nil,
-        transportPublicKey: String? = nil, collateral: JSONValue? = nil
+        transportPublicKey: String? = nil, collateral: JSONValue? = nil, eventLogB64: String? = nil
     ) {
         self.quoteB64 = quoteB64; self.quote = quote; self.boundPublicKey = boundPublicKey
         self.transportPublicKey = transportPublicKey; self.collateral = collateral
+        self.eventLogB64 = eventLogB64
     }
 }
 
