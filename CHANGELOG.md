@@ -2,6 +2,21 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: core 0.11.0-rc.90, namespace ops at schema version 26
+
+The SDK now targets core `0.11.0-rc.90` (`ci/core-version` and the merod image
+in every merobox scenario). Core rc.90 raised `SIGNED_NAMESPACE_OP_SCHEMA_VERSION`
+to 26 (calimero-network/core#4605): a device link's scope is now judged at the
+link's cut. The op layout is unchanged, but a node refuses any other version, so
+`NamespaceOps.signMemberJoinOp` at 25 failed against an rc.90 relay with
+`schema version mismatch: expected 26, got 25`. `NamespaceOps.schemaVersion` is
+26 now, matching mero-js (its #290). Found by Mero Chat's live tests against an
+rc.90 relay (calimero-network/apps#597).
+
+No route this SDK calls changed between rc.89 and rc.90. A join refusal now
+carries a code (core#4610), and `/admit` is served without a credential
+(core#4611), which the SDK already sends none of.
+
 ## Unreleased: core 0.11.0-rc.89
 
 The SDK now targets core `0.11.0-rc.89` (`ci/core-version` and the merod image
