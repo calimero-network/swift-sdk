@@ -14,7 +14,7 @@ import SwiftUI
 /// `mode` picks which are offered: ``LoginMode/cloudAndNode`` (Cloud, with a
 /// small "Manually enter node URL" link under it), ``LoginMode/cloudOnly`` or
 /// ``LoginMode/nodeOnly``. Colours, radii and type come from the environment's
-/// ``MeroTheme``; words and the logo from ``LoginBranding``.
+/// ``MeroTheme``; every word, the logo and its tile from ``LoginBranding``.
 ///
 /// Accessibility identifiers for UI tests: `loginTitle`, `loginError`,
 /// `cloudSignInButton` (the button), `loginButton` (the Cloud panel),
@@ -114,12 +114,13 @@ public struct LoginView: View {
                         switch tab {
                         case .cloud:
                             AccountSignInPanel(
-                                note: client.cloudNote, isWorking: client.isLoading, buttonTitle: branding.cloudButton
+                                note: client.cloudNote, isWorking: client.isLoading, buttonTitle: branding.cloudButton,
+                                hint: branding.cloudHint, customWalletNote: branding.customWalletNote
                             ) {
                                 Task { await client.signInWithCloud(callback: callback) }
                             }
                         case .node:
-                            NodeLoginPanel(callback: nodeCallback, method: nodeSignIn)
+                            NodeLoginPanel(callback: nodeCallback, method: nodeSignIn, strings: branding.node)
                                 .padding(18)
                                 .background(RoundedRectangle(cornerRadius: theme.cardRadius).fill(theme.surface))
                                 .overlay(RoundedRectangle(cornerRadius: theme.cardRadius).stroke(theme.border))
@@ -131,7 +132,7 @@ public struct LoginView: View {
                                     client.clearError()
                                 }
                             } label: {
-                                Text(tab == .cloud ? "Manually enter node URL" : "Use Calimero Cloud instead")
+                                Text(tab == .cloud ? branding.manualNodeLink : branding.useCloudLink)
                                     .font(.footnote.weight(.medium))
                                     .underline(tab == .cloud, color: theme.textTertiary.opacity(0.5))
                                     .foregroundColor(theme.textSecondary)
@@ -150,6 +151,8 @@ public struct LoginView: View {
         }
     }
 
+    private var tileFill: Color { branding.logoTileBackground ?? theme.primary }
+
     private var hero: some View {
         VStack(spacing: 18) {
             Group {
@@ -159,10 +162,13 @@ public struct LoginView: View {
                     CalimeroLogo(size: 40, color: theme.primaryText)
                 }
             }
-            .frame(width: 76, height: 76)
-            .background(RoundedRectangle(cornerRadius: 22).fill(theme.primary))
-            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.black.opacity(0.06), lineWidth: 1))
-            .shadow(color: theme.primary.opacity(0.35), radius: 18, y: 8)
+            .frame(width: branding.logoTileSize, height: branding.logoTileSize)
+            .background(RoundedRectangle(cornerRadius: branding.logoTileCornerRadius).fill(tileFill))
+            .overlay(
+                RoundedRectangle(cornerRadius: branding.logoTileCornerRadius).stroke(
+                    Color.black.opacity(0.06), lineWidth: 1)
+            )
+            .shadow(color: branding.logoTileShadow ? tileFill.opacity(0.35) : .clear, radius: 18, y: 8)
             .accessibilityHidden(true)
             VStack(spacing: 8) {
                 Text(tab == .node ? branding.nodeTitle : branding.cloudTitle)
@@ -194,16 +200,25 @@ public struct AccountSignInPanel: View {
     /// Shown when enrolment goes to a wallet other than the hosted one.
     public var customWalletURL: URL?
     public var buttonTitle: String
+    /// The line under the button; `nil` hides it.
+    public var hint: String?
+    /// The note for ``customWalletURL``.
+    public var customWalletNote: @Sendable (URL) -> String
     public var onEnrol: () -> Void
 
     public init(
         note: String? = nil, isWorking: Bool = false, customWalletURL: URL? = nil,
-        buttonTitle: String = "Continue with Calimero Cloud", onEnrol: @escaping () -> Void
+        buttonTitle: String = "Continue with Calimero Cloud",
+        hint: String? = "Opens the Calimero wallet to approve this device",
+        customWalletNote: @escaping @Sendable (URL) -> String = LoginBranding.defaultCustomWalletNote,
+        onEnrol: @escaping () -> Void
     ) {
         self.note = note
         self.isWorking = isWorking
         self.customWalletURL = customWalletURL
         self.buttonTitle = buttonTitle
+        self.hint = hint
+        self.customWalletNote = customWalletNote
         self.onEnrol = onEnrol
     }
 
@@ -228,12 +243,14 @@ public struct AccountSignInPanel: View {
             .disabled(isWorking)
             .accessibilityIdentifier("cloudSignInButton")
 
-            HStack(spacing: 6) {
-                Image(systemName: "person.badge.key").font(.caption)
-                Text("Opens the Calimero wallet to approve this device")
+            if let hint {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.badge.key").font(.caption)
+                    Text(hint)
+                }
+                .font(.caption)
+                .foregroundColor(theme.textTertiary)
             }
-            .font(.caption)
-            .foregroundColor(theme.textTertiary)
 
             if let note {
                 Text(note)
@@ -243,7 +260,7 @@ public struct AccountSignInPanel: View {
                     .accessibilityIdentifier("accountNote")
             }
             if let customWalletURL {
-                Text("Enrolling at \(customWalletURL.absoluteString), not the hosted wallet.")
+                Text(customWalletNote(customWalletURL))
                     .font(.caption2)
                     .foregroundColor(theme.textTertiary)
             }
@@ -266,13 +283,15 @@ public struct NodeLoginPanel: View {
     @State private var password = ""
     private let callback: CloudCallback
     private let method: NodeSignInMethod
+    private let strings: NodeLoginStrings
 
     public init(
         callback: CloudCallback, method: NodeSignInMethod = .loginPage,
-        ports: [Int] = NodeDiscovery.defaultLocalNodePorts
+        ports: [Int] = NodeDiscovery.defaultLocalNodePorts, strings: NodeLoginStrings = NodeLoginStrings()
     ) {
         self.callback = callback
         self.method = method
+        self.strings = strings
         _model = StateObject(wrappedValue: NodeLoginModel(ports: ports))
     }
 
@@ -281,33 +300,35 @@ public struct NodeLoginPanel: View {
             if model.isDiscovering {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("Searching for local nodes…").font(.subheadline).foregroundColor(theme.textSecondary)
+                    Text(strings.searching).font(.subheadline).foregroundColor(theme.textSecondary)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("nodeDiscovering")
             } else {
                 ForEach(model.discovered, id: \.self) { url in
-                    option(NodeLoginModel.display(url), meta: "local", selected: model.selected == url) {
+                    option(NodeLoginModel.display(url), meta: strings.discoveredTag, selected: model.selected == url) {
                         model.selected = url
                     }
                     .accessibilityIdentifier("nodeOption-\(NodeLoginModel.display(url))")
                 }
                 if !model.discovered.isEmpty {
-                    option("Enter node URL manually", meta: nil, selected: model.selected == nil) {
+                    option(strings.manualOption, meta: nil, selected: model.selected == nil) {
                         model.selected = nil
                     }
                     .accessibilityIdentifier("nodeOption-custom")
                 }
                 if model.selected == nil {
-                    field("Node URL", text: $model.customURL, placeholder: "http://localhost:4001")
+                    field(strings.urlLabel, text: $model.customURL, placeholder: strings.urlPlaceholder)
                         .nodeURLKeyboard()
                         .onSubmit { Task { await connect() } }
                         .accessibilityIdentifier("nodeUrlInput")
                 }
                 if method == .password {
-                    field("Username", text: $username, placeholder: "dev")
+                    field(strings.usernameLabel, text: $username, placeholder: strings.usernamePlaceholder)
                         .accessibilityIdentifier("nodeUserInput")
-                    field("Password", text: $password, placeholder: "Admin password", secure: true)
+                    field(
+                        strings.passwordLabel, text: $password, placeholder: strings.passwordPlaceholder, secure: true
+                    )
                         .onSubmit { Task { await connect() } }
                         .accessibilityIdentifier("nodePasswordInput")
                 }
@@ -326,7 +347,7 @@ public struct NodeLoginPanel: View {
                     } else {
                         Image(systemName: "server.rack").font(.callout)
                     }
-                    Text("Connect to node").font(.body.weight(.semibold))
+                    Text(strings.connectButton).font(.body.weight(.semibold))
                 }
                 .foregroundColor(theme.primaryText)
                 .frame(maxWidth: .infinity, minHeight: theme.controlHeight)
@@ -341,7 +362,7 @@ public struct NodeLoginPanel: View {
                 Button {
                     model.rescan()
                 } label: {
-                    Label("Rescan local nodes", systemImage: "arrow.clockwise")
+                    Label(strings.rescanButton, systemImage: "arrow.clockwise")
                         .font(.footnote.weight(.medium))
                         .foregroundColor(theme.textSecondary)
                 }

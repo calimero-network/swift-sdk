@@ -200,6 +200,26 @@ MeroRootView(callbackScheme: "notes")
   .meroTheme(defaultMeroTheme.with { $0.radius = 12 })
 ```
 
+Every word `LoginView` shows, its logo and the logo's tile come from
+`LoginBranding`; each field defaults to the stock copy, so set only what you
+rebrand. The glow behind the hero is `MeroTheme.showsGlow`.
+
+```swift
+LoginView(
+  callbackScheme: "notes",
+  branding: LoginBranding(
+    cloudTitle: "Welcome to Notes",
+    cloudButton: "Continue",
+    cloudHint: nil,                       // hide the line under the button
+    manualNodeLink: "Use my own server",
+    useCloudLink: "Back to sign-in",
+    node: NodeLoginStrings(connectButton: "Connect"),
+    logo: Image("NotesMark"),
+    logoTileCornerRadius: 38,             // a round tile
+    logoTileBackground: .white,
+    logoTileShadow: false))
+```
+
 ## Testing your app
 
 The view models take an injectable sleep and clock where they wait
