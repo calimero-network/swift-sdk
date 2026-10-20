@@ -2,6 +2,14 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: the sample app on 0.2.0's error APIs
+
+- The sample's node sign-in words its errors from `LoginFailureReason`: a
+  lockout ("Too many failed attempts. Try again in N s.") no longer reads as a
+  wrong password, and a URL with no login behind it says so.
+- Chat errors show a contract's own reason (`MeroError.callFailureReason`)
+  instead of the bare `FunctionCallError`.
+
 ## Unreleased: typed login failures, and error words with no vendor in them
 
 - **`LoginFailureReason`** classifies what a login threw:
