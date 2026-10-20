@@ -445,7 +445,9 @@ public final class FakeNode: @unchecked Sendable {
 
     private func listBlobs() -> MockURLProtocol.Stub {
         lock.lock()
-        let blobs = blobOrder.compactMap { id in blobStore[id].map { ["blob_id": id, "size": $0.count] as [String: Any] } }
+        let blobs = blobOrder.compactMap { id in
+            blobStore[id].map { ["blob_id": id, "size": $0.count] as [String: Any] }
+        }
         lock.unlock()
         return ok(["data": ["blobs": blobs]])
     }
