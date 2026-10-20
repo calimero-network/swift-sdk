@@ -37,7 +37,7 @@ final class RpcErrorReasonTests: XCTestCase {
 
     /// The shape core sends (`ExecutionError::FunctionCallError(String)`).
     func testAContractErrorCarriesItsReason() async throws {
-        let error = try await XCTUnwrapAsync(
+        let error = try await unwrapAsync(
             await rpcError(
                 #"{"jsonrpc":"2.0","id":1,"error":{"type":"FunctionCallError","data":"insufficient balance"}}"#))
         XCTAssertTrue(error.isFunctionCallError)
@@ -49,7 +49,7 @@ final class RpcErrorReasonTests: XCTestCase {
     /// A nested `{type, data}` (core's tagged-enum shape) is not reduced to
     /// the bare type.
     func testANestedReasonIsUnwrapped() async throws {
-        let error = try await XCTUnwrapAsync(
+        let error = try await unwrapAsync(
             await rpcError(
                 """
                 {"jsonrpc":"2.0","id":1,"error":{"type":"FunctionCallError",\
@@ -61,7 +61,7 @@ final class RpcErrorReasonTests: XCTestCase {
     }
 
     func testANodeMessageIsKeptAndTheReasonStillReadable() async throws {
-        let error = try await XCTUnwrapAsync(
+        let error = try await unwrapAsync(
             await rpcError(
                 #"{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom","type":"FunctionCallError","data":"why"}}"#
             ))
@@ -90,7 +90,7 @@ final class RpcErrorReasonTests: XCTestCase {
     }
 }
 
-private func XCTUnwrapAsync<T>(_ value: @autoclosure () async -> T?) async throws -> T {
+private func unwrapAsync<T>(_ value: @autoclosure () async -> T?) async throws -> T {
     let resolved = await value()
     return try XCTUnwrap(resolved)
 }
