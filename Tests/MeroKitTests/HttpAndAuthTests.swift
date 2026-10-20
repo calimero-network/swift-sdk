@@ -135,6 +135,51 @@ final class AuthenticateTests: XCTestCase {
         }
     }
 
+    /// A lockout is not a wrong password: core answers `429` with
+    /// `Retry-After` once too many logins failed, and the caller has to be
+    /// able to say "try again in 30 s" rather than "check your password".
+    func testALockoutStaysA429WithItsRetryAfter() async {
+        MockURLProtocol.setHandler { _ in
+            .init(
+                status: 429, headers: ["Content-Type": "application/json", "Retry-After": "30"],
+                body: json(["error": "Too many failed login attempts; please try again later"]))
+        }
+        do {
+            _ = try await mero().authenticate(Credentials(username: "bob", password: "pw"))
+            XCTFail("expected a throw")
+        } catch {
+            guard case MeroError.http(let http) = error, http.status == 429 else {
+                return XCTFail("a 429 must not become authenticationFailed; got \(error)")
+            }
+            XCTAssertEqual(LoginFailureReason(error), .rateLimited(retryAfter: 30))
+        }
+    }
+
+    func testNoLoginAtTheURLIsNotFound() async {
+        MockURLProtocol.setHandler { _ in .init(status: 404, headers: [:], body: Data()) }
+        do {
+            _ = try await mero().authenticate(Credentials(username: "bob", password: "pw"))
+            XCTFail("expected a throw")
+        } catch {
+            XCTAssertEqual(LoginFailureReason(error), .notFound)
+        }
+    }
+
+    func testLoginFailureReasons() {
+        func http(_ status: Int, _ headers: [String: String] = [:]) -> MeroError {
+            .http(HTTPError(status: status, statusText: "", url: "https://node.test/auth/token", headers: headers))
+        }
+        XCTAssertEqual(LoginFailureReason(MeroError.authenticationFailed("HTTP 401")), .invalidCredentials)
+        XCTAssertEqual(LoginFailureReason(http(401)), .invalidCredentials)
+        XCTAssertEqual(LoginFailureReason(http(429)), .rateLimited(retryAfter: nil))
+        XCTAssertEqual(LoginFailureReason(http(429, ["retry-after": "nonsense"])), .rateLimited(retryAfter: nil))
+        XCTAssertEqual(LoginFailureReason(http(404)), .notFound)
+        XCTAssertEqual(LoginFailureReason(http(502)), .serverError(status: 502))
+        XCTAssertEqual(LoginFailureReason(MeroError.network("offline")), .unreachable)
+        XCTAssertEqual(LoginFailureReason(URLError(.timedOut)), .unreachable)
+        XCTAssertEqual(LoginFailureReason(MeroError.decoding("x")), .other)
+    }
+
     func testNoCredentialsThrows() async {
         let sdk = mero()
         do {

@@ -208,6 +208,31 @@ status (a nonce refusal stays retryable), `invalidInput` / `credentialRejected`
 `HaRefusal` (`accountNotLinked`, `accountLinkedToSeveralUsers`,
 `haRequestPending`, `unknownRelay`, `relayNotDialable`).
 
+## Classifying a login failure
+
+`Mero.authenticate(_:)` turns a `4xx` about the credentials into
+`.authenticationFailed`; a `429` (logins locked out after failed attempts) and a
+`404` (no login at that URL) stay `.http`, as do `5xx` and transport failures.
+`LoginFailureReason(error)` names the case:
+
+```swift
+do {
+  try await mero.authenticate(Credentials(username: user, password: password))
+} catch {
+  switch LoginFailureReason(error) {
+  case .invalidCredentials: show("Wrong username or password.")
+  case .rateLimited(let retryAfter): show("Locked out. Try again in \(Int(retryAfter ?? 60)) s.")  // Retry-After
+  case .unreachable: show("Can't reach the node.")
+  case .notFound: show("No node login at that address.")
+  case .serverError, .other: show("Something went wrong.")
+  }
+}
+```
+
+`MeroClient` publishes the same as `loginFailure` next to `errorMessage`, and
+its `errorMessages` closure replaces the built-in words (return `nil` to keep
+one; `MeroClient.defaultMessage(for:)` gives them).
+
 ## Retries & timeouts
 
 Each request has a per-request timeout of `MeroConfig.timeout` (default **10s**).

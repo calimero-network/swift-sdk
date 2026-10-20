@@ -94,6 +94,7 @@ Bind its published state directly in your own views.
 @Published public private(set) var nodeURL: String
 @Published public private(set) var username: String
 @Published public private(set) var errorMessage: String?
+@Published public private(set) var loginFailure: LoginFailureReason?  // why the last login failed, typed
 @Published public private(set) var lastRpcResult: String?
 @Published public private(set) var isOfflineSession: Bool  // signed in on tokens the node has not confirmed yet
 // Cloud session
@@ -135,6 +136,12 @@ verdict (no network, a timeout, a `5xx`). On `.offline` the client is signed in
 on the held tokens with `isOnline == false` and `isOfflineSession == true`;
 both clear when the node's event stream connects, and a node that then rejects
 the tokens logs out. Ask for sign-in only on `.rejected` or `.noSession`.
+
+A failed `login` sets `loginFailure` — `.invalidCredentials`,
+`.rateLimited(retryAfter:)` (the node's lockout), `.unreachable`, `.notFound`,
+`.serverError(status:)` — next to `errorMessage`. The built-in messages name no
+vendor; replace any of them with `client.errorMessages = { error in ... }`
+(return `nil` to keep the built-in one).
 
 Use it in your own SwiftUI view without the bundled screens:
 
