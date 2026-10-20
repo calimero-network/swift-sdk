@@ -577,6 +577,8 @@ final class ChatService: ObservableObject {
 
     private func short(_ error: Error) -> String {
         if let u = error as? URLError { return "network \(u.code)" }
+        // A contract's refusal ("message too long", a panic) in its own words.
+        if let reason = (error as? MeroError)?.callFailureReason { return reason }
         return (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 }

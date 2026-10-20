@@ -208,11 +208,8 @@ final class MeroSession: ObservableObject {
             chat = ChatService(backend: .node(client), username: displayName)
             isAuthenticated = true
             log(.ok, "authenticated on the node")
-        } catch MeroError.network {
-            errorMessage = "Can't reach a node at \(urlString). Is merod running?"
-            log(.err, "node unreachable: \(urlString)")
         } catch {
-            errorMessage = friendly(error)
+            errorMessage = nodeLoginMessage(LoginFailureReason(error), url: urlString) ?? friendly(error)
             log(.err, "node login failed: \(detail(error))")
         }
     }
@@ -243,8 +240,22 @@ final class MeroSession: ObservableObject {
         case AccountError.credentialRejected:
             return "The wallet's answer could not be verified, so nothing was saved."
         case MeroError.network(let m): return "Can't reach Calimero: \(m)"
-        case MeroError.authenticationFailed: return "The node refused that username or password."
         default: return (error as? LocalizedError)?.errorDescription ?? "Something went wrong."
+        }
+    }
+
+    /// A node login's failure, typed by the SDK: a lockout is not a wrong
+    /// password, and a URL with no login behind it is neither.
+    private func nodeLoginMessage(_ reason: LoginFailureReason, url: String) -> String? {
+        switch reason {
+        case .invalidCredentials: return "The node refused that username or password."
+        case .rateLimited(let retryAfter?) where retryAfter > 0:
+            return "Too many failed attempts. Try again in \(Int(retryAfter.rounded(.up))) s."
+        case .rateLimited: return "Too many failed attempts. Try again later."
+        case .unreachable: return "Can't reach a node at \(url). Is merod running?"
+        case .notFound: return "No node login at \(url). Check the URL and port."
+        case .serverError(let status): return "The node failed to sign you in (HTTP \(status))."
+        case .other: return nil
         }
     }
 
