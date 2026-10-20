@@ -78,4 +78,81 @@ final class MeroClientTests: XCTestCase {
         await client.runSampleRpc(contextId: "ctx", method: "get")
         XCTAssertNotNil(client.errorMessage)
     }
+
+    // MARK: - Login failures, told apart
+
+    private func answerLogin(_ status: Int, headers: [String: String] = [:]) {
+        MockURLProtocol.setHandler { _ in .init(status: status, headers: headers, body: Data()) }
+    }
+
+    func testAWrongPasswordIsInvalidCredentials() async {
+        answerLogin(401)
+        let client = makeClient()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "nope")
+        XCTAssertEqual(client.loginFailure, .invalidCredentials)
+        XCTAssertEqual(client.errorMessage, "Login failed — check your credentials and node URL.")
+    }
+
+    func testALockoutIsToldApartFromAWrongPassword() async {
+        answerLogin(429, headers: ["Retry-After": "42"])
+        let client = makeClient()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
+        XCTAssertFalse(client.isAuthenticated)
+        XCTAssertEqual(client.loginFailure, .rateLimited(retryAfter: 42))
+        XCTAssertEqual(client.errorMessage, "Too many failed attempts. Try again in 42 seconds.")
+    }
+
+    func testAMissingNodeIsNotFound() async {
+        answerLogin(404)
+        let client = makeClient()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
+        XCTAssertEqual(client.loginFailure, .notFound)
+        XCTAssertEqual(client.errorMessage, "No sign-in found at that address — check the node URL.")
+    }
+
+    func testASuccessfulLoginClearsTheLastFailure() async {
+        answerLogin(401)
+        let client = makeClient()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "nope")
+        XCTAssertNotNil(client.loginFailure)
+        node.install()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
+        XCTAssertTrue(client.isAuthenticated)
+        XCTAssertNil(client.loginFailure)
+        XCTAssertNil(client.errorMessage)
+    }
+
+    func testClearErrorClearsTheFailure() async {
+        answerLogin(401)
+        let client = makeClient()
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "nope")
+        client.clearError()
+        XCTAssertNil(client.loginFailure)
+        XCTAssertNil(client.errorMessage)
+    }
+
+    // MARK: - Error words
+
+    func testTheNetworkMessageNamesNoVendor() {
+        let message = MeroClient.defaultMessage(for: MeroError.network("The Internet connection appears to be offline."))
+        XCTAssertEqual(message, "Can't connect to the server: The Internet connection appears to be offline.")
+        XCTAssertFalse(message.contains("Calimero"))
+    }
+
+    func testErrorMessagesCanBeReplaced() async {
+        answerLogin(429, headers: ["Retry-After": "5"])
+        let client = makeClient()
+        client.errorMessages = { error in
+            if case .rateLimited? = Optional(LoginFailureReason(error)) { return "Locked. Wait a moment." }
+            return nil
+        }
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
+        XCTAssertEqual(client.errorMessage, "Locked. Wait a moment.")
+
+        answerLogin(401)
+        await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
+        XCTAssertEqual(
+            client.errorMessage, "Login failed — check your credentials and node URL.",
+            "nil keeps the built-in message")
+    }
 }

@@ -205,8 +205,13 @@ public actor Mero {
             //
             // So: a 4xx that is about authentication becomes
             // `authenticationFailed`. Everything else stays what it is, and the
-            // caller can tell "wrong password" from "no node there".
+            // caller can tell "wrong password" from "no node there". A `429`
+            // (logins locked out after failed attempts, with `Retry-After`) and
+            // a `404` (no login at that URL) are not about the credentials
+            // either, and stay `.http` — see ``LoginFailureReason``.
             switch error {
+            case .http(let http) where http.status == 429 || http.status == 404:
+                throw error
             case .http(let http) where (400..<500).contains(http.status):
                 throw MeroError.authenticationFailed(error.localizedDescription)
             case .http, .network, .decoding, .authRevoked, .emptyResponse, .rpc,

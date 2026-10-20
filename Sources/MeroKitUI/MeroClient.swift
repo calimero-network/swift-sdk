@@ -42,6 +42,11 @@ public final class MeroClient: ObservableObject {
     /// A display name: the username for a node login, a short account id for Cloud.
     @Published public private(set) var username: String = ""
     @Published public private(set) var errorMessage: String?
+    /// Why the last ``login(nodeURL:username:password:)`` failed, typed, next
+    /// to its ``errorMessage``: a wrong password, a lockout (with the node's
+    /// `Retry-After`), no node at the URL... `nil` after a success, a
+    /// ``clearError()`` or a ``logout()``.
+    @Published public private(set) var loginFailure: LoginFailureReason?
     @Published public private(set) var lastRpcResult: String?
     /// Signed in on tokens the node has not confirmed this launch:
     /// ``resumeNodeSession()`` found it unreachable and kept the stored
@@ -49,6 +54,11 @@ public final class MeroClient: ObservableObject {
     /// tokens; this clears once the node's event stream connects, and a node
     /// that rejects the tokens logs out.
     @Published public private(set) var isOfflineSession = false
+
+    /// The words ``errorMessage`` shows for an error, in place of the
+    /// built-in ones (``defaultMessage(for:)``). Return `nil` to keep the
+    /// built-in message for that error. Set it to rebrand or localise.
+    public var errorMessages: (@MainActor (Error) -> String?)?
 
     // MARK: Session state (== mero-react useMero)
 
@@ -672,7 +682,10 @@ public final class MeroClient: ObservableObject {
 
     /// Dismiss the last error (``LoginView`` does, when switching between
     /// Cloud and node sign-in).
-    public func clearError() { errorMessage = nil }
+    public func clearError() {
+        errorMessage = nil
+        loginFailure = nil
+    }
 
     // MARK: - Development node login
 
@@ -692,6 +705,7 @@ public final class MeroClient: ObservableObject {
         nodeURL nodeURLString: String, username: String, password: String, packageName: String? = nil
     ) async {
         errorMessage = nil
+        loginFailure = nil
 
         var base = nodeURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
@@ -715,6 +729,7 @@ public final class MeroClient: ObservableObject {
                 Credentials(username: username, password: password))
         } catch {
             self.isAuthenticated = false
+            self.loginFailure = LoginFailureReason(error)
             self.errorMessage = friendlyMessage(error)
             return
         }
@@ -803,6 +818,7 @@ public final class MeroClient: ObservableObject {
         contextIdentity = nil
         lastRpcResult = nil
         errorMessage = nil
+        loginFailure = nil
         sessionRevision += 1
     }
 
@@ -814,13 +830,28 @@ public final class MeroClient: ObservableObject {
     }
 
     func friendlyMessage(_ error: Error) -> String {
+        errorMessages?(error) ?? Self.defaultMessage(for: error)
+    }
+
+    /// The built-in words for `error`, as ``errorMessage`` shows them unless
+    /// ``errorMessages`` says otherwise. They name no product or vendor.
+    public static func defaultMessage(for error: Error) -> String {
         switch error {
         case MeroError.authRevoked:
             return "Your session was revoked. Please sign in again."
         case MeroError.authenticationFailed:
             return "Login failed — check your credentials and node URL."
         case MeroError.network(let message):
-            return "Can't reach Calimero: \(message)"
+            return "Can't connect to the server: \(message)"
+        case MeroError.http(let http) where http.status == 429:
+            let wait = LoginFailureReason(error)
+            if case .rateLimited(let retryAfter?) = wait, retryAfter > 0 {
+                let seconds = Int(retryAfter.rounded(.up))
+                return "Too many failed attempts. Try again in \(seconds) second\(seconds == 1 ? "" : "s")."
+            }
+            return "Too many failed attempts. Try again later."
+        case MeroError.http(let http) where http.status == 404 && http.url.contains("/auth/"):
+            return "No sign-in found at that address — check the node URL."
         case AccountError.enrolmentDeclined:
             return "This device was not approved. You can try again."
         case AccountError.stateMismatch:

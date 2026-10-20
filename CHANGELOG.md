@@ -2,6 +2,30 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: typed login failures, and error words with no vendor in them
+
+- **`LoginFailureReason`** classifies what a login threw:
+  `.invalidCredentials`, `.rateLimited(retryAfter:)`, `.unreachable`,
+  `.notFound`, `.serverError(status:)`, `.other`. `MeroClient` publishes it as
+  `loginFailure`, next to `errorMessage`, after a failed
+  `login(nodeURL:username:password:)`.
+- **`Mero.authenticate` keeps a `429` and a `404` as `MeroError.http`.** Every
+  `4xx` became `.authenticationFailed`, so a lockout after failed attempts
+  (core answers `429` with `Retry-After`) read as "check your credentials", and
+  so did a URL with no login behind it. Other `4xx` are still
+  `.authenticationFailed`. A caller matching `.authenticationFailed` for those
+  two now sees `.http` (status `429` / `404`).
+- **`MeroClient`'s messages name no vendor.** A network failure read "Can't
+  reach Calimero: …"; it is "Can't connect to the server: …" now. A lockout
+  reads "Too many failed attempts. Try again in N seconds.", and a `404` from a
+  login "No sign-in found at that address — check the node URL."
+- **`MeroClient.errorMessages`** replaces the built-in words for any error
+  (return `nil` to keep one), to rebrand or localise; the built-in ones are
+  `MeroClient.defaultMessage(for:)`.
+
+Found by apps built on the SDK, which could not tell a lockout from a wrong
+password, and showed the SDK's vendor name in their own error text.
+
 ## Unreleased: password sessions that survive a relaunch, and an offline state
 
 - **`MeroClient.login(nodeURL:username:password:)` is a session like an SSO
