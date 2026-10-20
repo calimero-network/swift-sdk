@@ -329,8 +329,8 @@ public struct NodeLoginPanel: View {
                     field(
                         strings.passwordLabel, text: $password, placeholder: strings.passwordPlaceholder, secure: true
                     )
-                        .onSubmit { Task { await connect() } }
-                        .accessibilityIdentifier("nodePasswordInput")
+                    .onSubmit { Task { await connect() } }
+                    .accessibilityIdentifier("nodePasswordInput")
                 }
                 if let error = model.error {
                     Text(error).font(.footnote).foregroundColor(theme.error)
