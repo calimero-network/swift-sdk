@@ -85,6 +85,27 @@ public struct RpcError: Error, Sendable, Equatable {
 
   public var isReadOnlyWriteRefused: Bool { get }  // type == "ReadOnlyWriteRefused"
   public var refusedContextId: String? { get }     // data.context_id
+  public var isFunctionCallError: Bool { get }     // type == "FunctionCallError"
+  public var reason: String { get }                // the reason in `data`, else `message`
+}
+
+extension MeroError {
+  public var callFailureReason: String? { get }    // RpcError.reason, or an HTTP refusal's data / error
+}
+```
+
+A contract that returns an error or panics answers
+`{"type":"FunctionCallError","data":"<reason>"}` with no `message`. The reason
+is in `data`; read it with `reason` (`message` is `"FunctionCallError: <reason>"`).
+A nested `{type, data}` or `{message}` object is unwrapped to its text.
+`MeroError.callFailureReason` reads the same from a JSON-RPC error and from a
+`/query` or `/intents` refusal:
+
+```swift
+do {
+  try await mero.rpc.execute(contextId: ctx, method: "transfer", argsJson: args) as JSONValue
+} catch let error as MeroError {
+  show(error.callFailureReason ?? error.localizedDescription)  // "insufficient balance"
 }
 ```
 

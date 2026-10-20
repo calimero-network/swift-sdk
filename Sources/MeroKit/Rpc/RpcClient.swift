@@ -176,7 +176,9 @@ public struct RpcClient: Sendable {
             if case .object(let obj)? = data, case .string(let id)? = obj["context_id"] { context = " on \(id)" }
             return "write refused\(context): this node only holds a read-only replica of the context"
         }
-        if case .string(let detail)? = data { return "\(type): \(detail)" }
+        // The reason is in `data` (a string, or a nested object); without
+        // it the message would be the bare type, e.g. "FunctionCallError".
+        if let detail = RpcError.text(of: data) { return "\(type): \(detail)" }
         return type
     }
 

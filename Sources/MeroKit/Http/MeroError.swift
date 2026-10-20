@@ -155,6 +155,18 @@ extension MeroError {
         }
     }
 
+    /// Why a contract call failed, in the contract's words: ``RpcError/reason``
+    /// for a JSON-RPC error, or the reason an HTTP refusal (`/query`,
+    /// `/intents`) carries in `data` or `error`. `nil` for other errors.
+    public var callFailureReason: String? {
+        switch self {
+        case .rpc(let e): return e.reason
+        default:
+            guard let refusal else { return nil }
+            return RpcError.text(of: refusal.data) ?? refusal.message
+        }
+    }
+
     /// The JSON-RPC error's `type` tag (`"ReadOnlyWriteRefused"`,
     /// `"FunctionCallError"`, ...), or the HTTP refusal's `type`.
     public var errorType: String? {
@@ -174,6 +186,44 @@ extension RpcError {
     /// replica of the context. Retrying here never helps: send the write to a
     /// node with a writing role, or as an intent through a relay.
     public var isReadOnlyWriteRefused: Bool { type == Self.readOnlyWriteRefusedType }
+
+    /// The `type` core gives a method that failed: the contract returned an
+    /// error, panicked, or the call was refused before it ran.
+    public static let functionCallErrorType = "FunctionCallError"
+
+    /// Whether the method itself failed (``functionCallErrorType``).
+    public var isFunctionCallError: Bool { type == Self.functionCallErrorType }
+
+    /// Why the call failed, in the node's or the contract's words: the
+    /// `data` core puts beside `type` (for a `FunctionCallError`, the
+    /// contract's own error or panic message), else ``message``.
+    ///
+    /// Core sends a method error as `{"type":"FunctionCallError","data":"<reason>"}`
+    /// with no `message`, so the reason lives in `data`. A nested
+    /// `{"type", "data"}` or a `{"message"}` object is unwrapped to its text.
+    public var reason: String {
+        Self.text(of: data) ?? message
+    }
+
+    /// The readable text in a `data` payload, or `nil` when there is none.
+    static func text(of data: JSONValue?) -> String? {
+        switch data {
+        case .string(let text)?:
+            return text.isEmpty ? nil : text
+        case .object(let obj)?:
+            for key in ["message", "error", "reason", "detail"] {
+                if let text = text(of: obj[key]) { return text }
+            }
+            // `{"type": "...", "data": ...}`, core's tagged-enum shape, nested.
+            let inner = text(of: obj["data"])
+            if case .string(let type)? = obj["type"] {
+                return inner.map { "\(type): \($0)" } ?? type
+            }
+            return inner
+        default:
+            return nil
+        }
+    }
 
     /// The context a ``isReadOnlyWriteRefused`` refusal names, from
     /// `data.context_id`.
