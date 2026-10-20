@@ -43,6 +43,12 @@ public final class MeroClient: ObservableObject {
     @Published public private(set) var username: String = ""
     @Published public private(set) var errorMessage: String?
     @Published public private(set) var lastRpcResult: String?
+    /// Signed in on tokens the node has not confirmed this launch:
+    /// ``resumeNodeSession()`` found it unreachable and kept the stored
+    /// session. ``isAuthenticated`` is `true` and calls go out with the held
+    /// tokens; this clears once the node's event stream connects, and a node
+    /// that rejects the tokens logs out.
+    @Published public private(set) var isOfflineSession = false
 
     // MARK: Session state (== mero-react useMero)
 
@@ -171,6 +177,8 @@ public final class MeroClient: ObservableObject {
     }
 
     /// Reconnect the node in ``storage`` if its stored token still validates.
+    /// A node that cannot be reached reads as `false` here, like a rejected
+    /// token; ``resumeNodeSession()`` tells the two apart.
     @discardableResult
     public func restoreNodeSession() async -> Bool {
         guard !isAuthenticated, let saved = storage.nodeURL else { return false }
@@ -178,6 +186,46 @@ public final class MeroClient: ObservableObject {
         defer { isLoading = false }
         await finishNodeSession(url: saved, instance: nil, fromCallback: false)
         return isAuthenticated
+    }
+
+    /// Reconnect the node in ``storage``, keeping the session when the node
+    /// cannot be reached — for an app that works offline.
+    ///
+    /// - ``NodeSessionRestore/restored``: the node accepted the stored token.
+    /// - ``NodeSessionRestore/offline``: the node gave no verdict (no network,
+    ///   timeout, `5xx`). The held tokens are adopted: ``isAuthenticated`` is
+    ///   `true`, ``isOnline`` and ``isOfflineSession`` say the node has not
+    ///   been reached, and the event stream keeps trying. A node that later
+    ///   rejects the tokens logs out, as for any session.
+    /// - ``NodeSessionRestore/rejected``: the node refused the token; sign in again.
+    /// - ``NodeSessionRestore/noSession``: no stored node, or no token for it
+    ///   (or a session is already up).
+    @discardableResult
+    public func resumeNodeSession() async -> NodeSessionRestore {
+        guard !isAuthenticated, let saved = storage.nodeURL else { return .noSession }
+        isLoading = true
+        defer { isLoading = false }
+        let client = makeNodeMero(saved)
+        switch await Self.verifyAuth(client) {
+        case .valid:
+            await installNode(client, url: saved)
+            isAuthenticated = true
+            isOnline = true
+            isOfflineSession = false
+            startHealth(client)
+            return .restored
+        case .unreachable:
+            await installNode(client, url: saved)
+            isAuthenticated = true
+            isOnline = false
+            isOfflineSession = true
+            startHealth(client)
+            return .offline
+        case .rejected:
+            return .rejected
+        case .noToken:
+            return .noSession
+        }
     }
 
     // MARK: - Cloud sign-in
@@ -510,11 +558,29 @@ public final class MeroClient: ObservableObject {
     /// judged on the token actually held now; `/auth/refresh` is never called
     /// here, so a single-use refresh token is never raced.
     static func checkAuth(_ client: Mero) async -> Bool {
-        guard let token = await client.currentTokenData()?.accessToken, !token.isEmpty else { return false }
+        await verifyAuth(client) == .valid
+    }
+
+    enum AuthCheck: Equatable {
+        case valid
+        case rejected
+        /// The node gave no verdict (unreachable, or `5xx`).
+        case unreachable
+        case noToken
+    }
+
+    /// ``checkAuth(_:)``, telling a node that refused the token from one
+    /// that could not be asked.
+    static func verifyAuth(_ client: Mero) async -> AuthCheck {
+        guard let token = await client.currentTokenData()?.accessToken, !token.isEmpty else { return .noToken }
         let auth = await client.auth
-        if await auth.validateToken(token).valid { return true }
-        guard let rotated = await client.currentTokenData()?.accessToken, rotated != token else { return false }
-        return await auth.validateToken(rotated).valid
+        let first = await auth.validateToken(token)
+        if first.valid { return .valid }
+        if first.isUnreachable { return .unreachable }
+        guard let rotated = await client.currentTokenData()?.accessToken, rotated != token else { return .rejected }
+        let second = await auth.validateToken(rotated)
+        if second.valid { return .valid }
+        return second.isUnreachable ? .unreachable : .rejected
     }
 
     // MARK: - Health (SSE)
@@ -540,6 +606,7 @@ public final class MeroClient: ObservableObject {
                     switch update {
                     case .connect:
                         self.isOnline = true
+                        self.isOfflineSession = false
                     case .event:
                         break
                     case .error(let error):
@@ -576,13 +643,17 @@ public final class MeroClient: ObservableObject {
         guard status == 401 || "\(error)".contains("401"), !recovering else { return }
         recovering = true
         Task { [weak self] in
-            let ok = await Self.checkAuth(client)
+            let check = await Self.verifyAuth(client)
             guard let self else { return }
             defer { self.recovering = false }
-            if ok {
+            switch check {
+            case .valid:
                 client.sse.connect()
-            } else if self.mero === client {
-                await self.logout()
+            case .unreachable:
+                // No verdict: keep the session; the stream retries.
+                break
+            case .rejected, .noToken:
+                if self.mero === client { await self.logout() }
             }
         }
     }
@@ -606,13 +677,25 @@ public final class MeroClient: ObservableObject {
     // MARK: - Development node login
 
     /// Log in with username/password against `nodeURL` — a development node you
-    /// run yourself. Not offered by ``LoginView``; mobile sign-in is Cloud.
+    /// run yourself. Not offered by ``LoginView``'s default; mobile sign-in is Cloud.
+    ///
+    /// The session is kept as an SSO login's is: the node is remembered in
+    /// ``storage`` (``MeroAppStorage/nodeURL`` and ``MeroAppStorage/tokenNodeURL``),
+    /// so ``restore()`` brings it back after a relaunch given a persistent
+    /// token store, and the node's event stream drives ``isOnline``.
+    ///
+    /// - Parameter packageName: the application to look up on the node
+    ///   (`listApplications`, by package) for ``applicationId``;
+    ///   ``MeroProviderConfig/packageName`` when `nil`. With neither, or no
+    ///   installed application of that package, ``applicationId`` is left as is.
     public func login(
-        nodeURL nodeURLString: String, username: String, password: String
+        nodeURL nodeURLString: String, username: String, password: String, packageName: String? = nil
     ) async {
         errorMessage = nil
 
-        guard let url = URL(string: nodeURLString), url.scheme != nil else {
+        var base = nodeURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        guard let url = URL(string: base), url.scheme != nil, url.host != nil else {
             errorMessage = "Enter a valid node URL (e.g. http://localhost:4001)."
             return
         }
@@ -624,20 +707,38 @@ public final class MeroClient: ObservableObject {
         isLoading = true
         defer { isLoading = false }
 
-        let config = MeroConfig(baseURL: url, tokenStore: makeTokenStore())
-        let client = session.map { Mero(config: config, session: $0) } ?? Mero(config: config)
-        self.mero = client
+        stopHealth()
+        let client = makeNodeMero(base)
 
         do {
             _ = try await client.authenticate(
                 Credentials(username: username, password: password))
-            self.username = username
-            await installNode(client, url: nodeURLString)
-            self.isAuthenticated = true
         } catch {
             self.isAuthenticated = false
             self.errorMessage = friendlyMessage(error)
+            return
         }
+        storage.nodeURL = base
+        storage.tokenNodeURL = base
+        self.username = username
+        await installNode(client, url: base)
+        isAuthenticated = true
+        isOnline = true
+        isOfflineSession = false
+        startHealth(client)
+        if let package = packageName ?? config.packageName, !package.isEmpty {
+            await resolveNodeApplication(package: package, client: client)
+        }
+    }
+
+    /// The installed application of `package`, for ``applicationId``: the one
+    /// already remembered if it is still installed, else the latest version.
+    private func resolveNodeApplication(package: String, client: Mero) async {
+        guard let apps = try? await client.admin.listApplications().apps, mero === client else { return }
+        let matching = apps.filter { $0.package == package }
+        if let current = applicationId, matching.contains(where: { $0.id == current }) { return }
+        let latest = matching.max { $0.version.compare($1.version, options: .numeric) == .orderedAscending }
+        if let latest { setApplicationId(latest.id) }
     }
 
     // MARK: - Calls
@@ -693,6 +794,7 @@ public final class MeroClient: ObservableObject {
         cloudNote = nil
         isAuthenticated = false
         isOnline = true
+        isOfflineSession = false
         isLoading = false
         username = ""
         nodeURL = ""
@@ -756,4 +858,18 @@ struct UnavailableWebAuthenticator: WebAuthenticating {
     func authenticate(url: URL, callback: CloudCallback) async throws -> URL {
         throw AccountError.notSignedIn("no system web authentication on this platform")
     }
+}
+
+/// What ``MeroClient/resumeNodeSession()`` found.
+public enum NodeSessionRestore: String, Sendable, Equatable {
+    /// The node accepted the stored token; the session is live.
+    case restored
+    /// The node could not be asked; the session runs on the held tokens until
+    /// it can (``MeroClient/isOfflineSession``).
+    case offline
+    /// The node refused the stored token: sign in again.
+    case rejected
+    /// Nothing to restore: no stored node or no token for it, or a session is
+    /// already up.
+    case noSession
 }
