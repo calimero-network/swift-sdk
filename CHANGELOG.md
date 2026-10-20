@@ -2,6 +2,28 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: every LoginView word and the logo tile through LoginBranding
+
+`LoginView` could not be fully rebranded: "Manually enter node URL", "Use
+Calimero Cloud instead", "Opens the Calimero wallet to approve this device",
+the custom-wallet note and every string of the node panel were hardcoded, and
+the logo tile's size, radius, fill and shadow were fixed. Apps built on the SDK
+with their own brand had to fork the view to change them.
+
+`LoginBranding` now carries all of them, each defaulted to what the view showed
+before, so nothing changes for an app that sets none:
+
+- `cloudHint` (`nil` hides the line under the Cloud button), `manualNodeLink`,
+  `useCloudLink` and `customWalletNote`;
+- `node: NodeLoginStrings`: the node panel's searching line, manual option,
+  "local" tag, field labels and placeholders, and its two buttons;
+- `logoTileSize`, `logoTileCornerRadius`, `logoTileBackground` (the theme's
+  `primary` when `nil`) and `logoTileShadow`.
+
+`AccountSignInPanel` takes `hint:` and `customWalletNote:`, and
+`NodeLoginPanel` takes `strings:`, all defaulted, so existing calls compile
+unchanged. The glow behind the hero stays `MeroTheme.showsGlow`.
+
 ## Unreleased: core 0.11.0-rc.90, namespace ops at schema version 26
 
 The SDK now targets core `0.11.0-rc.90` (`ci/core-version` and the merod image
