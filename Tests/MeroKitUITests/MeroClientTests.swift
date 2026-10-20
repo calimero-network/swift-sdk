@@ -134,7 +134,8 @@ final class MeroClientTests: XCTestCase {
     // MARK: - Error words
 
     func testTheNetworkMessageNamesNoVendor() {
-        let message = MeroClient.defaultMessage(for: MeroError.network("The Internet connection appears to be offline."))
+        let offline = MeroError.network("The Internet connection appears to be offline.")
+        let message = MeroClient.defaultMessage(for: offline)
         XCTAssertEqual(message, "Can't connect to the server: The Internet connection appears to be offline.")
         XCTAssertFalse(message.contains("Calimero"))
     }
