@@ -24,15 +24,31 @@ public final class MockURLProtocol: URLProtocol {
         /// is cancelled — a long-lived stream (`/sse`) that stays open after
         /// its first frames.
         public let holdOpen: Bool
+        /// Fail the request with this error instead of answering it: no HTTP
+        /// response at all, the way a dropped connection, a DNS failure or
+        /// airplane mode looks to `URLSession`. `status`, `headers` and `body`
+        /// are ignored. Through ``MeroKit`` it surfaces as `MeroError.network`.
+        public let error: URLError?
 
         public init(
-            status: Int, headers: [String: String], body: Data, delay: TimeInterval = 0, holdOpen: Bool = false
+            status: Int, headers: [String: String], body: Data, delay: TimeInterval = 0, holdOpen: Bool = false,
+            error: URLError? = nil
         ) {
             self.status = status
             self.headers = headers
             self.body = body
             self.delay = delay
             self.holdOpen = holdOpen
+            self.error = error
+        }
+
+        /// A request that never reaches a server: it fails with `code`
+        /// (`.notConnectedToInternet` by default), after `delay`. Use this,
+        /// not a made-up status like `0`, to test what an app does offline.
+        public static func transportError(
+            _ code: URLError.Code = .notConnectedToInternet, delay: TimeInterval = 0
+        ) -> Stub {
+            .init(status: 0, headers: [:], body: Data(), delay: delay, error: URLError(code))
         }
     }
 
@@ -93,6 +109,10 @@ public final class MockURLProtocol: URLProtocol {
     }
 
     private func deliver(_ stub: Stub) {
+        if let error = stub.error {
+            client?.urlProtocol(self, didFailWithError: error)
+            return
+        }
         let response = HTTPURLResponse(
             url: request.url!,
             statusCode: stub.status,

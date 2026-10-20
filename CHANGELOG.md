@@ -2,6 +2,34 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: testkit routes and transport errors
+
+`MeroKitTestSupport` covers more of what an app's own tests need.
+
+- **`MockURLProtocol.Stub.transportError(_:delay:)`** (and a new `error:`
+  parameter on `Stub`) fails a request with a `URLError` and no HTTP response,
+  which reaches the SDK as `MeroError.network`. Apps built on the SDK had been
+  using a status of `0` as a stand-in, and that is an HTTP response, not an
+  offline phone.
+- **`FakeNode`** now serves, in core's wire shapes and behind the same auth guard:
+  - `POST /admin/client-key`, which mints a scoped token pair the node then
+    accepts (`clientKeys` lists what was asked for);
+  - contexts: list, create, get, delete, and list for one application
+    (`addContext(id:applicationId:groupId:)` seeds one);
+  - applications: list and get (`addApplication(id:package:version:)`);
+  - blobs: upload (the raw body, byte for byte), list, download, `HEAD` and
+    delete (`putBlob(_:)` and `blob(_:)`);
+  - group, member and context metadata: `PUT` and `GET`, where an omitted
+    `name` keeps the current one.
+  - `goOffline(_:)` / `goOnline()` fail every request at the transport.
+
+  The routes it already served behave as before; a new node still lists no
+  contexts.
+- **A blob regression test.** All 256 byte values go out on the wire unchanged
+  on upload and come back unchanged from `getBlob`. The Kotlin SDK once
+  corrupted blobs by sending their bytes through a text encoding. Swift keeps
+  them as `Data` throughout, and the test now pins that.
+
 ## Unreleased: every LoginView word and the logo tile through LoginBranding
 
 `LoginView` could not be fully rebranded: "Manually enter node URL", "Use

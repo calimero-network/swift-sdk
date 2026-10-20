@@ -84,7 +84,10 @@ Or in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
 
 For your own tests, the `MeroKitTestSupport` product ships the SDK's test
 doubles — `FakeNode` (a stateful fake node: login, refresh, revoke, logout,
-JSON-RPC) and `MockURLProtocol`. Add it to a test target only:
+JSON-RPC, scoped client keys, contexts, applications, blobs and metadata, and
+`goOffline()` for a transport failure) and `MockURLProtocol` (whose
+`Stub.transportError(_:)` fails a request with no HTTP response, as a dropped
+connection does). Add it to a test target only:
 
 ```swift
 .testTarget(name: "MyAppTests", dependencies: [
