@@ -2,6 +2,24 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: a contract's reason, one property away
+
+A contract that returns an error or panics answers
+`{"type":"FunctionCallError","data":"<reason>"}`, with no `message`, so the
+reason an app wants to show sat in `RpcError.data`.
+
+- **`RpcError.reason`**: the reason in `data` (a string, or the text of a
+  nested `{type, data}` / `{message}` object), else `message`.
+  `RpcError.isFunctionCallError` and `RpcError.functionCallErrorType` name the
+  case.
+- **`MeroError.callFailureReason`**: the same from a JSON-RPC error and from a
+  `/query` or `/intents` refusal (`ErrorRefusal.data`, else its `error`).
+- `RpcError.message` for an error with object-shaped `data` now ends with that
+  text (`"FunctionCallError: HostError: Panic: …"`), not the bare type. A
+  string `data` already read `"FunctionCallError: <reason>"`.
+
+Found by apps built on the SDK.
+
 ## Unreleased: testkit routes and transport errors
 
 `MeroKitTestSupport` covers more of what an app's own tests need.
