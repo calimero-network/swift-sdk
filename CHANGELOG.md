@@ -2,6 +2,35 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: password sessions that survive a relaunch, and an offline state
+
+- **`MeroClient.login(nodeURL:username:password:)` is a session like an SSO
+  login.** It stored nothing, so `restore()` had no node to go back to and a
+  password session was lost on every relaunch. It now writes
+  `MeroAppStorage.nodeURL` and `tokenNodeURL`, follows the node's event stream
+  for `isOnline` (as `connectToNode` does), drops a trailing `/` from the URL,
+  and uses `MeroProviderConfig.timeout`. A failed login stores nothing.
+- **`login(..., packageName:)`** looks the application up on the node
+  (`listApplications`, by package; the latest installed version) for
+  `applicationId`. It defaults to `MeroProviderConfig.packageName`; with
+  neither, `applicationId` is left as it was.
+- **`MeroClient.resumeNodeSession() -> NodeSessionRestore`** tells a node that
+  could not be reached from one that refused the token: `.restored`,
+  `.offline`, `.rejected` or `.noSession`. On `.offline` the held tokens are
+  adopted: `isAuthenticated` is `true`, `isOnline` is `false`, and the new
+  `isOfflineSession` is `true` until the event stream connects. A node that
+  later rejects the tokens logs out, as for any session. `restoreNodeSession()`
+  keeps its answer (`false` for both).
+- **`TokenValidation.isUnreachable`**: `AuthApi.validateToken` reported a
+  network failure or a `5xx` as an invalid token. It still returns
+  `valid: false` (and `status: 401` for a network failure), but now says the
+  node never judged the token. A `5xx` keeps its own status.
+- The health stream no longer logs out when re-validating after a `401` finds
+  the node unreachable; it waits for the stream to reconnect.
+
+Found by apps built on the SDK, which had to build their own fallback client to
+keep a password session across launches and offline.
+
 ## Unreleased: a contract's reason, one property away
 
 A contract that returns an error or panics answers

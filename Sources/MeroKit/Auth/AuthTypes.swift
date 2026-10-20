@@ -317,4 +317,9 @@ public struct TokenValidation: Sendable {
     public let valid: Bool
     public let status: Int
     public let headers: [String: String]
+    /// The node gave no verdict on the token: the request never reached it
+    /// (offline, DNS, timeout) or it answered `5xx`. `valid` is `false`, but
+    /// the token was not rejected — keep it, and ask again once the node is
+    /// back. A `401`/`403` is a rejection and leaves this `false`.
+    public var isUnreachable: Bool = false
 }

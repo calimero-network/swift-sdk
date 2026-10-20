@@ -95,6 +95,7 @@ Bind its published state directly in your own views.
 @Published public private(set) var username: String
 @Published public private(set) var errorMessage: String?
 @Published public private(set) var lastRpcResult: String?
+@Published public private(set) var isOfflineSession: Bool  // signed in on tokens the node has not confirmed yet
 // Cloud session
 @Published public private(set) var account: String?
 @Published public private(set) var relayURL: String?
@@ -115,10 +116,25 @@ func signInWithCloud(callbackScheme: String) async    // e.g. "myapp" → myapp:
 func signInWithCloud(callback: CloudCallback) async   // .https(host:path:) for a Universal Link
 func handleEnrolmentCallback(_ url: URL) async -> Bool
 func restoreCloudSession() async -> Bool
-func login(nodeURL: String, username: String, password: String) async  // development nodes only
+func login(nodeURL: String, username: String, password: String,
+           packageName: String? = nil) async            // development nodes only; restorable like an SSO login
+func restoreNodeSession() async -> Bool               // the stored node, if it accepts the stored token
+func resumeNodeSession() async -> NodeSessionRestore  // the same, keeping the session when the node is unreachable
 func runSampleRpc(contextId: String, method: String) async
 func logout() async
 ```
+
+A password login is kept like an SSO one: the node goes into `storage`, so
+`restore()` brings the session back after a relaunch (given a persistent token
+store), and `applicationId` is looked up on the node by `packageName` (or
+`MeroProviderConfig.packageName`).
+
+For an app that works offline, restore with `resumeNodeSession()`. It answers
+`.restored`, `.rejected`, `.noSession`, or `.offline` when the node gave no
+verdict (no network, a timeout, a `5xx`). On `.offline` the client is signed in
+on the held tokens with `isOnline == false` and `isOfflineSession == true`;
+both clear when the node's event stream connects, and a node that then rejects
+the tokens logs out. Ask for sign-in only on `.rejected` or `.noSession`.
 
 Use it in your own SwiftUI view without the bundled screens:
 

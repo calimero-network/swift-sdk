@@ -65,6 +65,12 @@ public struct AuthApi: Sendable {
         do {
             let head = try await http.head("/auth/validate", headers: ["Authorization": "Bearer \(token)"])
             return TokenValidation(valid: head.status == 200, status: head.status, headers: head.headers)
+        } catch MeroError.http(let http) where http.status >= 500 {
+            return TokenValidation(valid: false, status: http.status, headers: http.headers, isUnreachable: true)
+        } catch MeroError.network {
+            // Kept as 401 for callers that read `status`; `isUnreachable` says
+            // the node never judged the token.
+            return TokenValidation(valid: false, status: 401, headers: [:], isUnreachable: true)
         } catch {
             return TokenValidation(valid: false, status: 401, headers: [:])
         }
