@@ -290,13 +290,20 @@ public final class MeroClient: ObservableObject {
     /// The Cloud manager is asked again which relay serves the account
     /// (``CloudSignIn/refreshRelay()``): it may have gained one since, or its
     /// relay moved — an HA rebuild replaces the VM, and the persisted hostname
-    /// stops resolving. A lookup that fails keeps the persisted relay.
+    /// stops resolving. A lookup that fails keeps the persisted relay, read back
+    /// from the store: the failed refresh wrote there what it can no longer vouch
+    /// for (a new-account confirmation).
     @discardableResult
     public func restoreCloudSession() async -> Bool {
         guard let stored = await cloud.restoreSession() else { return false }
         isLoading = true
         defer { isLoading = false }
-        let session = (try? await cloud.refreshRelay()) ?? stored
+        let session: CloudSession
+        if let refreshed = try? await cloud.refreshRelay() {
+            session = refreshed
+        } else {
+            session = await cloud.restoreSession() ?? stored
+        }
         await adopt(await cloud.connect(session))
         return true
     }
