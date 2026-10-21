@@ -258,8 +258,19 @@ public actor CloudSignIn {
     @discardableResult
     public func refreshRelay() async throws -> CloudSession {
         guard var session = sessionStore.load() else { throw AccountError.notSignedIn("not signed in") }
-        let relays = try await cloudClient(keys: deviceKeys(), credential: session.credential)
-            .getAccountRelays(session.account)
+        let relays: [CloudAccountRelay]
+        do {
+            relays = try await cloudClient(keys: deviceKeys(), credential: session.credential)
+                .getAccountRelays(session.account)
+        } catch {
+            // A failed lookup says nothing about whether the account is still new: forget the
+            // last answer's confirmation, as kotlin-sdk's `findRelay` does.
+            if session.noRelayConfirmed != nil {
+                session.noRelayConfirmed = nil
+                sessionStore.save(session)
+            }
+            throw error
+        }
         let choice = CloudClient.chooseRelay(relays)
         session.relayUrl = choice.relayUrl ?? session.relayUrl
         session.executorAccount = choice.executorAccount ?? session.executorAccount

@@ -246,6 +246,29 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertFalse(CloudClient.chooseRelay([relay("https://a")]).none)
     }
 
+    func testAFailedRefreshForgetsTheNewAccountConfirmation() async throws {
+        // A new account was confirmed relayless; now the lookup fails. Nothing says it is still
+        // new, so the saved confirmation goes (as kotlin-sdk's `findRelay` clears its own).
+        let cb = wallet.approve(keys, state: nil)
+        rig.on(
+            "GET", "/api/cloud/accounts/\(cb.account)/challenge",
+            json: #"{"account_id":"\#(cb.account)","nonce":"n1","expires_at_ms":1800000000000}"#)
+        rig.on("GET", "/api/cloud/accounts/\(cb.account)/relays", status: 503, json: #"{"detail":"down"}"#)
+        let sessions = AnyValueStore<CloudSession>.memory(
+            CloudSession(account: cb.account, device: cb.device, credential: cb.credential, noRelayConfirmed: true))
+        let signIn = CloudSignIn(
+            config: CloudConfig(cloudBaseURL: cloud), keyStore: .memory(keys), sessionStore: sessions,
+            nonces: MemoryWarrantNonceStore(), urlSession: MockURLProtocol.makeSession())
+        XCTAssertTrue(sessions.load()?.isConfirmedRelayless ?? false)
+
+        do {
+            try await signIn.refreshRelay()
+            XCTFail("the lookup failed, so the refresh must throw")
+        } catch {}
+        XCTAssertNil(sessions.load()?.noRelayConfirmed)
+        XCTAssertEqual(sessions.load()?.isConfirmedRelayless, false)
+    }
+
     func testAnEmptyAccountIsOnlyOneTheCloudConfirmed() throws {
         let confirmed = CloudSession(account: rep("aa"), device: rep("bb"), credential: "cc", noRelayConfirmed: true)
         XCTAssertTrue(confirmed.isConfirmedRelayless)
