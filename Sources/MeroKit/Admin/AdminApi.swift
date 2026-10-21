@@ -831,7 +831,9 @@ public struct AdminApi: Sendable {
         return try await getGroupInfo(groupId).defaultCapabilities
     }
 
-    /// Thin wrapper over `getGroupInfo`: returns the group's `subgroupVisibility`.
+    /// Thin wrapper over `getGroupInfo`: returns the group's `subgroupVisibility`,
+    /// which says how it takes members. Whether it is private is
+    /// `GroupInfo.effectiveVisibility`.
     public func getSubgroupVisibility(_ groupId: String) async throws -> String {
         return try await getGroupInfo(groupId).subgroupVisibility
     }

@@ -2,6 +2,15 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: `GroupInfo.effectiveVisibility`
+
+- **`GroupInfo.effectiveVisibility`** (`"open"` / `"restricted"`) says who
+  outside a group can reach it. Draw privacy (a folder lock) from it, not from
+  `subgroupVisibility`: an Open folder inside a private one takes the private
+  folder's members and is closed to the rest of the namespace, yet its own
+  `subgroupVisibility` reads `"open"`. `nil` from a node that predates the
+  field (core#4640).
+
 ## Unreleased: the sample app on 0.2.0's error APIs
 
 - The sample's node sign-in words its errors from `LoginFailureReason`: a

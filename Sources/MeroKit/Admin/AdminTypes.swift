@@ -1359,7 +1359,18 @@ public struct GroupInfo: Codable, Sendable {
     public let contextCount: Int
     public let activeUpgrade: GroupUpgradeStatus?
     public let defaultCapabilities: Int
+    /// How the group takes members: `"open"` inherits the parent's,
+    /// `"restricted"` admits directly. Not whether the group is private; see
+    /// `effectiveVisibility`.
     public let subgroupVisibility: String
+    /// Who outside the group can reach it: `"restricted"` when this group or
+    /// any group above it, short of the namespace root, is Restricted; `"open"`
+    /// only on an Open chain to the namespace. Draw privacy (a lock) from this,
+    /// not from `subgroupVisibility`: an Open folder inside a private one is
+    /// `"open"` there and `"restricted"` here.
+    ///
+    /// Optional only because a node predating the field omits it.
+    public let effectiveVisibility: String?
     /// The group's generic metadata record (replaces the old `alias` field).
     /// `null` if no metadata has ever been set for this group.
     public let metadata: MetadataRecord?
@@ -1383,14 +1394,16 @@ public struct GroupInfo: Codable, Sendable {
         upgradePolicy: String? = nil, memberCount: Int, contextCount: Int,
         activeUpgrade: GroupUpgradeStatus? = nil,
         defaultCapabilities: Int, subgroupVisibility: String, metadata: MetadataRecord? = nil,
-        groupStateHash: String? = nil, namespaceId: String? = nil, ownerOpCounter: UInt64? = nil
+        groupStateHash: String? = nil, namespaceId: String? = nil, ownerOpCounter: UInt64? = nil,
+        effectiveVisibility: String? = nil
     ) {
         self.namespaceId = namespaceId; self.ownerOpCounter = ownerOpCounter
         self.groupId = groupId; self.appKey = appKey; self.targetApplicationId = targetApplicationId
         self.upgradePolicy = upgradePolicy
         self.memberCount = memberCount; self.contextCount = contextCount
         self.activeUpgrade = activeUpgrade; self.defaultCapabilities = defaultCapabilities
-        self.subgroupVisibility = subgroupVisibility; self.metadata = metadata
+        self.subgroupVisibility = subgroupVisibility; self.effectiveVisibility = effectiveVisibility
+        self.metadata = metadata
         self.groupStateHash = groupStateHash
     }
 }
