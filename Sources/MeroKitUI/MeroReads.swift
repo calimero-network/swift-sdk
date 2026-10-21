@@ -53,7 +53,7 @@ extension MeroClient {
             if let session = client.delegatedSession {
                 let env = client.delegatedEnvironment
                 return {
-                    await DelegatedAccounts.listDelegatedContexts(session, env: env)
+                    try await DelegatedAccounts.listDelegatedContexts(session, env: env)
                         .filter { applicationId == nil || $0.item.applicationId == applicationId }
                         .map { ApplicationContextRecord(contextId: $0.item.id, applicationId: $0.item.applicationId) }
                 }
@@ -186,7 +186,7 @@ extension MeroClient {
             if let session = client.delegatedSession {
                 let env = client.delegatedEnvironment
                 return {
-                    await DelegatedAccounts.listDelegatedNamespaces(session, env: env).map(\.item)
+                    try await DelegatedAccounts.listDelegatedNamespaces(session, env: env).map(\.item)
                         .filter { $0.targetApplicationId == applicationId }
                 }
             }

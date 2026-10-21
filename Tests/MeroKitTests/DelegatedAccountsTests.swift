@@ -315,18 +315,53 @@ final class DelegatedAccountsTests: XCTestCase {
             return CloudRig.stub(200, #"{"data":[\#(listed)]}"#)
         }
 
-        let contexts = await DelegatedAccounts.listDelegatedContexts(session, env: env)
+        let contexts = try await DelegatedAccounts.listDelegatedContexts(session, env: env)
         XCTAssertEqual(contexts.map(\.item.id), [DelegatedFixture.rep("c1"), DelegatedFixture.rep("c2")])
         XCTAssertEqual(contexts.map(\.relayUrl), [relay, other])
         XCTAssertEqual(
             DelegatedAccounts.relayForContext(session.account, contextId: DelegatedFixture.rep("c2"), store: env.store),
             other)
 
-        let namespaces = await DelegatedAccounts.listDelegatedNamespaces(session, env: env)
+        let namespaces = try await DelegatedAccounts.listDelegatedNamespaces(session, env: env)
         XCTAssertEqual(namespaces.count, 1, "once each, however many relays list it")
         XCTAssertEqual(namespaces.first?.relayUrl, relay)
         let recorded = env.store.relayMap(account: session.account).namespaces[DelegatedFixture.rep("0a")]
         XCTAssertEqual(recorded, other, "a known relay stays")
+    }
+
+    /// 2026-10-21 (mero-js#299): a dead relay whose key was pinned passed the
+    /// key check without the network, failed at the listing, and was skipped,
+    /// so the account read as empty. Every relay failing is an error now.
+    func testEveryRelayFailingThrowsInsteadOfListingAnEmptyAccount() async throws {
+        let env = DelegatedFixture.environment()
+        let session = DelegatedFixture.session()
+        env.store.pinRelayNodeKey(relayURL: relay, nodeKey: DelegatedFixture.nodeKey)
+        DelegatedFixture.serveLogin(rig)
+        rig.on("GET", "/admin-api/contexts") { _ in CloudRig.stub(502, #"{"error":"down"}"#) }
+        rig.on("GET", "/admin-api/namespaces") { _ in CloudRig.stub(502, #"{"error":"down"}"#) }
+
+        do {
+            _ = try await DelegatedAccounts.listDelegatedNamespaces(session, env: env)
+            XCTFail("expected RelaysUnavailableError")
+        } catch let error as RelaysUnavailableError {
+            XCTAssertEqual(error.failures.map(\.relayUrl), [relay])
+            XCTAssertEqual(error.failures.first?.kind, .unavailable)
+            XCTAssertFalse(error.refused)
+        }
+        do {
+            _ = try await DelegatedAccounts.listDelegatedContexts(session, env: env)
+            XCTFail("expected RelaysUnavailableError")
+        } catch is RelaysUnavailableError {}
+    }
+
+    func testARelayThatAnswersNothingIsAnEmptyAccount() async throws {
+        let env = DelegatedFixture.environment()
+        let session = DelegatedFixture.session()
+        env.store.pinRelayNodeKey(relayURL: relay, nodeKey: DelegatedFixture.nodeKey)
+        DelegatedFixture.serveLogin(rig)
+        rig.on("GET", "/admin-api/namespaces") { _ in CloudRig.stub(200, #"{"data":[]}"#) }
+        let namespaces = try await DelegatedAccounts.listDelegatedNamespaces(session, env: env)
+        XCTAssertTrue(namespaces.isEmpty)
     }
 
     private static func contexts(_ id: String) -> MockURLProtocol.Stub {

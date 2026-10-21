@@ -233,7 +233,7 @@ public final class JoinInvitation: ObservableObject {
         guard let client else { return [] }
         if await joinsAsAccount() {
             guard let session = await bootstrap.credential() else { return [] }
-            return await DelegatedAccounts.listDelegatedNamespaces(session, env: client.delegatedEnvironment)
+            return try await DelegatedAccounts.listDelegatedNamespaces(session, env: client.delegatedEnvironment)
                 .map(\.item.namespaceId)
         }
         guard let node = client.node else { return [] }

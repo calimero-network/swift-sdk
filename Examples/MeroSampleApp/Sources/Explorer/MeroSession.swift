@@ -119,7 +119,10 @@ final class MeroSession: ObservableObject {
         log(.info, "restoring Cloud session for \(stored.account.prefix(12))…")
         isLoading = true
         defer { isLoading = false }
-        adopt(await signIn.connect(stored))
+        // Re-ask the Cloud manager: the account may have gained a relay, or its relay moved
+        // (an HA rebuild replaces the VM and its hostname). A failed lookup keeps the stored one.
+        let session = (try? await signIn.refreshRelay()) ?? stored
+        adopt(await signIn.connect(session))
     }
 
     // MARK: - Cloud sign-in
