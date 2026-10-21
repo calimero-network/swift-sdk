@@ -189,6 +189,10 @@ final class ChatService: ObservableObject {
         return false
     }
 
+    /// Told when a join moved the account onto a relay, so the app's own view of
+    /// the connection follows it.
+    var onConnectionChanged: (@MainActor (CloudConnection) -> Void)?
+
     init(backend: Backend, username: String) {
         self.backend = backend
         self.username = username.isEmpty ? "dev" : username
@@ -231,13 +235,14 @@ final class ChatService: ObservableObject {
     // MARK: spaces
 
     /// List the spaces. A relay whose session could not be minted, or a
-    /// listing that failed, is `.failed` — never an empty list. An account no
-    /// relay serves yet is new: it is a member of nothing, so that is an empty
-    /// listing, not a failed one.
+    /// listing that failed, is `.failed` — never an empty list. An account the
+    /// cloud says no relay serves is new: it is a member of nothing, so that is
+    /// an empty listing, not a failed one. A relay lookup that failed, or relays
+    /// with no address yet, say nothing of the sort.
     func loadSpaces() async {
         spacesGeneration += 1
         let generation = spacesGeneration
-        if case .relay(let connection, _) = backend, connection.session.isRelayless {
+        if case .relay(let connection, _) = backend, connection.session.isConfirmedRelayless {
             spaces = []
             spacesLoad = .loaded
             spacesError = nil
@@ -501,10 +506,19 @@ final class ChatService: ObservableObject {
             return false
         }
         switch backend {
-        case .relay(_, let signIn):
+        case .relay(let connection, let signIn):
             do {
                 say("Joining \(invite.spaceName)…")
-                let (_, outcome) = try await signIn.join(namespaceId: invite.namespaceId, invitation: invite.invitation)
+                let (session, outcome) = try await signIn.join(
+                    namespaceId: invite.namespaceId, invitation: invite.invitation)
+                // A relayless account adopts the admitting relay: list and write through it from now
+                // on, not through the snapshot taken before the join (as the Kotlin sample's
+                // `joinWithInvitation` reconnects).
+                if session.relayUrl != connection.session.relayUrl {
+                    let moved = await signIn.connect(session)
+                    backend = .relay(moved, signIn)
+                    onConnectionChanged?(moved)
+                }
                 say(
                     outcome.published
                         ? "Joined \(invite.spaceName). Channels appear as the relay syncs."

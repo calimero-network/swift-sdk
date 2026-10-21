@@ -236,6 +236,29 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertNil(CloudClient.chooseRelay([]).relayUrl)
     }
 
+    func testChooseRelaySaysNoneOnlyWhenTheCloudListsNoRelayAtAll() {
+        // A new account is a member of nothing. Relays assigned without an address are not that.
+        func relay(_ url: String?) -> CloudAccountRelay {
+            CloudAccountRelay(peerId: "p", relayUrl: url, fresh: true, executorAccount: nil, assigned: false)
+        }
+        XCTAssertTrue(CloudClient.chooseRelay([]).none)
+        XCTAssertFalse(CloudClient.chooseRelay([relay(nil)]).none)
+        XCTAssertFalse(CloudClient.chooseRelay([relay("https://a")]).none)
+    }
+
+    func testAnEmptyAccountIsOnlyOneTheCloudConfirmed() throws {
+        let confirmed = CloudSession(account: rep("aa"), device: rep("bb"), credential: "cc", noRelayConfirmed: true)
+        XCTAssertTrue(confirmed.isConfirmedRelayless)
+        // A lookup that failed leaves it unconfirmed, though the session is relayless too.
+        let unknown = CloudSession(account: rep("aa"), device: rep("bb"), credential: "cc")
+        XCTAssertTrue(unknown.isRelayless)
+        XCTAssertFalse(unknown.isConfirmedRelayless)
+        // A session saved before the field existed still decodes, as unconfirmed.
+        let saved = #"{"account":"\#(rep("aa"))","device":"\#(rep("bb"))","credential":"cc"}"#
+        let decoded = try JSONDecoder().decode(CloudSession.self, from: Data(saved.utf8))
+        XCTAssertFalse(decoded.isConfirmedRelayless)
+    }
+
     func testNamespaceRoutingIsProvenWhenACredentialIsConfigured() async throws {
         let ns = rep("aa")
         rig.on("GET", "/api/cloud/namespaces/\(ns)/challenge", json: #"{"namespace_id":"\#(ns)","nonce":"n2"}"#)

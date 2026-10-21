@@ -78,6 +78,9 @@ public struct RelayChoice: Sendable, Equatable {
     public let executorAccount: String?
     /// A note to show the person, or `nil` when a fresh relay was found.
     public let note: String?
+    /// True only when the cloud listed no relay at all: a new account, a member
+    /// of nothing. Not when relays are assigned but have no address yet.
+    public var none: Bool = false
 }
 
 /// The Calimero Cloud manager (MDMA). Port of mero-js `CloudClient`.
@@ -212,7 +215,8 @@ public struct CloudClient: Sendable {
         return RelayChoice(
             relayUrl: nil, executorAccount: nil,
             note: "Signed in, with nowhere to write yet: a new account is a member of nothing. Redeeming an "
-                + "invitation admits this account to a namespace and gives it a relay.")
+                + "invitation admits this account to a namespace and gives it a relay.",
+            none: true)
     }
 
     // MARK: - Namespace routing

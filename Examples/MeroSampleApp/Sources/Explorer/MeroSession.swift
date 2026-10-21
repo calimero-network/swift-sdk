@@ -166,14 +166,21 @@ final class MeroSession: ObservableObject {
     }
 
     private func adopt(_ connection: CloudConnection) {
+        follow(connection)
+        let chat = ChatService(backend: .relay(connection, signIn), username: displayName)
+        chat.onConnectionChanged = { [weak self] moved in self?.follow(moved) }
+        self.chat = chat
+        isAuthenticated = true
+    }
+
+    /// Track a connection without replacing the chat that made it (a join moved the account).
+    private func follow(_ connection: CloudConnection) {
         self.connection = connection
         account = connection.session.account
         relayURL = connection.session.relayUrl
         note = connection.readNote ?? connection.session.note
         if let readNote = connection.readNote { log(.warn, readNote) }
         if connection.mero != nil { log(.ok, "relay session established") }
-        chat = ChatService(backend: .relay(connection, signIn), username: displayName)
-        isAuthenticated = true
     }
 
     /// Re-connect after the session changed (a join adopted a relay).
