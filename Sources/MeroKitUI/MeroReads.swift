@@ -117,7 +117,9 @@ extension MeroClient {
         return adminResource(initial: nil) { try await $0.getDefaultCapabilities(groupId) }
     }
 
-    /// (== mero-react `useSubgroupVisibility`.)
+    /// (== mero-react `useSubgroupVisibility`.) How the group takes members, not
+    /// whether it is private: draw a lock from `groupInfo(_:)`'s
+    /// `effectiveVisibility`.
     public func subgroupVisibility(_ groupId: String?) -> AsyncResource<String?> {
         guard let groupId else { return AsyncResource(initial: nil) }
         return adminResource(initial: nil) { try await $0.getSubgroupVisibility(groupId) }

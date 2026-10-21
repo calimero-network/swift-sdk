@@ -333,6 +333,42 @@ final class Rc83SurfaceTests: XCTestCase {
         XCTAssertNil(info.ownerOpCounter)
     }
 
+    /// Core's `groups/group_info.res.json` wire fixture verbatim, as of
+    /// core#4640 (no tagged release carries it yet). Move it into a
+    /// `Fixtures/rc*-` file with the next core bump.
+    private static let groupInfoWithEffectiveVisibility = #"""
+        {
+          "data": {
+            "appKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "contextCount": 2,
+            "defaultCapabilities": 0,
+            "effectiveVisibility": "restricted",
+            "groupId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "groupStateHash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "memberCount": 3,
+            "namespaceId": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "ownerOpCounter": 4,
+            "subgroupVisibility": "restricted",
+            "targetApplicationId": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        }
+        """#
+
+    /// An Open folder inside a private one reads `"open"` in
+    /// `subgroupVisibility`; `effectiveVisibility` is what says it is private.
+    func testGroupInfoCarriesEffectiveVisibility() async throws {
+        serve(Self.groupInfoWithEffectiveVisibility)
+        let info = try await admin.getGroupInfo("g-1")
+        XCTAssertEqual(info.effectiveVisibility, "restricted")
+    }
+
+    func testGroupInfoFromANodeBeforeEffectiveVisibilityHasNone() async throws {
+        serve(try Fixture.json("rc83-groups-group-info-res"))
+        let info = try await admin.getGroupInfo("g-1")
+        XCTAssertNil(info.effectiveVisibility)
+        XCTAssertEqual(info.subgroupVisibility, "restricted")
+    }
+
     func testNamespaceCarriesFoundingAndHeldOps() async throws {
         serve(try Fixture.json("rc83-namespaces-get-res"))
         let ns = try await admin.getNamespace("ns-1")
