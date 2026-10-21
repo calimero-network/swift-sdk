@@ -231,10 +231,18 @@ final class ChatService: ObservableObject {
     // MARK: spaces
 
     /// List the spaces. A relay whose session could not be minted, or a
-    /// listing that failed, is `.failed` — never an empty list.
+    /// listing that failed, is `.failed` — never an empty list. An account no
+    /// relay serves yet is new: it is a member of nothing, so that is an empty
+    /// listing, not a failed one.
     func loadSpaces() async {
         spacesGeneration += 1
         let generation = spacesGeneration
+        if case .relay(let connection, _) = backend, connection.session.isRelayless {
+            spaces = []
+            spacesLoad = .loaded
+            spacesError = nil
+            return
+        }
         guard let mero else {
             var note: String?
             if case .relay(let connection, _) = backend { note = connection.readNote }

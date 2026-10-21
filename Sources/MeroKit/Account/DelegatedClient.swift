@@ -278,7 +278,10 @@ public struct RelaysUnavailableError: Error, LocalizedError, Sendable {
 
     public var errorDescription: String? {
         "none of this account's relays answered: "
-            + failures.map { "\($0.relayUrl) (\($0.kind.rawValue): \(($0.error as? LocalizedError)?.errorDescription ?? "\($0.error)"))" }
+            + failures.map { failure in
+                let reason = (failure.error as? LocalizedError)?.errorDescription ?? "\(failure.error)"
+                return "\(failure.relayUrl) (\(failure.kind.rawValue): \(reason))"
+            }
             .joined(separator: "; ")
     }
 }
