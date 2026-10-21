@@ -27,12 +27,26 @@ private struct InProcessWallet: WebAuthenticating {
     }
 }
 
+/// The relay the stubbed Cloud manager names, changeable mid-test. `""` lists no
+/// relay at all (a new account); ``RelayAnswer/fail`` answers the lookup with a 503.
+private final class RelayAnswer: @unchecked Sendable {
+    static let fail = "FAIL"
+    private let lock = NSLock()
+    private var url = "https://relay.test"
+    var value: String {
+        get { lock.withLock { url } }
+        set { lock.withLock { url = newValue } }
+    }
+}
+
 @MainActor
 final class MeroClientCloudTests: XCTestCase {
     private let relay = "https://relay.test"
+    private let relayAnswer = RelayAnswer()
 
     override func setUp() {
         super.setUp()
+        let relayAnswer = self.relayAnswer
         MockURLProtocol.setHandler { req in
             let path = req.url?.path ?? ""
             func json(_ s: String) -> MockURLProtocol.Stub {
@@ -40,7 +54,12 @@ final class MeroClientCloudTests: XCTestCase {
             }
             if path.hasSuffix("/challenge"), path.hasPrefix("/api/cloud/") { return json(#"{"nonce":"n"}"#) }
             if path.hasSuffix("/relays") {
-                return json(#"{"relays":[{"peer_id":"p","relay_url":"https://relay.test","fresh":true}]}"#)
+                switch relayAnswer.value {
+                case RelayAnswer.fail: return .init(status: 503, headers: [:], body: Data())
+                case "": return json(#"{"relays":[]}"#)
+                default:
+                    return json(#"{"relays":[{"peer_id":"p","relay_url":"\#(relayAnswer.value)","fresh":true}]}"#)
+                }
             }
             if path == "/admin-api/tee/attest" {
                 let body = (try? JSONSerialization.jsonObject(with: FakeNode.body(req))) as? [String: Any]
@@ -129,5 +148,46 @@ final class MeroClientCloudTests: XCTestCase {
         XCTAssertTrue(restored)
         XCTAssertTrue(second.isAuthenticated)
         XCTAssertEqual(second.account, first.account)
+    }
+
+    /// 2026-10-21: an HA rebuild moved the account's relay to a new VM and the
+    /// persisted hostname stopped resolving. A restore asks the Cloud manager
+    /// again instead of reconnecting to the dead relay forever.
+    func testRestoreAsksTheCloudForTheRelayAgain() async {
+        let session = MockURLProtocol.makeSession()
+        let sessions = AnyValueStore<CloudSession>.memory()
+        let cloud = CloudSignIn(
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            keyStore: .memory(), sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
+        let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+        await first.signInWithCloud(callbackScheme: "mero-sample")
+        XCTAssertEqual(first.relayURL, relay)
+
+        relayAnswer.value = "https://relay2.test"
+        let second = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+        let restored = await second.restoreCloudSession()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(second.relayURL, "https://relay2.test")
+        XCTAssertEqual(sessions.load()?.relayUrl, "https://relay2.test", "the new relay is persisted")
+    }
+
+    /// A new account was confirmed relayless; on the next launch the lookup fails. The restored
+    /// connection must not still claim the account is new: nothing vouches for that any more.
+    func testARestoreWhoseLookupFailsDoesNotKeepTheNewAccountConfirmation() async {
+        relayAnswer.value = ""
+        let session = MockURLProtocol.makeSession()
+        let sessions = AnyValueStore<CloudSession>.memory()
+        let cloud = CloudSignIn(
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            keyStore: .memory(), sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
+        let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+        await first.signInWithCloud(callbackScheme: "mero-sample")
+        XCTAssertEqual(first.connection?.session.isConfirmedRelayless, true)
+
+        relayAnswer.value = RelayAnswer.fail
+        let second = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+        let restored = await second.restoreCloudSession()
+        XCTAssertTrue(restored)
+        XCTAssertEqual(second.connection?.session.isConfirmedRelayless, false)
     }
 }

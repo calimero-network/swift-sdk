@@ -124,6 +124,16 @@ struct ChatInvite: Codable {
     }
 }
 
+/// Where ``ChatService/spaces`` stands. Mirrors the Kotlin sample's `SpacesLoad`.
+enum SpacesLoad {
+    /// Not listed yet.
+    case pending
+    /// Listed: `spaces` is the answer, empty or not.
+    case loaded
+    /// The listing failed, or the relay session it needs could not be had.
+    case failed
+}
+
 // MARK: - ChatService
 
 /// A native mero-chat frontend: spaces (namespaces), channels
@@ -148,6 +158,10 @@ final class ChatService: ObservableObject {
 
     @Published var appId: String?
     @Published var spaces: [ChatSpace] = []
+    /// Where the spaces listing stands. Only `.loaded` with no spaces means
+    /// "no spaces yet": a listing that failed is not an empty one, and offering
+    /// to create a space then would make a duplicate of one that exists.
+    @Published private(set) var spacesLoad: SpacesLoad = .pending
     @Published var channels: [ChatChannel] = []
     @Published var messages: [ChatMessage] = []
     @Published var status = ""
@@ -157,6 +171,10 @@ final class ChatService: ObservableObject {
     @Published var username: String
 
     private var backend: Backend
+    /// Bumped by every `loadSpaces()`: only the newest one's answer is applied.
+    private var spacesGeneration = 0
+    /// The failure `loadSpaces()` last reported, cleared once a listing answers.
+    private var spacesError: String?
 
     /// The `Mero` admin calls use: the relay's Bearer session, or the node.
     private var mero: Mero? {
@@ -170,6 +188,10 @@ final class ChatService: ObservableObject {
         if case .relay = backend { return true }
         return false
     }
+
+    /// Told when a join moved the account onto a relay, so the app's own view of
+    /// the connection follows it.
+    var onConnectionChanged: (@MainActor (CloudConnection) -> Void)?
 
     init(backend: Backend, username: String) {
         self.backend = backend
@@ -212,17 +234,46 @@ final class ChatService: ObservableObject {
 
     // MARK: spaces
 
+    /// List the spaces. A relay whose session could not be minted, or a
+    /// listing that failed, is `.failed` — never an empty list. An account the
+    /// cloud says no relay serves is new: it is a member of nothing, so that is
+    /// an empty listing, not a failed one. A relay lookup that failed, or relays
+    /// with no address yet, say nothing of the sort.
     func loadSpaces() async {
+        spacesGeneration += 1
+        let generation = spacesGeneration
+        if case .relay(let connection, _) = backend, connection.session.isConfirmedRelayless {
+            spaces = []
+            spacesLoad = .loaded
+            spacesError = nil
+            return
+        }
         guard let mero else {
-            say("Reads are off until the relay session is established. Writes still work.", error: true)
+            var note: String?
+            if case .relay(let connection, _) = backend { note = connection.readNote }
+            failSpaces(note ?? "Reads are off until the relay session is established. Writes still work.")
             return
         }
         do {
             let all = try await mero.admin.listNamespaces()
+            guard generation == spacesGeneration else { return }
             spaces = all.map {
                 ChatSpace(id: $0.namespaceId, name: $0.name ?? "Space", applicationId: $0.targetApplicationId)
             }
-        } catch { say("Couldn't load spaces: \(short(error))", error: true) }
+            spacesLoad = .loaded
+            if let spacesError, status == spacesError { say("") }
+            spacesError = nil
+        } catch {
+            guard generation == spacesGeneration else { return }
+            // The spaces already shown stay; the failure is reported, not read as "none".
+            failSpaces("Couldn't load spaces: \(short(error))")
+        }
+    }
+
+    private func failSpaces(_ message: String) {
+        spacesLoad = .failed
+        spacesError = message
+        say(message, error: true)
     }
 
     /// A node creates spaces; a Cloud account founds them through its relay.
@@ -232,6 +283,9 @@ final class ChatService: ObservableObject {
         case .node: return true
         }
     }
+
+    /// Offer "New space" only once the listing answered, so a failed one can't lead to a duplicate.
+    var offerNewSpace: Bool { canCreateSpaces && spacesLoad == .loaded }
 
     func createSpace(_ name: String) async {
         switch backend {
@@ -452,10 +506,19 @@ final class ChatService: ObservableObject {
             return false
         }
         switch backend {
-        case .relay(_, let signIn):
+        case .relay(let connection, let signIn):
             do {
                 say("Joining \(invite.spaceName)…")
-                let (_, outcome) = try await signIn.join(namespaceId: invite.namespaceId, invitation: invite.invitation)
+                let (session, outcome) = try await signIn.join(
+                    namespaceId: invite.namespaceId, invitation: invite.invitation)
+                // A relayless account adopts the admitting relay: list and write through it from now
+                // on, not through the snapshot taken before the join (as the Kotlin sample's
+                // `joinWithInvitation` reconnects).
+                if session.relayUrl != connection.session.relayUrl {
+                    let moved = await signIn.connect(session)
+                    backend = .relay(moved, signIn)
+                    onConnectionChanged?(moved)
+                }
                 say(
                     outcome.published
                         ? "Joined \(invite.spaceName). Channels appear as the relay syncs."

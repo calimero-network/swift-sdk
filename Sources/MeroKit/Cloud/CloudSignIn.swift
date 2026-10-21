@@ -55,10 +55,14 @@ public struct CloudSession: Codable, Sendable, Equatable {
     public var executorAccount: String?
     /// Something worth showing about how the relay was chosen.
     public var note: String?
+    /// The last relay lookup ANSWERED that no relay serves the account
+    /// (``RelayChoice/none``). `nil` before a lookup, after one that failed, and
+    /// once a relay is known. Optional so sessions saved before it still decode.
+    public var noRelayConfirmed: Bool?
 
     public init(
         account: String, device: String, credential: String, relayUrl: String? = nil, executorAccount: String? = nil,
-        note: String? = nil
+        note: String? = nil, noRelayConfirmed: Bool? = nil
     ) {
         self.account = account
         self.device = device
@@ -66,10 +70,17 @@ public struct CloudSession: Codable, Sendable, Equatable {
         self.relayUrl = relayUrl
         self.executorAccount = executorAccount
         self.note = note
+        self.noRelayConfirmed = noRelayConfirmed
     }
 
     /// Signed in, but with no relay to talk through yet.
     public var isRelayless: Bool { relayUrl == nil }
+
+    /// Relayless because the cloud said no relay serves the account: it is new,
+    /// a member of nothing. Unlike ``isRelayless``, false when the lookup failed
+    /// or the assigned relays have no address yet, so an app can show an empty
+    /// account only when it is one.
+    public var isConfirmedRelayless: Bool { relayUrl == nil && noRelayConfirmed == true }
 }
 
 /// A live connection to the account's relay.
@@ -233,6 +244,7 @@ public actor CloudSignIn {
             session.relayUrl = choice.relayUrl
             session.executorAccount = choice.executorAccount
             session.note = choice.note
+            session.noRelayConfirmed = choice.none ? true : nil
         } catch {
             session.note =
                 "Signed in, but the Cloud manager could not be asked for a relay: "
@@ -246,12 +258,24 @@ public actor CloudSignIn {
     @discardableResult
     public func refreshRelay() async throws -> CloudSession {
         guard var session = sessionStore.load() else { throw AccountError.notSignedIn("not signed in") }
-        let relays = try await cloudClient(keys: deviceKeys(), credential: session.credential)
-            .getAccountRelays(session.account)
+        let relays: [CloudAccountRelay]
+        do {
+            relays = try await cloudClient(keys: deviceKeys(), credential: session.credential)
+                .getAccountRelays(session.account)
+        } catch {
+            // A failed lookup says nothing about whether the account is still new: forget the
+            // last answer's confirmation, as kotlin-sdk's `findRelay` does.
+            if session.noRelayConfirmed != nil {
+                session.noRelayConfirmed = nil
+                sessionStore.save(session)
+            }
+            throw error
+        }
         let choice = CloudClient.chooseRelay(relays)
         session.relayUrl = choice.relayUrl ?? session.relayUrl
         session.executorAccount = choice.executorAccount ?? session.executorAccount
         session.note = choice.note
+        session.noRelayConfirmed = choice.none && session.relayUrl == nil ? true : nil
         sessionStore.save(session)
         return session
     }
@@ -296,6 +320,7 @@ public actor CloudSignIn {
         if session.relayUrl == nil {
             session.relayUrl = outcome.relayUrl
             session.note = nil
+            session.noRelayConfirmed = nil
             sessionStore.save(session)
         }
         return (session, outcome)

@@ -286,12 +286,25 @@ public final class MeroClient: ObservableObject {
 
     /// Reconnect the Cloud session from a previous launch, if any. Returns
     /// whether one was restored.
+    ///
+    /// The Cloud manager is asked again which relay serves the account
+    /// (``CloudSignIn/refreshRelay()``): it may have gained one since, or its
+    /// relay moved — an HA rebuild replaces the VM, and the persisted hostname
+    /// stops resolving. A lookup that fails keeps the persisted relay, read back
+    /// from the store: the failed refresh wrote there what it can no longer vouch
+    /// for (a new-account confirmation).
     @discardableResult
     public func restoreCloudSession() async -> Bool {
         guard let stored = await cloud.restoreSession() else { return false }
         isLoading = true
         defer { isLoading = false }
-        await adopt(await cloud.connect(stored))
+        let session: CloudSession
+        if let refreshed = try? await cloud.refreshRelay() {
+            session = refreshed
+        } else {
+            session = await cloud.restoreSession() ?? stored
+        }
+        await adopt(await cloud.connect(session))
         return true
     }
 
@@ -427,7 +440,8 @@ public final class MeroClient: ObservableObject {
                 return
             }
         }
-        let contexts = await DelegatedAccounts.listDelegatedContexts(session, env: env)
+        // Every relay down leaves the id unknown, as an empty listing would.
+        let contexts = (try? await DelegatedAccounts.listDelegatedContexts(session, env: env)) ?? []
         if Task.isCancelled { return }
         let apps = Set(contexts.map(\.item.applicationId).filter { !$0.isEmpty })
         if apps.count == 1 { applicationId = apps.first }

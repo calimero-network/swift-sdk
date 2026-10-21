@@ -119,7 +119,16 @@ final class MeroSession: ObservableObject {
         log(.info, "restoring Cloud session for \(stored.account.prefix(12))…")
         isLoading = true
         defer { isLoading = false }
-        adopt(await signIn.connect(stored))
+        // Re-ask the Cloud manager: the account may have gained a relay, or its relay moved
+        // (an HA rebuild replaces the VM and its hostname). A failed lookup keeps the stored relay,
+        // read back after the refresh: it forgets a new-account confirmation it can't vouch for.
+        let session: CloudSession
+        if let refreshed = try? await signIn.refreshRelay() {
+            session = refreshed
+        } else {
+            session = await signIn.restoreSession() ?? stored
+        }
+        adopt(await signIn.connect(session))
     }
 
     // MARK: - Cloud sign-in
@@ -163,14 +172,21 @@ final class MeroSession: ObservableObject {
     }
 
     private func adopt(_ connection: CloudConnection) {
+        follow(connection)
+        let chat = ChatService(backend: .relay(connection, signIn), username: displayName)
+        chat.onConnectionChanged = { [weak self] moved in self?.follow(moved) }
+        self.chat = chat
+        isAuthenticated = true
+    }
+
+    /// Track a connection without replacing the chat that made it (a join moved the account).
+    private func follow(_ connection: CloudConnection) {
         self.connection = connection
         account = connection.session.account
         relayURL = connection.session.relayUrl
         note = connection.readNote ?? connection.session.note
         if let readNote = connection.readNote { log(.warn, readNote) }
         if connection.mero != nil { log(.ok, "relay session established") }
-        chat = ChatService(backend: .relay(connection, signIn), username: displayName)
-        isAuthenticated = true
     }
 
     /// Re-connect after the session changed (a join adopted a relay).

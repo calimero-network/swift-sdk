@@ -236,6 +236,52 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertNil(CloudClient.chooseRelay([]).relayUrl)
     }
 
+    func testChooseRelaySaysNoneOnlyWhenTheCloudListsNoRelayAtAll() {
+        // A new account is a member of nothing. Relays assigned without an address are not that.
+        func relay(_ url: String?) -> CloudAccountRelay {
+            CloudAccountRelay(peerId: "p", relayUrl: url, fresh: true, executorAccount: nil, assigned: false)
+        }
+        XCTAssertTrue(CloudClient.chooseRelay([]).none)
+        XCTAssertFalse(CloudClient.chooseRelay([relay(nil)]).none)
+        XCTAssertFalse(CloudClient.chooseRelay([relay("https://a")]).none)
+    }
+
+    func testAFailedRefreshForgetsTheNewAccountConfirmation() async throws {
+        // A new account was confirmed relayless; now the lookup fails. Nothing says it is still
+        // new, so the saved confirmation goes (as kotlin-sdk's `findRelay` clears its own).
+        let cb = wallet.approve(keys, state: nil)
+        rig.on(
+            "GET", "/api/cloud/accounts/\(cb.account)/challenge",
+            json: #"{"account_id":"\#(cb.account)","nonce":"n1","expires_at_ms":1800000000000}"#)
+        rig.on("GET", "/api/cloud/accounts/\(cb.account)/relays", status: 503, json: #"{"detail":"down"}"#)
+        let sessions = AnyValueStore<CloudSession>.memory(
+            CloudSession(account: cb.account, device: cb.device, credential: cb.credential, noRelayConfirmed: true))
+        let signIn = CloudSignIn(
+            config: CloudConfig(cloudBaseURL: cloud), keyStore: .memory(keys), sessionStore: sessions,
+            nonces: MemoryWarrantNonceStore(), urlSession: MockURLProtocol.makeSession())
+        XCTAssertTrue(sessions.load()?.isConfirmedRelayless ?? false)
+
+        do {
+            try await signIn.refreshRelay()
+            XCTFail("the lookup failed, so the refresh must throw")
+        } catch {}
+        XCTAssertNil(sessions.load()?.noRelayConfirmed)
+        XCTAssertEqual(sessions.load()?.isConfirmedRelayless, false)
+    }
+
+    func testAnEmptyAccountIsOnlyOneTheCloudConfirmed() throws {
+        let confirmed = CloudSession(account: rep("aa"), device: rep("bb"), credential: "cc", noRelayConfirmed: true)
+        XCTAssertTrue(confirmed.isConfirmedRelayless)
+        // A lookup that failed leaves it unconfirmed, though the session is relayless too.
+        let unknown = CloudSession(account: rep("aa"), device: rep("bb"), credential: "cc")
+        XCTAssertTrue(unknown.isRelayless)
+        XCTAssertFalse(unknown.isConfirmedRelayless)
+        // A session saved before the field existed still decodes, as unconfirmed.
+        let saved = #"{"account":"\#(rep("aa"))","device":"\#(rep("bb"))","credential":"cc"}"#
+        let decoded = try JSONDecoder().decode(CloudSession.self, from: Data(saved.utf8))
+        XCTAssertFalse(decoded.isConfirmedRelayless)
+    }
+
     func testNamespaceRoutingIsProvenWhenACredentialIsConfigured() async throws {
         let ns = rep("aa")
         rig.on("GET", "/api/cloud/namespaces/\(ns)/challenge", json: #"{"namespace_id":"\#(ns)","nonce":"n2"}"#)

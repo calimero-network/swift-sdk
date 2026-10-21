@@ -27,7 +27,7 @@ struct ChatHomeView: View {
                 if service.appId != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            if service.canCreateSpaces {
+                            if service.offerNewSpace {
                                 Button {
                                     showNewSpace = true
                                 } label: {
@@ -151,7 +151,24 @@ struct ChatHomeView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 statusLine
-                if service.spaces.isEmpty {
+                if service.spaces.isEmpty, service.spacesLoad == .pending {
+                    EmptyState(
+                        icon: "bubble.left.and.bubble.right", title: "Loading spaces…",
+                        message: "Waiting for your session to connect.")
+                } else if service.spaces.isEmpty, service.spacesLoad == .failed {
+                    // A failed listing is not an empty one: no "create" here, only a retry.
+                    EmptyState(
+                        icon: "bubble.left.and.bubble.right", title: "Couldn't load your spaces",
+                        message: "Your spaces may still be there. Try again once the connection is back.")
+                    Button {
+                        Task { await service.loadSpaces() }
+                    } label: {
+                        Label("Try again", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(CalSecondaryButtonStyle())
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("chatRetrySpaces")
+                } else if service.spaces.isEmpty {
                     EmptyState(
                         icon: "bubble.left.and.bubble.right", title: "No spaces yet",
                         message: service.canCreateSpaces

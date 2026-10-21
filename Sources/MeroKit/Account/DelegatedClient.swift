@@ -171,21 +171,30 @@ extension DelegatedAccounts {
     /// relay that listed it — and that relay recorded as the one serving it.
     /// Each relay answers only for itself and this caller, so the union is
     /// exactly the account's contexts; a relay that cannot be reached or
-    /// logged in to is skipped. (== mero-js `listDelegatedContexts`.)
+    /// logged in to is skipped. When **every** relay failed it throws
+    /// ``RelaysUnavailableError`` rather than answering an empty account.
+    /// (== mero-js `listDelegatedContexts`.)
     public static func listDelegatedContexts(
         _ session: DelegatedSession, env: DelegatedEnvironment = DelegatedEnvironment()
-    ) async -> [DelegatedListing<ContextWithGroup>] {
+    ) async throws -> [DelegatedListing<ContextWithGroup>] {
         var out: [DelegatedListing<ContextWithGroup>] = []
         var map = env.store.relayMap(account: session.account)
-        for relayUrl in knownRelays(session, store: env.store) {
-            guard let admin = await listingAdmin(session, relayUrl: relayUrl, env: env),
-                let contexts = try? await admin.getContexts().contexts
-            else { continue }
+        let relays = knownRelays(session, store: env.store)
+        var failures: [RelayListingFailure] = []
+        for relayUrl in relays {
+            let contexts: [ContextWithGroup]
+            switch await listing(session, relayUrl: relayUrl, env: env, { try await $0.getContexts().contexts }) {
+            case .success(let listed): contexts = listed
+            case .failure(let failure):
+                failures.append(failure)
+                continue
+            }
             for context in contexts {
                 out.append(DelegatedListing(item: context, relayUrl: relayUrl))
                 map.contexts[context.id] = relayUrl
             }
         }
+        if !relays.isEmpty, failures.count == relays.count { throw RelaysUnavailableError(failures: failures) }
         env.store.setRelayMap(map, account: session.account)
         return out
     }
@@ -195,31 +204,85 @@ extension DelegatedAccounts {
     /// one was already known. (== mero-js `listDelegatedNamespaces`.)
     public static func listDelegatedNamespaces(
         _ session: DelegatedSession, env: DelegatedEnvironment = DelegatedEnvironment()
-    ) async -> [DelegatedListing<Namespace>] {
+    ) async throws -> [DelegatedListing<Namespace>] {
         var out: [DelegatedListing<Namespace>] = []
         var seen = Set<String>()
         var map = env.store.relayMap(account: session.account)
-        for relayUrl in knownRelays(session, store: env.store) {
-            guard let admin = await listingAdmin(session, relayUrl: relayUrl, env: env),
-                let namespaces = try? await admin.listNamespaces()
-            else { continue }
+        let relays = knownRelays(session, store: env.store)
+        var failures: [RelayListingFailure] = []
+        for relayUrl in relays {
+            let namespaces: [Namespace]
+            switch await listing(session, relayUrl: relayUrl, env: env, { try await $0.listNamespaces() }) {
+            case .success(let listed): namespaces = listed
+            case .failure(let failure):
+                failures.append(failure)
+                continue
+            }
             for namespace in namespaces where seen.insert(namespace.namespaceId).inserted {
                 out.append(DelegatedListing(item: namespace, relayUrl: relayUrl))
                 if map.namespaces[namespace.namespaceId] == nil { map.namespaces[namespace.namespaceId] = relayUrl }
             }
         }
+        if !relays.isEmpty, failures.count == relays.count { throw RelaysUnavailableError(failures: failures) }
         env.store.setRelayMap(map, account: session.account)
         return out
     }
 
-    /// The account's admin on `relayUrl`, once its node key is known.
-    private static func listingAdmin(
-        _ session: DelegatedSession, relayUrl: String, env: DelegatedEnvironment
-    ) async -> AdminApi? {
-        guard await resolveRelayNodeKey(relayUrl, env: env) != nil,
-            let client = try? buildDelegatedClient(session.on(relay: relayUrl), env: env)
-        else { return nil }
-        return try? await client.admin
+    /// One relay's answer to `read` on the account's admin there, or why it
+    /// gave none: its key refused or unavailable, or the read itself failed.
+    private static func listing<Item: Sendable>(
+        _ session: DelegatedSession, relayUrl: String, env: DelegatedEnvironment,
+        _ read: (AdminApi) async throws -> [Item]
+    ) async -> Result<[Item], RelayListingFailure> {
+        switch await attemptRelayNodeKey(relayUrl, env: env) {
+        case .learned: break
+        case .refused(let error): return .failure(RelayListingFailure(relayUrl: relayUrl, kind: .refused, error: error))
+        case .unavailable(let error):
+            return .failure(RelayListingFailure(relayUrl: relayUrl, kind: .unavailable, error: error))
+        }
+        do {
+            guard let client = try buildDelegatedClient(session.on(relay: relayUrl), env: env) else {
+                throw AccountError.notSignedIn("no relay")
+            }
+            return .success(try await read(try await client.admin))
+        } catch {
+            return .failure(RelayListingFailure(relayUrl: relayUrl, kind: .unavailable, error: error))
+        }
+    }
+}
+
+/// One relay a delegated listing could not read. (== mero-js `RelayListingFailure`.)
+public struct RelayListingFailure: Error, Sendable {
+    public enum Kind: String, Sendable {
+        /// The relay's attestation did not hold: asking again will not help.
+        case refused
+        /// The relay, its login or its listing did not answer.
+        case unavailable
+    }
+
+    public let relayUrl: String
+    public let kind: Kind
+    public let error: any Error
+}
+
+/// Every relay the account knows failed to list. Thrown by
+/// ``DelegatedAccounts/listDelegatedContexts(_:env:)`` and
+/// ``DelegatedAccounts/listDelegatedNamespaces(_:env:)`` instead of an empty
+/// list, which an app would read as an account with nothing in it — and offer
+/// to create what already exists. (== mero-js `RelaysUnavailableError`.)
+public struct RelaysUnavailableError: Error, LocalizedError, Sendable {
+    public let failures: [RelayListingFailure]
+
+    /// True when every relay refused its attestation, so retrying will not help.
+    public var refused: Bool { !failures.isEmpty && failures.allSatisfy { $0.kind == .refused } }
+
+    public var errorDescription: String? {
+        "none of this account's relays answered: "
+            + failures.map { failure in
+                let reason = (failure.error as? LocalizedError)?.errorDescription ?? "\(failure.error)"
+                return "\(failure.relayUrl) (\(failure.kind.rawValue): \(reason))"
+            }
+            .joined(separator: "; ")
     }
 }
 
