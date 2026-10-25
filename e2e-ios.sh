@@ -85,7 +85,7 @@ xcodebuild test \
   -destination "platform=iOS Simulator,id=$UDID" \
   -only-testing:MeroSampleAppUITests/AppE2ETests \
   -retry-tests-on-failure -test-iterations 2 2>&1 | tee "$REPO_ROOT/.e2e-ios.log" \
-  | grep -iE "Test Case .* (passed|failed|skipped)|\*\* TEST|error:|Assertion Failure|XCTAssert.* failed"
+  | grep --line-buffered -iE "Test Case .* (passed|failed|skipped)|\*\* TEST|error:|Assertion Failure|XCTAssert.* failed"
 code=${PIPESTATUS[0]}
 
 # A skip is a pass to xcodebuild, so print what was skipped and why. Otherwise a

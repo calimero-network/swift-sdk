@@ -85,7 +85,8 @@ jobs:
         run: ./e2e-ios.sh
 
       # The Run all report (PASS / FAIL / SKIP per method and contract case),
-      # on the run's summary page.
+      # on the run's summary page and in the job log, and the end of the
+      # xcodebuild log, which shows where a run that timed out was stuck.
       - name: Run all report
         if: always()
         run: |
@@ -95,7 +96,10 @@ jobs:
               echo '```'
               sed -n '/RUN-ALL-REPORT-BEGIN/,/RUN-ALL-REPORT-END/p' .e2e-ios.log | grep -v 'RUN-ALL-REPORT' | head -400
               echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '::group::Last 150 lines of .e2e-ios.log'
+            tail -150 .e2e-ios.log
+            echo '::endgroup::'
           fi
 
       - name: Upload logs
