@@ -137,7 +137,7 @@ run_role() {  # <udid> <TestMethod> <label>
   xcodebuild test -project "$PROJECT" -scheme MeroSampleApp \
     -destination "platform=iOS Simulator,id=$1" \
     -only-testing:"MeroSampleAppUITests/ChatMultiUserTests/$2" 2>&1 \
-    | tee "$REPO_ROOT/.mero-role-$2.log" | grep -iE "Test Case .* (passed|failed)|\*\* TEST"
+    | tee "$REPO_ROOT/.mero-role-$2.log" | grep --line-buffered -iE "Test Case .* (passed|failed)|\*\* TEST"
   return ${PIPESTATUS[0]}
 }
 
