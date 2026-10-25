@@ -597,7 +597,7 @@ final class CloudSignInTests: XCTestCase {
             namespaceId: ns, member: cb.account, invitation: invitation(), credential: cb.credential, keys: keys,
             nonce: 5, joinedAt: 1_700_000_000)
         let bytes = try Hex.decodeUnsized(op, label: "op")
-        XCTAssertEqual(bytes.first, 26, "schema 26: a node on core rc.90+ refuses 25")
+        XCTAssertEqual(bytes.first, 27, "schema 27: a node on core 0.11.0 refuses 26")
         XCTAssertEqual(Hex.encode(bytes.dropFirst(1).prefix(32)), ns)
         XCTAssertEqual(Hex.encode(bytes.dropFirst(33).prefix(4)), "00000000", "no parents")
         XCTAssertEqual(Hex.encode(bytes.dropFirst(37).prefix(32)), keys.signPublicKey)
@@ -738,6 +738,6 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertEqual(session.relayUrl, relay)
         let admit = try XCTUnwrap(rig.requests("POST", "/admin-api/namespaces/\(ns)/admit").first?.json)
         XCTAssertNotNil(admit["invitation"]?["invitation"])
-        XCTAssertEqual(admit["signedOp"]?.stringValue?.prefix(2), "1a")
+        XCTAssertEqual(admit["signedOp"]?.stringValue?.prefix(2), "1b")
     }
 }
