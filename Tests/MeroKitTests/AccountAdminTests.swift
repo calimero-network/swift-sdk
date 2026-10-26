@@ -83,6 +83,7 @@ final class AccountAdminRecorder: @unchecked Sendable {
 /// Port of mero-js `account/account-admin.test.ts` and `node-admin.test.ts`.
 final class AccountAdminTests: XCTestCase {
     static let ns = DelegatedFixture.rep("01")
+    static let revoke = SetOutboundApprovalRequest(applicationId: "a", approve: .prefixes([]))
     static let sub = DelegatedFixture.rep("02")
     static let ctx = DelegatedFixture.rep("03")
     private let other = DelegatedFixture.rep("04")
@@ -455,10 +456,7 @@ final class AccountAdminTests: XCTestCase {
             ("listContextAliases", { _ = try await admin.listContextAliases() }),
             ("listDeviceAliases", { _ = try await admin.listDeviceAliases() }),
             ("deleteNamespace", { _ = try await admin.deleteNamespace(Self.ns) }),
-            ("setOutboundApproval", {
-                _ = try await admin.setOutboundApproval(
-                    Self.ns, request: SetOutboundApprovalRequest(applicationId: "a", approve: .prefixes([])))
-            }),
+            ("setOutboundApproval", { _ = try await admin.setOutboundApproval(Self.ns, request: Self.revoke) }),
             ("createGroupInvitation", { _ = try await admin.createGroupInvitation(Self.sub) }),
             ("getTeeAdmissionPolicy", { _ = try await admin.getTeeAdmissionPolicy(Self.ns) }),
             ("deleteBlob", { _ = try await admin.deleteBlob("b") }),
