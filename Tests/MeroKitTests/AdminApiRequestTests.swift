@@ -103,6 +103,8 @@ struct CapturedRequest: Sendable {
     let body: Data?
     /// The `Authorization` header, when a test records it.
     var authorization: String?
+    /// The path as sent, still percent-encoded, when a test records it.
+    var rawPath: String?
 
     var jsonBody: [String: Any]? {
         guard let body, let obj = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else { return nil }
@@ -126,7 +128,8 @@ final class RequestRecorder: @unchecked Sendable {
                 method: req.httpMethod ?? "GET",
                 path: req.url?.path ?? "",
                 query: req.url?.query,
-                body: FakeNode.body(req)
+                body: FakeNode.body(req),
+                rawPath: req.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
             )
             self?.record(captured)
             // Benign envelope; individual methods may fail to decode it — that's fine,

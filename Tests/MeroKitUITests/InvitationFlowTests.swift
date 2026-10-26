@@ -253,12 +253,14 @@ final class InviteRedemptionTests: XCTestCase {
     }
 
     func testAlreadyMemberWhenTheRequestFailedButTheJoinLanded() async {
-        open("NS:ns1")
+        // A real namespace id: the redeemer refuses anything else before it joins.
+        let ns = String(repeating: "ab", count: 32)
+        open("NS:\(ns)")
         let redeemer = InviteRedeemer(
-            join: { _, _ in throw MeroError.network("proxy timed out") }, memberships: { ["ns1"] })
+            join: { _, _ in throw MeroError.network("proxy timed out") }, memberships: { [ns] })
         let model = InviteRedemption(
             parse: invitationFlowParse, redeemer: redeemer, confirm: false, capture: capture, justJoined: justJoined)
-        let done = await appLayerEventually { model.state == .alreadyMember(namespaceId: "ns1", teamName: nil) }
+        let done = await appLayerEventually { model.state == .alreadyMember(namespaceId: ns, teamName: nil) }
         XCTAssertTrue(done)
     }
 

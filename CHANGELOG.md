@@ -2,6 +2,20 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: ids are one path segment (SEC-02)
+
+- **Every id `AdminApi` puts in a path is percent-encoded** (`contextId`,
+  `namespaceId`, `groupId`, `applicationId`, `blobId`, identities, device ids,
+  alias and package names). A `/`, `?` or `#` in one can no longer reach
+  another route: `joinNamespace("abc/leave?x=")` posts to
+  `/admin-api/namespaces/abc%2Fleave%3Fx%3D/join`, which the node refuses. An
+  empty, `.` or `..` id throws `AccountError.invalidInput` before anything is
+  sent. Real ids (hex or base58) are sent unchanged.
+- **`redeemInvitation` refuses an invite whose `namespaceId` is not 64
+  lowercase hex** with `.failed(namespaceId: nil, reason: .invalid,
+  retryable: false)`, and sends nothing. The id comes from the invite, so a
+  crafted one could otherwise retarget the user's authenticated join.
+
 ## Unreleased: core 0.11.0, namespace ops signed at schema 27
 
 - **`NamespaceOps.schemaVersion` is 27**, core 0.11.0's
