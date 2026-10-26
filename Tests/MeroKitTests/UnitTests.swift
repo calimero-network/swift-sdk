@@ -74,7 +74,7 @@ final class JSONValueTests: XCTestCase {
 final class SsoLoginTests: XCTestCase {
     func testParseAuthCallbackExtractsAllFields() {
         let url =
-            "myapp://auth-callback#access_token=AAA&refresh_token=RRR&application_id=app1&context_id=ctx1&context_identity=id1&node_url=https%3A%2F%2Fnode.example"
+            "https://app.example/auth-callback#access_token=AAA&refresh_token=RRR&application_id=app1&context_id=ctx1&context_identity=id1&node_url=https%3A%2F%2Fnode.example"
         // A host-injected callback: no login state to match, so opt in.
         let result = SsoLogin.parseAuthCallback(url, options: ParseAuthCallbackOptions(allowUnsolicited: true))
         XCTAssertEqual(result?.accessToken, "AAA")

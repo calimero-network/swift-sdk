@@ -335,6 +335,11 @@ public struct NodeLoginPanel: View {
                 if let error = model.error {
                     Text(error).font(.footnote).foregroundColor(theme.error)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.isInsecure {
+                    Label(MeroClient.insecureNodeURLMessage, systemImage: "lock.open")
+                        .font(.footnote).foregroundColor(theme.error)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("nodeInsecureWarning")
                 }
             }
 

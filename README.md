@@ -168,11 +168,17 @@ let loginURL = Mero.buildAuthLoginUrl(
 )
 // … present loginURL via ASWebAuthenticationSession …
 
-// On the callback URL:
-if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
+// On the URL the auth session hands back:
+if let callback = Mero.parseAuthCallback(
+    callbackURL.absoluteString, options: ParseAuthCallbackOptions(allowCustomScheme: true)) {
     await mero.setTokenData(from: callback)
 }
 ```
+
+A callback that is not `https` is refused unless `allowCustomScheme: true`:
+any app can claim `myapp://`. Pass it only for the URL
+`ASWebAuthenticationSession` returns; a link that reaches `onOpenURL` should
+be an `https` Universal Link.
 
 `parseAuthCallback` accepts only a callback for a login `buildAuthLoginUrl`
 began (a single-use `auth_state` in the callback URL, alive 10 minutes); tokens

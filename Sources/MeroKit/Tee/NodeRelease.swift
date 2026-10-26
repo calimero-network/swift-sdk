@@ -213,9 +213,11 @@ func readNodeReleaseVersion(_ baseURL: String, session: URLSession) async throws
 
 /// Where the cloud at `cloudURL` (e.g. ``TeeTrust/defaultReleaseMirror``)
 /// mirrors node release `version`. (== mero-js `cloudNodeReleaseUrl`.)
+/// Plain http is refused for anything but loopback (``TransportSecurity``).
 public func cloudNodeReleaseUrl(_ cloudURL: String, version: String) throws -> String {
     var base = cloudURL
     while base.hasSuffix("/") { base.removeLast() }
+    if let url = URL(string: base) { try TransportSecurity.checkServiceURL(url, role: "release mirror") }
     return "\(base)/api/tee/node-releases/\(try ReleaseVersion.checked(version, "version"))"
 }
 

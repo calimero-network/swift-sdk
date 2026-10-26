@@ -75,6 +75,7 @@ public enum DeviceEnrolment {
         ]
         if let state, !state.isEmpty { params.append(("state", state)) }
 
+        try TransportSecurity.checkServiceURL(walletURL, role: "wallet")
         guard var components = URLComponents(url: walletURL, resolvingAgainstBaseURL: false) else {
             throw AccountError.invalidInput("walletURL is not a URL: \(walletURL)")
         }

@@ -108,9 +108,10 @@ let attested = try await attestRelayNodeKey(
   AttestRelayNodeKeyOptions(relayURL: relay, verify: DcapRelayKeyVerifier.signedReleaseVerifier(relayURL: relay)))
 ```
 
-A loopback relay is a dev rig answering mock quotes, accepted from loopback
-only. A relay or mirror that does not answer is a `RelayKeyTransportError`,
+A dev rig's relay answers mock quotes. They are refused unless you pass
+`allowMock: true`, from a loopback relay too: another app on the device can
+listen on `127.0.0.1`. A relay or mirror that does not answer is a `RelayKeyTransportError`,
 which `attemptRelayNodeKey` reports as `.unavailable` (try again); a proof that
 does not hold is `.refused`. `TLSRelayKeyVerifier`, the older check of the
 binding alone over TLS, and `PinnedRelayKeyVerifier` remain for dev rigs and
-keys pinned out of band.
+tests, and are deprecated so a shipped app's build warns.

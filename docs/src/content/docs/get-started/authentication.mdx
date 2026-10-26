@@ -149,13 +149,14 @@ the account layer.
 ### The relay's node key
 
 The relay session is bound to the relay's node key, learned from
-`POST {relay}/admin-api/tee/attest`. The default `TLSRelayKeyVerifier` checks the
-quote is bound to this request's nonce and to the key the relay named, and
-refuses mock quotes from hosted relays, but **does not yet verify the TDX DCAP
-quote signature**; it trusts the TLS connection to the relay URL the Cloud
-manager returned. Supply your own `RelayKeyVerifier` (or a
-`PinnedRelayKeyVerifier`) in `CloudConfig` to tighten it. Warranted writes do not
-depend on the node key; only Bearer reads and events do.
+`POST {relay}/admin-api/tee/attest`. The default `DcapRelayKeyVerifier` verifies
+the TDX DCAP quote on the device, checks it is of the signed mero-tee release the
+relay runs, and that it binds this request's nonce and the key the relay named.
+A mock quote is refused unless you pass `allowMock: true`, from a loopback relay
+too. `TLSRelayKeyVerifier` (the binding alone, over TLS) and
+`PinnedRelayKeyVerifier` (a key pinned out of band) are deprecated: they are for
+dev rigs and tests. Warranted writes do not depend on the node key; only Bearer
+reads and events do.
 
 ### Signed in to the cloud as a user
 
@@ -271,12 +272,25 @@ let loginURL = Mero.buildAuthLoginUrl(
                             permissions: ["admin"])
 )
 
-// 2. Present it (ASWebAuthenticationSession), then on the callback URL:
-if let callback = Mero.parseAuthCallback(callbackURL.absoluteString) {
+// 2. Present it (ASWebAuthenticationSession), then on the URL it hands back:
+if let callback = Mero.parseAuthCallback(
+  callbackURL.absoluteString, options: ParseAuthCallbackOptions(allowCustomScheme: true)) {
   await mero.setTokenData(from: callback)
   // callback also carries applicationId, contextId, contextIdentity, nodeUrl
 }
 ```
+
+<Aside type="caution">
+  **A custom scheme is accepted only from the auth session.** Any app can
+  register `myapp://`, and the callback carries the session's tokens.
+  `parseAuthCallback` returns `nil` for a callback that is not `https` unless
+  you pass `allowCustomScheme: true`; pass it only for the URL
+  `ASWebAuthenticationSession` hands back, which never travels as a link. A
+  callback that reaches `onOpenURL` should be an `https` Universal Link
+  (`MeroClient.handleAuthCallback` refuses anything else unless
+  `MeroProviderConfig.allowCustomSchemeCallbacks`). The lasting fix, an
+  authorization code with PKCE in place of tokens in the link, needs the node.
+</Aside>
 
 <Aside type="caution">
   **Only a callback for a login this app began is accepted.** Anyone can open

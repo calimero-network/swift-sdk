@@ -222,7 +222,7 @@ final class DelegatedGovernanceTests: XCTestCase {
 
     func testRefusesToFoundThroughARelayWhoseAttestationIsRefused() async {
         var env = environment()
-        env.relayKeyVerifier = TLSRelayKeyVerifier(allowMock: false)
+        env.relayKeyVerifier = DcapRelayKeyVerifier()
         env.store.pinRelayNodeKey(relayURL: relay, nodeKey: DelegatedFixture.nodeKey)
         do {
             _ = try await found(DelegatedFixture.session(executorAccount: executor), env: env)
