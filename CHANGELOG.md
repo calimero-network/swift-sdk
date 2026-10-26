@@ -2,6 +2,18 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: a join signs at the schema version the node names
+
+Relays in the cloud do not all move to a new core release at once. A relay
+still on core 0.11.0-rc.90 refused every join signed at schema 27 with
+`schema version mismatch: expected 26, got 27`, so nobody could join a
+namespace it admits for. 26 and 27 sign the same layout (core#4625), so
+`AccountJoin.joinWithNode` now signs once more at the version the node names
+when it is one of `NamespaceOps.acceptedSchemaVersions` (26...27), and never
+retries twice or guesses at a version it does not know.
+`NamespaceOps.signMemberJoinOp` / `memberJoinSignable` take an optional
+`schemaVersion` (default `NamespaceOps.schemaVersion`, still 27).
+
 ## Unreleased: request proofs refuse a window a node would refuse
 
 - **A request-proof window is capped at `maxRequestProofTTLSeconds` (300)**,

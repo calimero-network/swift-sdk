@@ -176,6 +176,50 @@ final class AccountJoinBootstrapTests: XCTestCase {
         XCTAssertTrue(failure.reason.contains("could not be reached"))
     }
 
+    /// The schema byte of a sent join: the first byte of `signedOp`.
+    private func schemaByte(_ seen: CloudRig.Seen) -> String? {
+        seen.json?["signedOp"]?.stringValue.map { String($0.prefix(2)) }
+    }
+
+    func testSignsAgainAtTheVersionAnOlderNodeNames() async {
+        let refusal = #"{"error":"signed_op signature does not verify: schema version mismatch: expected 26, got 27"}"#
+        rig.on("POST", "/admin-api/namespaces/\(ns)/admit") { seen in
+            seen.json?["signedOp"]?.stringValue?.hasPrefix("1b") == true
+                ? CloudRig.stub(400, refusal)
+                : CloudRig.stub(200, #"{"data":{"published":true}}"#)
+        }
+        let result = await join()
+        XCTAssertEqual(result, .joined(published: true, relayUrl: relay))
+        let sent = rig.requests("POST", "/admin-api/namespaces/\(ns)/admit")
+        XCTAssertEqual(sent.map(schemaByte), ["1b", "1a"], "27 first, then the 26 the node asked for")
+    }
+
+    func testSignsAgainOnlyOnceAndOnlyAtAVersionItKnows() async {
+        rig.on(
+            "POST", "/admin-api/namespaces/\(ns)/admit", status: 400,
+            json: #"{"error":"schema version mismatch: expected 26, got 27"}"#)
+        guard case .failed(let failure) = await join() else { return XCTFail("a node that refuses both must fail") }
+        XCTAssertEqual(failure.status, 400)
+        XCTAssertEqual(rig.requests("POST", "/admin-api/namespaces/\(ns)/admit").count, 2)
+
+        rig = CloudRig()
+        rig.install()
+        rig.on(
+            "POST", "/admin-api/namespaces/\(ns)/admit", status: 400,
+            json: #"{"error":"schema version mismatch: expected 30, got 27"}"#)
+        guard case .failed = await join() else { return XCTFail("an unknown version must fail") }
+        XCTAssertEqual(rig.requests("POST", "/admin-api/namespaces/\(ns)/admit").count, 1, "no guessing at 30")
+    }
+
+    func testReadsTheExpectedVersionFromARefusal() {
+        XCTAssertEqual(
+            NamespaceOps.expectedSchemaVersion(
+                fromRefusal: "signed_op signature does not verify: schema version mismatch: expected 26, got 27"),
+            26)
+        XCTAssertNil(NamespaceOps.expectedSchemaVersion(fromRefusal: "schema version mismatch: expected 25, got 27"))
+        XCTAssertNil(NamespaceOps.expectedSchemaVersion(fromRefusal: "invitation expired"))
+    }
+
     func testFailsAtTheSigningStepHavingSentNothing() async {
         guard case .failed(let failure) = await join(credential: "not hex") else {
             return XCTFail("expected a failure")
