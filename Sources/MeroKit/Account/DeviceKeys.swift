@@ -109,61 +109,35 @@ public final class MemoryValueStore<Value: Codable & Sendable>: SecureValueStore
 /// key is the identity of *this* device and must never migrate in a backup to
 /// another one, where it would sign as a device it is not.
 public final class KeychainValueStore<Value: Codable & Sendable>: SecureValueStore, @unchecked Sendable {
-    private let service: String
-    private let account: String
-    private let accessGroup: String?
+    private let item: KeychainItem
     private let accessible: CFString
+    /// Failed writes, for diagnostics: the protocol does not throw, so a save
+    /// the Keychain refused (the device locked, say) is counted here.
+    public let writeFailures: KeychainWriteFailures
 
     public init(
         service: String = "network.calimero.merokit",
         account: String,
         accessGroup: String? = nil,
-        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        onWriteFailure: (@Sendable (OSStatus) -> Void)? = nil
     ) {
-        self.service = service
-        self.account = account
-        self.accessGroup = accessGroup
+        self.item = KeychainItem(service: service, account: account, accessGroup: accessGroup)
         self.accessible = accessible
-    }
-
-    private func baseQuery() -> [String: Any] {
-        var q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        if let accessGroup { q[kSecAttrAccessGroup as String] = accessGroup }
-        return q
+        self.writeFailures = KeychainWriteFailures(onFailure: onWriteFailure)
     }
 
     public func load() -> Value? {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else {
-            return nil
-        }
-        return try? MeroJSON.decode(Value.self, from: data)
+        item.read().flatMap { try? MeroJSON.decode(Value.self, from: $0) }
     }
 
     public func save(_ value: Value) {
         guard let encoded = try? MeroJSON.encode(value) else { return }
-        let query = baseQuery()
-        let attributes: [String: Any] = [
-            kSecValueData as String: encoded,
-            kSecAttrAccessible as String: accessible,
-        ]
-        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
-            var add = query
-            add[kSecValueData as String] = encoded
-            add[kSecAttrAccessible as String] = accessible
-            SecItemAdd(add as CFDictionary, nil)
-        }
+        writeFailures.record(item.write(encoded, accessible: accessible))
     }
 
     public func clear() {
-        SecItemDelete(baseQuery() as CFDictionary)
+        writeFailures.record(item.delete())
     }
 }
 #endif

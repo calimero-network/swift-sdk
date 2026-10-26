@@ -793,14 +793,20 @@ public final class MeroClient: ObservableObject {
     }
 
     /// Sign out and forget everything: retire the relay session and the
-    /// account (the device key stays), or the node login and its tokens, and
-    /// every remembered id. (== mero-react `logout`.)
-    public func logout() async {
+    /// account (its relay map and pinned relay keys with it), or the node login
+    /// and its tokens, every remembered id and the invitation attempt ledger.
+    /// (== mero-react `logout`.)
+    ///
+    /// The device key stays, so signing back in is one approval, unless
+    /// `forgetDevice` — pass it on a shared or handed-over device, so the next
+    /// account is not handed a key already certified to this one
+    /// (``CloudSignIn/signOut(forgetDevice:)``).
+    public func logout(forgetDevice: Bool = false) async {
         stopHealth()
         delegatedTask?.cancel()
         delegatedTask = nil
-        if connection != nil || delegatedSession != nil {
-            await cloud.signOut()
+        if connection != nil || delegatedSession != nil || forgetDevice {
+            await cloud.signOut(forgetDevice: forgetDevice)
         }
         if let mero {
             await mero.logout()
@@ -811,6 +817,7 @@ public final class MeroClient: ObservableObject {
         }
         await transport?.close()
         storage.clearAll()
+        InvitationCapture.shared.clearAttempts()
         mero = nil
         connection = nil
         transport = nil

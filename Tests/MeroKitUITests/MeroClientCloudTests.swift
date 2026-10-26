@@ -111,6 +111,31 @@ final class MeroClientCloudTests: XCTestCase {
         XCTAssertNil(client.account)
     }
 
+    func testLogoutKeepsTheDeviceUnlessToldToForgetIt() async {
+        let session = MockURLProtocol.makeSession()
+        let keys = AnyValueStore<DeviceKeys>.memory()
+        let nonces = MemoryWarrantNonceStore()
+        let cloud = CloudSignIn(
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            keyStore: keys, sessionStore: .memory(), nonces: nonces, urlSession: session, delegatedStore: .memory())
+        let client = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+
+        await client.signInWithCloud(callbackScheme: "mero-sample")
+        let device = keys.load()
+        XCTAssertNotNil(device)
+        _ = nonces.next(relay: relay)
+        await client.logout()
+        XCTAssertEqual(keys.load(), device, "a plain logout keeps the device key")
+        XCTAssertEqual(nonces.next(relay: relay), 2)
+
+        await client.signInWithCloud(callbackScheme: "mero-sample")
+        XCTAssertTrue(client.isAuthenticated)
+        await client.logout(forgetDevice: true)
+        XCTAssertFalse(client.isAuthenticated)
+        XCTAssertNil(keys.load(), "forgetDevice drops the key certified to the old account")
+        XCTAssertEqual(nonces.next(relay: relay), 1, "and the nonces spent under it")
+    }
+
     func testDeclineShowsAFriendlyErrorAndStaysSignedOut() async {
         let client = makeClient(wallet: InProcessWallet(decline: true))
         await client.signInWithCloud(callbackScheme: "mero-sample")
