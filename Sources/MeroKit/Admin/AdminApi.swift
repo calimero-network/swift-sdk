@@ -731,7 +731,7 @@ public struct AdminApi: Sendable {
     /// publisher (bundle signer). Readable by anyone who may read the namespace.
     public func listOutboundApprovals(_ namespaceId: String) async throws -> ListOutboundApprovalsResponseData {
         let resp: ApiResponse<ListOutboundApprovalsResponseData> = try await http.get(
-            "/admin-api/namespaces/\(namespaceId.percentEncoded())/outbound-approvals")
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals")
         return try unwrap(resp, "listOutboundApprovals")
     }
 
@@ -743,7 +743,7 @@ public struct AdminApi: Sendable {
         _ namespaceId: String, request: SetOutboundApprovalRequest
     ) async throws -> SetOutboundApprovalResponseData {
         let resp: ApiResponse<SetOutboundApprovalResponseData> = try await http.put(
-            "/admin-api/namespaces/\(namespaceId.percentEncoded())/outbound-approvals", json: request)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals", json: request)
         return try unwrap(resp, "setOutboundApproval")
     }
 
