@@ -216,6 +216,85 @@ public struct AdminApi: Sendable {
         return bundles.map { $0.appVersion }.sorted { compareSemver($0, $1) > 0 }
     }
 
+    /// The newest version of `packageName` the registry publishes that a node
+    /// on `runtimeVersion` can install: not yanked, and its bundle's
+    /// `minRuntimeVersion` no newer than the runtime. `nil` when there is none.
+    ///
+    /// Without a runtime this is the newest non-yanked version, whatever it
+    /// needs. With one, it walks the package's version list
+    /// (`GET {registry}/api/v2/packages/{package}`) newest first and reads each
+    /// bundle (`GET {registry}/api/v2/bundles/{package}/{version}`) until one
+    /// fits, because the bundle listing names only the latest version.
+    public func resolveRegistryVersion(
+        registryUrl: String, packageName: String, runtimeVersion: String? = nil
+    ) async throws -> String? {
+        let base = try origin(of: registryUrl)
+        let pkg = packageName.percentEncoded()
+        guard let listingURL = URL(string: "\(base)/api/v2/bundles?package=\(pkg)") else {
+            throw MeroError.emptyResponse("invalid registry versions URL for \(packageName)")
+        }
+        let listing: JSONValue = try await fetchJSON(
+            listingURL, failure: "registry versions fetch failed for \(packageName)")
+        let bundles = (listing.arrayValue ?? []).map(ApplicationRegistry.Bundle.init(json:))
+        if let hit = ApplicationRegistry.selectLatest(bundles, runtimeVersion: runtimeVersion) { return hit.appVersion }
+        guard let runtimeVersion, !runtimeVersion.isEmpty else { return nil }
+
+        guard let packageURL = URL(string: "\(base)/api/v2/packages/\(pkg)") else { return nil }
+        let package: JSONValue = try await fetchJSON(
+            packageURL, failure: "registry package fetch failed for \(packageName)")
+        return try await ApplicationRegistry.newestCompatible(
+            versions: (package["versions"]?.arrayValue ?? []).compactMap(\.stringValue),
+            yanked: (package["yankedVersions"]?.arrayValue ?? []).compactMap(\.stringValue),
+            skipping: bundles.compactMap(\.appVersion), runtimeVersion: runtimeVersion
+        ) { version in
+            guard let url = URL(string: "\(base)/api/v2/bundles/\(pkg)/\(version.percentEncoded())") else {
+                throw MeroError.emptyResponse("invalid registry bundle URL for \(packageName)@\(version)")
+            }
+            return ApplicationRegistry.Bundle(
+                json: try await fetchJSON(url, failure: "registry bundle fetch failed for \(packageName)@\(version)"))
+        }
+    }
+
+    /// Install the newest version of `packageName` this node can run.
+    ///
+    /// Pass the node's `runtimeVersion` when it is known. When it is not, the
+    /// newest version is tried first; a node too old for it refuses naming its
+    /// own runtime ("… but current runtime is 0.11.0"), and the install is
+    /// retried once with the newest version that runtime accepts. A registry
+    /// publishing a release ahead of the node no longer breaks the install.
+    public func installLatestFromRegistry(
+        registryUrl: String, packageName: String, runtimeVersion: String? = nil
+    ) async throws -> RegistryInstall {
+        var runtime = runtimeVersion
+        while true {
+            guard
+                let version = try await resolveRegistryVersion(
+                    registryUrl: registryUrl, packageName: packageName, runtimeVersion: runtime)
+            else {
+                throw MeroError.emptyResponse(
+                    "the registry lists no version of \(packageName)"
+                        + (runtime.map { " that runtime \($0) can install" } ?? ""))
+            }
+            do {
+                let resp = try await installFromRegistry(packageName: packageName, version: version)
+                return RegistryInstall(applicationId: resp.applicationId, version: version)
+            } catch {
+                guard runtime == nil, let learned = Self.runtimeVersion(refusedBy: error) else { throw error }
+                runtime = learned
+            }
+        }
+    }
+
+    /// The runtime a node names when it refuses a bundle too new for it.
+    static func runtimeVersion(refusedBy error: Error) -> String? {
+        let text: String
+        switch error as? MeroError {
+        case .http(let e)?: text = (e.bodyText ?? "") + " " + e.message
+        default: text = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+        return ApplicationRegistry.runtimeVersion(fromInstallError: text)
+    }
+
     public func installDevApplication(
         _ request: InstallDevApplicationRequest
     ) async throws -> InstallApplicationResponseData {

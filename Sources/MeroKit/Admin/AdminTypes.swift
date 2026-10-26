@@ -90,6 +90,14 @@ public struct InstallApplicationResponseData: Codable, Sendable {
     public init(applicationId: String) { self.applicationId = applicationId }
 }
 
+/// What ``AdminApi/installLatestFromRegistry(registryUrl:packageName:runtimeVersion:)``
+/// installed: the application and the version it picked.
+public struct RegistryInstall: Codable, Sendable, Equatable {
+    public let applicationId: String
+    public let version: String
+    public init(applicationId: String, version: String) { self.applicationId = applicationId; self.version = version }
+}
+
 public struct UninstallApplicationResponseData: Codable, Sendable {
     public let applicationId: String
     public init(applicationId: String) { self.applicationId = applicationId }

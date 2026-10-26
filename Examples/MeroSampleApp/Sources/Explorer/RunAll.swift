@@ -38,9 +38,14 @@ enum RunAllPlan {
     static func lifecycle(stamp: String) -> [RunStep] {
         let alias = "run-all-\(stamp)"
         return [
+            RunStep(opId: "pkg.regVersions", inputs: { _ in ["registryUrl": registry, "packageName": package] }),
             RunStep(
-                opId: "pkg.regVersions", inputs: { _ in ["registryUrl": registry, "packageName": package] },
-                captures: ["version": "$first"]),
+                opId: "pkg.resolveVersion", inputs: { _ in ["registryUrl": registry, "packageName": package] }),
+            // The newest version this node's runtime installs: the newest
+            // published one can need a runtime the node is not on yet.
+            RunStep(
+                opId: "pkg.installLatest", inputs: { _ in ["registryUrl": registry, "packageName": package] },
+                captures: ["version": "version", "appId": "applicationId"]),
             RunStep(
                 opId: "pkg.semver", inputs: { _ in ["a": "1.2.0", "b": "1.10.0"] },
                 expect: { output in
@@ -330,11 +335,11 @@ final class RunAllModel: ObservableObject {
                 $0.package == spec.package
             }
             guard
-                let version = try await mero.admin.getRegistryVersions(
-                    registryUrl: RunAllPlan.registry, packageName: spec.package
-                ).first
+                try await mero.admin.resolveRegistryVersion(registryUrl: RunAllPlan.registry, packageName: spec.package)
+                    != nil
             else { return skipAll("\(spec.package) is not on the registry") }
-            let app = try await mero.admin.installFromRegistry(packageName: spec.package, version: version)
+            let app = try await mero.admin.installLatestFromRegistry(
+                registryUrl: RunAllPlan.registry, packageName: spec.package)
             let ns = try await mero.admin.createNamespace(
                 CreateNamespaceRequest(applicationId: app.applicationId, name: "run-all-contract"))
             let group = try await mero.admin.createGroupInNamespace(

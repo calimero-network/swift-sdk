@@ -242,6 +242,32 @@ private let pkgOps: [SDKOperation] = [
                 packageName: i.v("packageName"), version: i.v("version")))
     },
     SDKOperation(
+        id: "pkg.resolveVersion", category: "Packages & Registry", name: "resolveRegistryVersion",
+        summary: "Newest registry version a runtime installs (off-node)",
+        fields: [
+            .line("registryUrl", "Registry URL"), .line("packageName", "Package name"),
+            .line("runtimeVersion", "Node runtime (optional)"),
+        ]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.resolveRegistryVersion(
+                registryUrl: i.v("registryUrl"), packageName: i.v("packageName"),
+                runtimeVersion: i.opt("runtimeVersion")))
+    },
+    SDKOperation(
+        id: "pkg.installLatest", category: "Packages & Registry", name: "installLatestFromRegistry",
+        summary: "Install the newest version this node can run",
+        fields: [
+            .line("registryUrl", "Registry URL"), .line("packageName", "Package name"),
+            .line("runtimeVersion", "Node runtime (optional)"),
+        ]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.installLatestFromRegistry(
+                registryUrl: i.v("registryUrl"), packageName: i.v("packageName"),
+                runtimeVersion: i.opt("runtimeVersion")))
+    },
+    SDKOperation(
         id: "pkg.semver", category: "Packages & Registry", name: "compareSemver",
         summary: "Compare two versions", fields: [.line("a", "Version A"), .line("b", "Version B")]
     ) { _, i in
