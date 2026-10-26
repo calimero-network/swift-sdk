@@ -416,7 +416,8 @@ enum AccountHTTP {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.boundedData(
+                for: request, limit: URLSessionHttpClient.defaultMaxResponseBytes)
         } catch let error as URLError {
             throw MeroError.network(error.localizedDescription)
         }

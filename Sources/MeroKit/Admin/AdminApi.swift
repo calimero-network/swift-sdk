@@ -577,9 +577,11 @@ public struct AdminApi: Sendable {
     /// this call sees the local store and nothing else, and answers 404 for a
     /// blob that plainly exists on the node next to it.
     public func getBlob(_ blobId: String, contextId: String? = nil) async throws -> Data {
-        let req = HttpRequest(
+        var req = HttpRequest(
             path: try Self.blobPath(blobId, contextId: contextId),
             timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
+        // A blob is as large as it is: not held to the JSON response limit.
+        req.unboundedResponse = true
         let (data, _) = try await http.sendRaw(req)
         return data
     }

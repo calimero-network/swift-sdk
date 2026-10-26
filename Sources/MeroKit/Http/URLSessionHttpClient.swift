@@ -28,10 +28,22 @@ private let terminalAuthErrors: Set<String> = ["token_reuse", "token_revoked"]
 /// `DELETE` that failed in transit may already have run on the node; sending
 /// it again could repeat the write. Wrap idempotent calls in ``withRetry(attempts:sleep:_:)``
 /// to opt in.
+///
+/// **Response size.** A body is read up to `maxResponseBytes` (default
+/// ``defaultMaxResponseBytes``); one that is larger fails with
+/// ``MeroError/network(_:)`` and the connection is dropped, so a hostile node,
+/// relay or man-in-the-middle cannot make the app buffer an unbounded answer.
+/// ``download(_:to:)`` streams to disk and is not limited, nor is
+/// `AdminApi.getBlob`.
 public final class URLSessionHttpClient: HttpClient {
+    /// The default cap on a response body: 16 MiB, far above any JSON answer
+    /// a node gives.
+    public static let defaultMaxResponseBytes = 16 * 1024 * 1024
+
     private let baseURL: URL
     private let session: URLSession
     private let defaultTimeout: TimeInterval
+    private let maxResponseBytes: Int
     private let hooks: TransportHooks
     private let refreshGate = RefreshGate()
 
@@ -39,12 +51,14 @@ public final class URLSessionHttpClient: HttpClient {
         baseURL: URL,
         timeout: TimeInterval = 10,
         hooks: TransportHooks = TransportHooks(),
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        maxResponseBytes: Int = URLSessionHttpClient.defaultMaxResponseBytes
     ) {
         self.baseURL = baseURL
         self.defaultTimeout = timeout
         self.hooks = hooks
         self.session = session
+        self.maxResponseBytes = maxResponseBytes
     }
 
     // MARK: HttpClient
@@ -120,7 +134,9 @@ public final class URLSessionHttpClient: HttpClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await performFetch(urlRequest, body: req.body, refuseRedirects: proofAttached)
+            (data, response) = try await performFetch(
+                urlRequest, body: req.body, refuseRedirects: proofAttached,
+                limit: req.unboundedResponse ? nil : maxResponseBytes)
         } catch let urlErr as URLError {
             throw MeroError.network(urlErr.localizedDescription)
         }
@@ -181,14 +197,20 @@ public final class URLSessionHttpClient: HttpClient {
         throw MeroError.http(httpError)
     }
 
+    /// - Parameter limit: the most body bytes to accept, or nil for no limit.
     private func performFetch(
-        _ request: URLRequest, body: HttpBody?, refuseRedirects: Bool
+        _ request: URLRequest, body: HttpBody?, refuseRedirects: Bool, limit: Int?
     ) async throws -> (Data, URLResponse) {
         let delegate: ProofRedirectRefusal? = refuseRedirects ? ProofRedirectRefusal() : nil
         if case .file(let fileURL, _) = body {
-            return try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
+            // `upload(for:fromFile:)` has no streaming form; its answer is a
+            // small JSON receipt, so the limit is checked once it is in.
+            let (data, response) = try await session.upload(for: request, fromFile: fileURL, delegate: delegate)
+            if let limit, data.count > limit { throw responseTooLarge(limit) }
+            return (data, response)
         }
-        return try await session.data(for: request, delegate: delegate)
+        guard let limit else { return try await session.data(for: request, delegate: delegate) }
+        return try await session.boundedData(for: request, limit: limit, delegate: delegate)
     }
 
     /// `request` with whatever the proof hooks add: the authorizer's headers,
@@ -295,6 +317,37 @@ public final class URLSessionHttpClient: HttpClient {
         }
         return out
     }
+}
+
+extension URLSession {
+    /// `data(for:delegate:)` that reads at most `limit` body bytes: a
+    /// `Content-Length` over it is refused before the body is read, and a body
+    /// that grows past it is cut off there. Either way the task is cancelled
+    /// and ``MeroError/network(_:)`` thrown.
+    func boundedData(
+        for request: URLRequest, limit: Int, delegate: (any URLSessionTaskDelegate)? = nil
+    ) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await bytes(for: request, delegate: delegate)
+        if response.expectedContentLength > Int64(limit) {
+            bytes.task.cancel()
+            throw responseTooLarge(limit)
+        }
+        var body: [UInt8] = []
+        body.reserveCapacity(max(0, Int(min(response.expectedContentLength, Int64(limit)))))
+        for try await byte in bytes {
+            guard body.count < limit else {
+                bytes.task.cancel()
+                throw responseTooLarge(limit)
+            }
+            body.append(byte)
+        }
+        return (Data(body), response)
+    }
+}
+
+/// A response body over the transport's limit (SEC-08).
+func responseTooLarge(_ limit: Int) -> MeroError {
+    MeroError.network("response body exceeds \(limit) bytes")
 }
 
 private extension HttpBody {

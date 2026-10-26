@@ -172,6 +172,10 @@ final class PendingIntentStore: @unchecked Sendable {
     }
 
     static let storageKey = "calimero.platform.pendingIntents"
+    /// The most intents kept. Every distinct link adds one until it is acked,
+    /// so without a bound a stream of links grows the store forever; past it
+    /// the oldest are dropped.
+    static let maxPending = 20
     private let defaults: UserDefaults
     private let now: () -> Date
 
@@ -210,7 +214,7 @@ final class PendingIntentStore: @unchecked Sendable {
         if let existing = list.first(where: { $0.nonce == nonce }) { return existing }
         let intent = Intent(nonce: nonce, raw: raw, capturedAt: now().timeIntervalSince1970 * 1000)
         list.append(intent)
-        write(list)
+        write(Array(list.suffix(Self.maxPending)))
         return intent
     }
 
