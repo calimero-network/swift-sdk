@@ -99,6 +99,13 @@ public struct RedeemRequest: Sendable {
 /// callers want ``AdminSurface/redeemInvitation(_:invitation:groupName:teamName:)``;
 /// this form is for a join that is more than one call.
 public func redeemInvitation(_ request: RedeemRequest, redeemer: InviteRedeemer) async -> RedeemOutcome {
+    // The id comes from the invite, so it is untrusted: refuse anything but a
+    // namespace id before it is put in a path. (SEC-02)
+    guard isNamespaceId(request.namespaceId) else {
+        return .failed(
+            namespaceId: nil, message: "This invitation does not name a valid namespace.", reason: .invalid,
+            retryable: false)
+    }
     var joinError: Error?
     do {
         try await redeemer.join(request.namespaceId, request.invitation)
@@ -118,6 +125,11 @@ public func redeemInvitation(_ request: RedeemRequest, redeemer: InviteRedeemer)
     if message.trimmingCharacters(in: .whitespaces).isEmpty { message = "Could not join. Check the invitation." }
     let (reason, retryable) = InviteFailures.classify(classified, message: message)
     return .failed(namespaceId: request.namespaceId, message: message, reason: reason, retryable: retryable)
+}
+
+/// Whether `id` is a namespace id as core spells it: 64 lowercase hex characters.
+func isNamespaceId(_ id: String) -> Bool {
+    id.utf8.count == 64 && id.utf8.allSatisfy { Hex.isLowerHexDigit($0) }
 }
 
 extension AdminSurface {

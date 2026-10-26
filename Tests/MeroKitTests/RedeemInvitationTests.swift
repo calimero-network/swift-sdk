@@ -63,6 +63,18 @@ final class RedeemInvitationTests: XCTestCase {
         XCTAssertTrue(outcome.shouldRetain)
     }
 
+    // SEC-02: the id comes from the invite, so a crafted one must not reach a path.
+    func testRefusesAnInviteWhoseNamespaceIdIsNotOne() async {
+        for bad in ["abc/leave?x=", "../contexts/x", "\(ns)/leave?x=", String(repeating: "AB", count: 32), ""] {
+            let joins = Counter()
+            let outcome = await redeemInvitation(
+                RedeemRequest(namespaceId: bad, invitation: Self.invitation, teamName: "Team"),
+                redeemer: redeemer(joins: joins))
+            guard case .failed(nil, _, .invalid, false) = outcome else { return XCTFail("\(bad): \(outcome)") }
+            XCTAssertEqual(joins.count, 0, bad)
+        }
+    }
+
     func testNeverSendsASecondJoinToSettleAnAmbiguousOne() async {
         let joins = Counter()
         _ = await redeemInvitation(request, redeemer: redeemer(join: http(504, "x"), joins: joins))
