@@ -2,22 +2,6 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased: enrolment callbacks need a pending state (SEC-01)
-
-- **An enrolment callback is refused unless it answers the enrolment this app
-  began.** `DeviceEnrolment.completeEnrolment` throws
-  `AccountError.stateMismatch` when `expectState` is `nil`, so a credential
-  someone else minted for this device's (public) keys and sent as a link can no
-  longer sign the app in to their account (login CSRF).
-- `CloudSignIn` keeps the pending state as a single-use `PendingEnrolment` that
-  expires after 10 minutes (`enrolmentStateLifetime`), in a new
-  `pendingEnrolmentStore` (the Keychain for `CloudSignIn.keychain()` and
-  `MeroClient`'s default), so a relaunch while the wallet is open still finishes.
-- `CloudSignIn.completeEnrolment` throws the new
-  `AccountError.accountSwitch(current:incoming:)` rather than replacing a
-  session for another account; pass `allowAccountSwitch: true` once the person
-  confirms.
-
 ## Unreleased: core 0.11.0, namespace ops signed at schema 27
 
 - **`NamespaceOps.schemaVersion` is 27**, core 0.11.0's
