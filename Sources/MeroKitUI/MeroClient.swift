@@ -139,7 +139,7 @@ public final class MeroClient: ObservableObject {
             ?? CloudSignIn(
                 config: CloudConfig(cloudBaseURL: config.cloudBaseURL ?? CloudClient.defaultBaseURL),
                 keyStore: Self.defaultKeyStore(), sessionStore: Self.defaultSessionStore(),
-                urlSession: session ?? .shared)
+                urlSession: session ?? .shared, pendingEnrolmentStore: Self.defaultPendingEnrolmentStore())
         #if canImport(AuthenticationServices) && (os(iOS) || os(macOS))
         self.webAuthenticator = webAuthenticator ?? SystemWebAuthenticator()
         #else
@@ -870,6 +870,8 @@ public final class MeroClient: ObservableObject {
             return "This device was not approved. You can try again."
         case AccountError.stateMismatch:
             return "That sign-in did not come from this app. Please try again."
+        case AccountError.accountSwitch:
+            return "That sign-in is for a different account. Sign out first to switch accounts."
         case AccountError.credentialRejected:
             return "The wallet's answer could not be verified, so nothing was saved. Please try again."
         default:
@@ -892,6 +894,14 @@ public final class MeroClient: ObservableObject {
     private static func defaultSessionStore() -> AnyValueStore<CloudSession> {
         #if canImport(Security)
         return .keychain(account: "cloud-session")
+        #else
+        return .memory()
+        #endif
+    }
+
+    private static func defaultPendingEnrolmentStore() -> AnyValueStore<PendingEnrolment> {
+        #if canImport(Security)
+        return .keychain(account: "cloud-enrol-pending")
         #else
         return .memory()
         #endif
