@@ -2,6 +2,13 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: CI supply chain
+
+- Every workflow action is pinned by commit SHA (release in a trailing comment),
+  and Dependabot keeps the pins current (SEC-13).
+- The release workflow builds and tests with a read-only token; only the job
+  that cuts the GitHub Release holds `contents: write`.
+
 ## Unreleased: request proofs refuse a window a node would refuse
 
 - **A request-proof window is capped at `maxRequestProofTTLSeconds` (300)**,
