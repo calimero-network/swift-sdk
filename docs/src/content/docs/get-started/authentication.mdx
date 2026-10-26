@@ -104,7 +104,12 @@ let spaces = try await connection.mero?.admin.listNamespaces()
 
 `await cloud.restoreSession()` returns the stored session on the next launch;
 `await cloud.signOut()` retires the relay session (`POST /auth/logout`) and
-forgets the account.
+forgets the account: its tokens, session, relay map, subgroup namespaces and
+the pinned keys of its relays. The device keys and the warrant nonces spent
+under them stay, so signing back in is one approval;
+`signOut(forgetDevice: true)` (or `MeroClient.logout(forgetDevice: true)`)
+drops them too. Use it on a shared or handed-over device, so the next account
+does not sign in with a key already certified to this one.
 
 ### The callback URL
 

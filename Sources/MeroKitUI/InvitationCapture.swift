@@ -437,6 +437,13 @@ public final class InvitationCapture: ObservableObject {
     public func attempts(for token: String) -> Int {
         readAttempts()[token] ?? 0
     }
+
+    /// Forget the auto-join attempt ledger, which names the invitations this
+    /// device tried. ``MeroClient/logout(forgetDevice:)`` does, so the next
+    /// account starts with none; a pending invitation stays until acked.
+    public func clearAttempts() {
+        defaults.removeObject(forKey: attemptsKey)
+    }
 }
 
 /// Start capturing on ``InvitationCapture/shared``. (== mero-react `primeInvitationCapture`.)
