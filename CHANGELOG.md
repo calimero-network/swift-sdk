@@ -14,6 +14,15 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
   Both are on `AdminSurface`; an account reads the list through its relay and is
   refused `setOutboundApproval`, and `createNamespace` with `approveOutbound`, by name.
 
+## Unreleased: request proofs refuse a window a node would refuse
+
+- **A request-proof window is capped at `maxRequestProofTTLSeconds` (300)**,
+  core's `MAX_REQUEST_LIFETIME_SECS`. `createProofSigner` (`ttlSeconds`),
+  `signRequestProof` and `createProofAuthorizer` (`validForSeconds`) throw
+  `invalidInput` for 0 or anything over 300, instead of minting a proof every
+  node refuses. The window is what bounds replay: a two-link proof names no
+  node (SEC-14).
+
 ## Unreleased: core 0.11.0, namespace ops signed at schema 27
 
 - **`NamespaceOps.schemaVersion` is 27**, core 0.11.0's

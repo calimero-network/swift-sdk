@@ -50,6 +50,11 @@ public enum SseConnectionEvent: Sendable {
 public final class SseConnection: @unchecked Sendable {
     /// How long a subscription POST may take before it counts as failed.
     public static let subscriptionTimeout: TimeInterval = 10
+    /// The longest line (and the largest event) the stream may send, in
+    /// bytes. Past it the connection is dropped and reconnected, reported as
+    /// ``MeroError/network(_:)``. A node event is a single JSON line, far
+    /// smaller than this.
+    public static let maxLineBytes = 1024 * 1024
 
     private let baseURL: URL
     private let authorize: RequestAuthorizer
@@ -386,7 +391,10 @@ public final class SseConnection: @unchecked Sendable {
         }
         attempt = 0
 
-        for try await line in bytes.lines {
+        // Stop the stream on any way out, a line over the limit included:
+        // the run loop reconnects on a fresh one.
+        defer { bytes.task.cancel() }
+        for try await line in SseLines(bytes, limit: Self.maxLineBytes) {
             guard isCurrent(current) else { return }
             guard line.hasPrefix("data:") else { continue }
             let payload = line.dropFirst("data:".count).trimmingCharacters(in: .whitespaces)

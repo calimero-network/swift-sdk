@@ -98,10 +98,18 @@ public struct MeroProviderConfig: Sendable, Equatable {
     public var allowedNodeURLs: [String]
     /// Request timeout for node clients.
     public var timeout: TimeInterval
+    /// Let ``MeroClient/handleAuthCallback(_:)`` adopt a node SSO callback that
+    /// arrives on a custom scheme (`onOpenURL`), not only on an `https`
+    /// Universal Link. Any app can claim a custom scheme, and the callback
+    /// carries the session's tokens. ``MeroClient/connectToNode(_:callback:)``
+    /// does not need it: `ASWebAuthenticationSession` hands its callback
+    /// straight back. (== Kotlin `MeroAppConfig.allowCustomSchemeCallbacks`.)
+    public var allowCustomSchemeCallbacks: Bool
 
     public init(
         mode: AppMode = .multiContext, packageName: String? = nil, packageVersion: String? = nil,
-        registryURL: String? = nil, cloudBaseURL: URL? = nil, allowedNodeURLs: [String] = [], timeout: TimeInterval = 30
+        registryURL: String? = nil, cloudBaseURL: URL? = nil, allowedNodeURLs: [String] = [],
+        timeout: TimeInterval = 30, allowCustomSchemeCallbacks: Bool = false
     ) {
         self.mode = mode
         self.packageName = packageName
@@ -110,6 +118,7 @@ public struct MeroProviderConfig: Sendable, Equatable {
         self.cloudBaseURL = cloudBaseURL
         self.allowedNodeURLs = allowedNodeURLs
         self.timeout = timeout
+        self.allowCustomSchemeCallbacks = allowCustomSchemeCallbacks
     }
 
     /// The app's registry identity, as the admins take it.

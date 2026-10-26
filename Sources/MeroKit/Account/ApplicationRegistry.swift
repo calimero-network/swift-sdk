@@ -169,7 +169,7 @@ public enum ApplicationRegistry {
         let query = package.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? package
         let url = try AccountHTTP.url(registryURL, "/api/v2/bundles?package=\(query)")
         let body = try await AccountHTTP.send(
-            AccountHTTP.jsonRequest(url, method: "GET", body: nil, timeout: 15), session: session)
+            AccountHTTP.jsonRequest(url, method: "GET", body: nil, timeout: 15), session: session, role: "registry")
         return (body.arrayValue ?? []).map(Bundle.init(json:))
     }
 

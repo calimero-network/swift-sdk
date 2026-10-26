@@ -44,9 +44,16 @@ public struct ParseAuthCallbackOptions: Sendable, Equatable {
     /// itself. Anyone who can open the app's URL can then choose the session,
     /// so leave it `false` unless the URL can only come from a trusted host.
     public var allowUnsolicited: Bool
+    /// Accept a callback on a custom scheme (`myapp://…`) or plain `http`, not
+    /// only on an `https` Universal Link. Any app can register a custom
+    /// scheme, so a callback opened through one can reach another app, with
+    /// the tokens in it. Set it only where the callback cannot travel as a
+    /// link: the URL `ASWebAuthenticationSession` hands back to its caller.
+    public var allowCustomScheme: Bool
 
-    public init(allowUnsolicited: Bool = false) {
+    public init(allowUnsolicited: Bool = false, allowCustomScheme: Bool = false) {
         self.allowUnsolicited = allowUnsolicited
+        self.allowCustomScheme = allowCustomScheme
     }
 }
 
@@ -171,6 +178,11 @@ public enum SsoLogin {
     /// and is consumed (single use). Pass
     /// `ParseAuthCallbackOptions(allowUnsolicited: true)` only for a trusted
     /// host that injects tokens itself.
+    ///
+    /// Also `nil` for a callback that is not `https` (a verified Universal
+    /// Link), unless ``ParseAuthCallbackOptions/allowCustomScheme``: a custom
+    /// scheme can be claimed by any app. The URL an `ASWebAuthenticationSession`
+    /// returns never travels as a link, so it may set it.
     public static func parseAuthCallback(
         _ url: String,
         options: ParseAuthCallbackOptions = ParseAuthCallbackOptions(),
@@ -181,6 +193,7 @@ public enum SsoLogin {
         let params = parseQuery(fragment)
 
         guard let accessToken = params["access_token"], !accessToken.isEmpty else { return nil }
+        guard options.allowCustomScheme || isHTTPS(url) else { return nil }
 
         if !options.allowUnsolicited, !stateStore.take(stateOf(url, hashIndex: hashIndex)) {
             // Tokens for a login this app never began: ignore them.
@@ -257,6 +270,12 @@ public enum SsoLogin {
             tail = String(callbackUrl[hash...])
         }
         return head + (head.contains("?") ? "&" : "?") + pair + tail
+    }
+
+    /// Whether `url` is an `https` URL (a Universal Link or App Link).
+    static func isHTTPS(_ url: String) -> Bool {
+        guard let colon = url.firstIndex(of: ":") else { return false }
+        return url[..<colon].lowercased() == "https"
     }
 
     /// The `auth_state` in the query before the fragment, if any.

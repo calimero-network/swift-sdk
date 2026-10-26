@@ -189,7 +189,8 @@ public struct ProofSignerOptions: Sendable {
     public var signerSecret: String?
     public var signer: (any Signer)?
     /// How long each signature stays valid, seconds. Default 120: this is what
-    /// bounds replay, and nothing else does.
+    /// bounds replay, and nothing else does. At most
+    /// ``maxRequestProofTTLSeconds``; ``createProofSigner(_:)`` refuses more.
     public var ttlSeconds: UInt64
     /// Unix seconds. Injectable so a test does not depend on the wall clock.
     public var now: @Sendable () -> UInt64
@@ -207,6 +208,26 @@ public struct ProofSignerOptions: Sendable {
     }
 }
 
+/// The longest window a request signature may carry, seconds: core's
+/// `MAX_REQUEST_LIFETIME_SECS` (`crates/account/src/caller.rs`). A node refuses
+/// a longer one before checking any signature, so asking for it is refused
+/// here, before a proof that could only fail is ever minted.
+///
+/// The window is also the whole of what bounds replay: a two-link proof names
+/// no node, so within it the identical request is valid at any node that
+/// serves the account. Keep it short.
+public let maxRequestProofTTLSeconds: UInt64 = 300
+
+/// `seconds`, when it is a window a node accepts (1 through
+/// ``maxRequestProofTTLSeconds``); otherwise an `invalidInput` naming `label`.
+func checkedRequestProofTTL(_ seconds: UInt64, label: String) throws -> UInt64 {
+    guard seconds >= 1, seconds <= maxRequestProofTTLSeconds else {
+        throw AccountError.invalidInput(
+            "\(label) must be between 1 and \(maxRequestProofTTLSeconds) seconds, got \(seconds)")
+    }
+    return seconds
+}
+
 /// The current Unix time, whole seconds.
 public func unixSeconds() -> UInt64 {
     UInt64(max(0, Date().timeIntervalSince1970))
@@ -215,13 +236,14 @@ public func unixSeconds() -> UInt64 {
 /// Turn a credential and a key into a per-request ``ProofCallback`` — pass it
 /// as ``MeroConfig/requestProof`` (`.custom`) or ``TransportHooks/getProof``.
 public func createProofSigner(_ options: ProofSignerOptions) throws -> ProofCallback {
+    let ttl = try checkedRequestProofTTL(options.ttlSeconds, label: "ttlSeconds")
     let signer = try resolveSigner(options.signerSecret, options.signer, label: "signerSecret")
     return { request in
         let issuedAt = options.now()
         let sig = try await signRequest(
             RequestSigInput(
                 method: request.method, path: request.path, body: request.body, issuedAt: issuedAt,
-                expiresAt: issuedAt + options.ttlSeconds, signer: signer))
+                expiresAt: issuedAt + ttl, signer: signer))
         return try callerProof(CallerProofInput(credential: options.credential, session: options.session, request: sig))
     }
 }

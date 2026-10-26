@@ -330,7 +330,7 @@ public struct CloudClient: Sendable {
             try AccountHTTP.url(baseURL.absoluteString, path), method: "POST",
             body: ["ownership_proof": proof.json], timeout: timeout)
         do {
-            return try await AccountHTTP.send(request, session: session)
+            return try await AccountHTTP.send(request, session: session, role: "cloud")
         } catch MeroError.http(let http) {
             if let code = Self.refusalCode(http.bodyText), Self.haRefusalCodes[http.status]?.contains(code) == true {
                 throw AccountError.haRefused(code: code, status: http.status, body: http.bodyText)
@@ -377,7 +377,7 @@ public struct CloudClient: Sendable {
         let data: Data
         let head: HeadResult
         do {
-            (data, head) = try await AccountHTTP.sendRaw(urlRequest, session: session)
+            (data, head) = try await AccountHTTP.sendRaw(urlRequest, session: session, role: "cloud")
         } catch MeroError.http(let http) {
             loginState.adoptRollingRefresh(http.headers)
             throw MeroError.http(http)
@@ -396,8 +396,10 @@ public struct CloudClient: Sendable {
 /// The small JSON-over-URLSession transport the account layer uses for hosts
 /// that are not a ``Mero`` node (the cloud manager, a relay's intents).
 enum AccountHTTP {
-    static func send(_ request: URLRequest, session: URLSession) async throws -> JSONValue {
-        let (data, head) = try await sendRaw(request, session: session)
+    /// `role` names the host for ``TransportSecurity/checkServiceURL(_:role:)``:
+    /// plain http is refused to anything but loopback.
+    static func send(_ request: URLRequest, session: URLSession, role: String = "relay") async throws -> JSONValue {
+        let (data, head) = try await sendRaw(request, session: session, role: role)
         return try decode(data, status: head.status)
     }
 
@@ -412,11 +414,15 @@ enum AccountHTTP {
         }
     }
 
-    static func sendRaw(_ request: URLRequest, session: URLSession) async throws -> (Data, HeadResult) {
+    static func sendRaw(
+        _ request: URLRequest, session: URLSession, role: String = "relay"
+    ) async throws -> (Data, HeadResult) {
+        if let url = request.url { try TransportSecurity.checkServiceURL(url, role: role) }
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await session.boundedData(
+                for: request, limit: URLSessionHttpClient.defaultMaxResponseBytes)
         } catch let error as URLError {
             throw MeroError.network(error.localizedDescription)
         }

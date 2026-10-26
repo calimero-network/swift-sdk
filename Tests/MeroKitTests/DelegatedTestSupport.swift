@@ -41,7 +41,7 @@ enum DelegatedFixture {
     static func environment(store: DelegatedAccountStore = .memory()) -> DelegatedEnvironment {
         DelegatedEnvironment(
             store: store, nonces: MemoryWarrantNonceStore(), urlSession: MockURLProtocol.makeSession(),
-            relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), cloudBaseURL: cloud,
+            relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), cloudBaseURL: cloud,
             audience: .codeSigningId("network.calimero.test"), sleep: { _ in }, sealRelays: false)
     }
 

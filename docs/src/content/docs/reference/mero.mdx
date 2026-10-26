@@ -199,7 +199,9 @@ public final class KeychainTokenStore: TokenStore {
   public init(service: String = "network.calimero.merokit",
               account: String = "mero-tokens",
               accessGroup: String? = nil,                        // shared Keychain group
-              accessible: CFString = kSecAttrAccessibleAfterFirstUnlock)
+              accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+              onWriteFailure: (@Sendable (OSStatus) -> Void)? = nil)
+  public let writeFailures: KeychainWriteFailures       // failed writes, counted
 }
 
 // Ephemeral (the default when config.tokenStore is nil)

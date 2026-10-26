@@ -219,6 +219,59 @@ final class RequestProofTests: XCTestCase {
         XCTAssertEqual(expires, Hex.encode(LittleEndian.u64(1_700_000_120)))
     }
 
+    // MARK: - Request window cap (core's MAX_REQUEST_LIFETIME_SECS)
+
+    func testTheRequestWindowCapIsCores() {
+        XCTAssertEqual(maxRequestProofTTLSeconds, 300)
+    }
+
+    func testProofSignerRefusesAWindowANodeWouldRefuse() {
+        for ttl: UInt64 in [0, 301, 86_400, .max] {
+            XCTAssertThrowsError(
+                try createProofSigner(
+                    ProofSignerOptions(credential: Self.credential, signerSecret: Self.sessionSecret, ttlSeconds: ttl))
+            ) {
+                XCTAssertTrue($0.localizedDescription.contains("ttlSeconds"), "\($0)")
+            }
+        }
+    }
+
+    func testProofSignerAcceptsTheFullWindow() async throws {
+        let sign = try createProofSigner(
+            ProofSignerOptions(
+                credential: Self.credential, signerSecret: Self.sessionSecret, ttlSeconds: 300,
+                now: { 1_700_000_000 }))
+        let signed = try await sign(ProofRequest(method: "GET", path: "/x"))
+        let proof = try XCTUnwrap(signed)
+        XCTAssertEqual(String(proof.dropLast(128).suffix(16)), Hex.encode(LittleEndian.u64(1_700_000_300)))
+    }
+
+    func testSignRequestProofRefusesAWindowANodeWouldRefuse() async {
+        for validFor: UInt64 in [0, 301, .max] {
+            do {
+                _ = try await signRequestProof(
+                    RequestProofInput(
+                        method: "GET", path: "/x", credential: "ab", deviceSecret: Self.signerSecret,
+                        validForSeconds: validFor, now: Self.issuedAt))
+                XCTFail("expected \(validFor) to be refused")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("validForSeconds"), "\(error)")
+            }
+        }
+    }
+
+    func testAuthorizerRefusesAWindowANodeWouldRefuseUpFront() throws {
+        XCTAssertThrowsError(
+            try createProofAuthorizer(
+                ProofCredential(credential: Self.credential, deviceSecret: Self.signerSecret, validForSeconds: 301))
+        ) {
+            XCTAssertTrue($0.localizedDescription.contains("validForSeconds"), "\($0)")
+        }
+        XCTAssertNoThrow(
+            try createProofAuthorizer(
+                ProofCredential(credential: Self.credential, deviceSecret: Self.signerSecret, validForSeconds: 300)))
+    }
+
     // MARK: - createProofAuthorizer / signedPath
 
     func testAuthorizerReturnsTheProofHeader() async throws {

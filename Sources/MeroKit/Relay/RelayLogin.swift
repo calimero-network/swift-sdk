@@ -118,8 +118,10 @@ public struct RelayAttestation: Sendable {
 /// QE report and the quote's signature), checks its registers against the
 /// signed mero-tee release the relay names (cosign keyless, verified against
 /// the embedded Sigstore trust root), and only then reads the key binding.
-/// ``TLSRelayKeyVerifier`` is the older TLS-only check, kept for dev rigs and
-/// tests; ``PinnedRelayKeyVerifier`` takes a key pinned out of band.
+/// ``TLSRelayKeyVerifier`` is the older TLS-only check and
+/// ``PinnedRelayKeyVerifier`` takes a key pinned out of band; both are kept for
+/// dev rigs and tests only, and marked deprecated so a shipped app's build
+/// says so if it uses one.
 public protocol RelayKeyVerifier: Sendable {
     /// Return the node key (64 hex) to log in with, or throw to refuse.
     func verify(_ attestation: RelayAttestation) async throws -> String
@@ -132,11 +134,16 @@ public protocol RelayKeyVerifier: Sendable {
 /// It still refuses what it can decide locally:
 /// - a quote whose report data does not carry this request's nonce, or does not
 ///   bind the key the relay named (`SHA256("calimero.tee-attest.key-binding.v1" ‖ 0³² ‖ key)`);
-/// - a **mock** quote from anything but a loopback relay (unless `allowMock`).
+/// - a **mock** quote, from any relay, loopback included (unless `allowMock`):
+///   another app on the device can listen on `127.0.0.1`.
+@available(
+    *, deprecated,
+    message: "Development and tests only: it does not verify the relay's TDX quote. Use DcapRelayKeyVerifier."
+)
 public struct TLSRelayKeyVerifier: RelayKeyVerifier {
+    /// Accept a mock quote. Development and tests only; `nil` is `false`.
     public var allowMock: Bool?
 
-    /// `allowMock: nil` accepts mock quotes only from loopback relays.
     public init(allowMock: Bool? = nil) { self.allowMock = allowMock }
 
     public func verify(_ attestation: RelayAttestation) async throws -> String {
@@ -146,8 +153,7 @@ public struct TLSRelayKeyVerifier: RelayKeyVerifier {
         let nodeKey = try Hex.decode(attestation.boundPublicKey, label: "boundPublicKey", bytes: 32)
         let (reportData, mock) = try RelayNodeKey.reportData(of: quote)
         if mock {
-            let loopback = RelayNodeKey.isLoopback(attestation.relayURL)
-            guard allowMock ?? loopback else {
+            guard allowMock ?? false else {
                 throw AccountError.relayKeyUnavailable(
                     "the relay answered with a MOCK quote, which proves nothing about the hardware")
             }
@@ -164,7 +170,12 @@ public struct TLSRelayKeyVerifier: RelayKeyVerifier {
     }
 }
 
-/// A verifier that returns a key pinned out of band (operator-supplied).
+/// A verifier that returns a key pinned out of band (operator-supplied),
+/// whatever the relay attests to.
+@available(
+    *, deprecated,
+    message: "Development and tests only: it ignores the relay's attestation. Use DcapRelayKeyVerifier."
+)
 public struct PinnedRelayKeyVerifier: RelayKeyVerifier {
     public let nodeKey: String
     public init(nodeKey: String) { self.nodeKey = nodeKey.lowercased() }

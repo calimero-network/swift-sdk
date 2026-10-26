@@ -131,7 +131,7 @@ final class DelegatedAccountsTests: XCTestCase {
     func testAQuoteThatDoesNotVerifyIsRefusedAndPinsNothing() async {
         DelegatedFixture.serveAttest(rig)
         var env = DelegatedFixture.environment()
-        env.relayKeyVerifier = TLSRelayKeyVerifier(allowMock: false)
+        env.relayKeyVerifier = DcapRelayKeyVerifier()
         guard case .refused = await DelegatedAccounts.attemptRelayNodeKey(relay, env: env) else {
             return XCTFail("a mock quote from a hosted relay is an answer: no")
         }
@@ -176,7 +176,7 @@ final class DelegatedAccountsTests: XCTestCase {
     func testNeverRetriesARefusedQuoteIntoAcceptance() async {
         DelegatedFixture.serveAttest(rig)
         var env = DelegatedFixture.environment()
-        env.relayKeyVerifier = TLSRelayKeyVerifier(allowMock: false)
+        env.relayKeyVerifier = DcapRelayKeyVerifier()
         let waits = DelegatedLog()
         env.sleep = { waits.add("\($0)") }
         let learned = await DelegatedAccounts.learnRelayNodeKey(relay, env: env)

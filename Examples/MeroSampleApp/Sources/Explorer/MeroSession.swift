@@ -1,6 +1,7 @@
 import Foundation
 import MeroKit
 import MeroKitUI
+import os
 
 /// The explorer's session: Cloud sign-in (wallet passkey → device certificate
 /// → hosted relay), or a node you run yourself (URL + admin username and
@@ -34,6 +35,14 @@ final class MeroSession: ObservableObject {
                 case .warn: return "warn"
                 case .err: return "error"
                 case .req: return "req"
+                }
+            }
+
+            var osLogType: OSLogType {
+                switch self {
+                case .info, .ok, .req: return .info
+                case .warn: return .default
+                case .err: return .error
                 }
             }
         }
@@ -94,10 +103,15 @@ final class MeroSession: ObservableObject {
         return f
     }()
 
+    /// Mirrors the diagnostics log to the unified log. Lines name spaces,
+    /// contexts and accounts, so the text is private: shown with a debugger
+    /// attached, redacted in a device's collected logs.
+    private static let logger = Logger(subsystem: "network.calimero.merokit.sample", category: "session")
+
     func log(_ level: LogLine.Level, _ text: String) {
         logs.append(LogLine(time: Date(), level: level, text: text))
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
-        print("[MeroKit] \(Self.ts.string(from: Date())) \(level.tag) \(text)")
+        Self.logger.log(level: level.osLogType, "\(level.tag, privacy: .public) \(text, privacy: .private)")
     }
 
     func clearLogs() { logs.removeAll() }

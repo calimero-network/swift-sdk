@@ -29,6 +29,17 @@ extension String {
     func percentEncoded() -> String {
         addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? self
     }
+
+    /// This id as exactly one path segment. Every id an admin path carries goes
+    /// through here: a `/`, `?` or `#` in it is encoded, so an id read from an
+    /// invite cannot reach another route, and an empty or dot segment, which a
+    /// URL parser would resolve away, is refused. (SEC-02)
+    func pathSegment() throws -> String {
+        guard !isEmpty, self != ".", self != ".." else {
+            throw AccountError.invalidInput("Not a path segment: \"\(self)\"")
+        }
+        return percentEncoded()
+    }
 }
 
 /// Compare two dotted version strings, ascending: negative if `a < b`, positive
@@ -305,7 +316,7 @@ public struct AdminApi: Sendable {
 
     public func uninstallApplication(_ appId: String) async throws -> UninstallApplicationResponseData {
         let resp: ApiResponse<UninstallApplicationResponseData> = try await http.delete(
-            "/admin-api/applications/\(appId)")
+            "/admin-api/applications/\(appId.pathSegment())")
         return try unwrap(resp, "uninstallApplication")
     }
 
@@ -315,7 +326,8 @@ public struct AdminApi: Sendable {
     }
 
     public func getApplication(_ appId: String) async throws -> GetApplicationResponseData {
-        let resp: ApiResponse<GetApplicationResponseData> = try await http.get("/admin-api/applications/\(appId)")
+        let resp: ApiResponse<GetApplicationResponseData> = try await http.get(
+            "/admin-api/applications/\(appId.pathSegment())")
         return try unwrap(resp, "getApplication")
     }
 
@@ -324,7 +336,7 @@ public struct AdminApi: Sendable {
     /// pin" UI); the registry equivalent is `listPackageVersions`.
     public func listApplicationVersions(_ applicationId: String) async throws -> [ApplicationVersionEntry] {
         let resp: ApiResponse<[ApplicationVersionEntry]> = try await http.get(
-            "/admin-api/applications/\(applicationId)/versions")
+            "/admin-api/applications/\(applicationId.pathSegment())/versions")
         return try unwrap(resp, "listApplicationVersions")
     }
 
@@ -335,7 +347,7 @@ public struct AdminApi: Sendable {
     public func getApplicationAbi(
         _ applicationId: String, serviceName: String? = nil
     ) async throws -> ApplicationAbi {
-        var path = "/admin-api/applications/\(applicationId)/abi"
+        var path = try "/admin-api/applications/\(applicationId.pathSegment())/abi"
         if let serviceName {
             path += "?service_name=\(serviceName.percentEncoded())"
         }
@@ -356,13 +368,13 @@ public struct AdminApi: Sendable {
     public func listPackageVersions(_ packageName: String) async throws -> ListVersionsResponseData {
         // Core returns this flat ({ versions: [...] }), not under `data`; tolerate both.
         struct Wire: Codable, Sendable { let versions: [String]?; let data: ListVersionsResponseData? }
-        let wire: Wire = try await http.get("/admin-api/packages/\(packageName.percentEncoded())/versions")
+        let wire: Wire = try await http.get("/admin-api/packages/\(packageName.pathSegment())/versions")
         if let d = wire.data { return d }
         return ListVersionsResponseData(versions: wire.versions ?? [])
     }
 
     public func getLatestPackageVersion(_ packageName: String) async throws -> GetLatestVersionResponseData {
-        return try await http.get("/admin-api/packages/\(packageName.percentEncoded())/latest")
+        return try await http.get("/admin-api/packages/\(packageName.pathSegment())/latest")
     }
 
     // MARK: - Context Management
@@ -381,9 +393,9 @@ public struct AdminApi: Sendable {
     ) async throws -> DeleteContextResponseData {
         let resp: ApiResponse<DeleteContextResponseData>
         if let request {
-            resp = try await http.delete("/admin-api/contexts/\(contextId)", json: request)
+            resp = try await http.delete("/admin-api/contexts/\(contextId.pathSegment())", json: request)
         } else {
-            resp = try await http.delete("/admin-api/contexts/\(contextId)")
+            resp = try await http.delete("/admin-api/contexts/\(contextId.pathSegment())")
         }
         return try unwrap(resp, "deleteContext")
     }
@@ -394,13 +406,13 @@ public struct AdminApi: Sendable {
     }
 
     public func getContext(_ contextId: String) async throws -> Context {
-        let resp: ApiResponse<Context> = try await http.get("/admin-api/contexts/\(contextId)")
+        let resp: ApiResponse<Context> = try await http.get("/admin-api/contexts/\(contextId.pathSegment())")
         return try unwrap(resp, "getContext")
     }
 
     public func getContextsForApplication(_ applicationId: String) async throws -> GetContextsResponseData {
         let resp: ApiResponse<GetContextsResponseData> = try await http.get(
-            "/admin-api/contexts/for-application/\(applicationId)")
+            "/admin-api/contexts/for-application/\(applicationId.pathSegment())")
         return try unwrap(resp, "getContextsForApplication")
     }
 
@@ -426,13 +438,13 @@ public struct AdminApi: Sendable {
 
     public func getContextIdentities(_ contextId: String) async throws -> GetContextIdentitiesResponseData {
         let resp: ApiResponse<GetContextIdentitiesResponseData> = try await http.get(
-            "/admin-api/contexts/\(contextId)/identities")
+            "/admin-api/contexts/\(contextId.pathSegment())/identities")
         return try unwrap(resp, "getContextIdentities")
     }
 
     public func getContextIdentitiesOwned(_ contextId: String) async throws -> GetContextIdentitiesResponseData {
         let resp: ApiResponse<GetContextIdentitiesResponseData> = try await http.get(
-            "/admin-api/contexts/\(contextId)/identities-owned")
+            "/admin-api/contexts/\(contextId.pathSegment())/identities-owned")
         return try unwrap(resp, "getContextIdentitiesOwned")
     }
 
@@ -440,7 +452,7 @@ public struct AdminApi: Sendable {
 
     public func joinContext(_ contextId: String) async throws -> JoinContextResponseData {
         let resp: ApiResponse<JoinContextResponseData> = try await http.post(
-            "/admin-api/contexts/\(contextId)/join", json: EmptyObject())
+            "/admin-api/contexts/\(contextId.pathSegment())/join", json: EmptyObject())
         return try unwrap(resp, "joinContext")
     }
 
@@ -448,13 +460,13 @@ public struct AdminApi: Sendable {
 
     public func getContextGroup(_ contextId: String) async throws -> ContextGroupResponseData {
         // Value is `string | null`; return the optional directly (do NOT throw on null).
-        let resp: ApiResponse<String> = try await http.get("/admin-api/contexts/\(contextId)/group")
+        let resp: ApiResponse<String> = try await http.get("/admin-api/contexts/\(contextId.pathSegment())/group")
         return resp.data
     }
 
     public func getContextStorage(_ contextId: String) async throws -> ContextStorageResponseData {
         let resp: ApiResponse<ContextStorageResponseData> = try await http.get(
-            "/admin-api/contexts/\(contextId)/storage")
+            "/admin-api/contexts/\(contextId.pathSegment())/storage")
         return try unwrap(resp, "getContextStorage")
     }
 
@@ -466,7 +478,7 @@ public struct AdminApi: Sendable {
     /// build now answers 404, and nothing gets synced.
     public func syncContext(_ contextId: String? = nil) async throws {
         let path =
-            contextId.map { "/admin-api/contexts/sync/\($0)" } ?? "/admin-api/contexts/sync"
+            try contextId.map { try "/admin-api/contexts/sync/\($0.pathSegment())" } ?? "/admin-api/contexts/sync"
         try await http.sendVoid(jsonRequest(path, method: .post, body: EmptyObject()))
     }
 
@@ -480,7 +492,7 @@ public struct AdminApi: Sendable {
         // field), so parse the body directly — do NOT unwrap. An empty 2xx body
         // means the resync was accepted; synthesize the result so callers always
         // get a typed value instead of null.
-        let req = try jsonRequest("/admin-api/contexts/\(contextId)/resync", method: .post, body: request)
+        let req = try jsonRequest("/admin-api/contexts/\(contextId.pathSegment())/resync", method: .post, body: request)
         let (data, _) = try await http.sendRaw(req)
         if let r = try? Self.decoder.decode(ResyncContextResponseData.self, from: data) { return r }
         return ResyncContextResponseData(contextId: contextId, resyncStarted: true)
@@ -492,13 +504,13 @@ public struct AdminApi: Sendable {
         _ contextId: String, request: PerformIntentRequest
     ) async throws -> PerformIntentResponseData {
         let resp: ApiResponse<PerformIntentResponseData> = try await http.post(
-            "/admin-api/contexts/\(contextId)/intents", json: request)
+            "/admin-api/contexts/\(contextId.pathSegment())/intents", json: request)
         return try unwrap(resp, "performIntent")
     }
 
     public func updateContextApplication(_ contextId: String, request: UpdateContextApplicationRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/contexts/\(contextId)/application", method: .post, body: request))
+            jsonRequest("/admin-api/contexts/\(contextId.pathSegment())/application", method: .post, body: request))
     }
 
     public func getContextsWithExecutorsForApplication(
@@ -507,7 +519,7 @@ public struct AdminApi: Sendable {
         // Core returns this flat as { contexts: [...] } (not a bare array under `data`);
         // tolerate a bare array and the { data } envelope too.
         let (data, _) = try await http.sendRaw(
-            HttpRequest(path: "/admin-api/contexts/with-executors/for-application/\(applicationId)"))
+            HttpRequest(path: "/admin-api/contexts/with-executors/for-application/\(applicationId.pathSegment())"))
         if let arr = try? Self.decoder.decode([ContextWithExecutors].self, from: data) { return arr }
         struct Wrap: Decodable { let contexts: [ContextWithExecutors]?; let data: [ContextWithExecutors]? }
         if let w = try? Self.decoder.decode(Wrap.self, from: data) { return w.contexts ?? w.data ?? [] }
@@ -536,7 +548,7 @@ public struct AdminApi: Sendable {
     public func deleteBlob(_ blobId: String) async throws -> DeleteBlobResponseData {
         // Core's `BlobDeleteResponse` is a flat, snake_case payload (`{ blob_id,
         // deleted }`) — parse directly (no unwrap) and map to camelCase.
-        let wire: DeleteBlobWire = try await http.delete("/admin-api/blobs/\(blobId)")
+        let wire: DeleteBlobWire = try await http.delete("/admin-api/blobs/\(blobId.pathSegment())")
         return DeleteBlobResponseData(blobId: wire.blobId, deleted: wire.deleted)
     }
 
@@ -565,9 +577,11 @@ public struct AdminApi: Sendable {
     /// this call sees the local store and nothing else, and answers 404 for a
     /// blob that plainly exists on the node next to it.
     public func getBlob(_ blobId: String, contextId: String? = nil) async throws -> Data {
-        let req = HttpRequest(
-            path: Self.blobPath(blobId, contextId: contextId),
+        var req = HttpRequest(
+            path: try Self.blobPath(blobId, contextId: contextId),
             timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
+        // A blob is as large as it is: not held to the JSON response limit.
+        req.unboundedResponse = true
         let (data, _) = try await http.sendRaw(req)
         return data
     }
@@ -589,7 +603,7 @@ public struct AdminApi: Sendable {
         _ blobId: String, contextId: String? = nil
     ) async throws -> GetBlobInfoResponseData {
         let req = HttpRequest(
-            path: Self.blobPath(blobId, contextId: contextId), method: .head,
+            path: try Self.blobPath(blobId, contextId: contextId), method: .head,
             timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
         let (_, result) = try await http.sendRaw(req)
         return GetBlobInfoResponseData(
@@ -602,8 +616,8 @@ public struct AdminApi: Sendable {
         )
     }
 
-    private static func blobPath(_ blobId: String, contextId: String?) -> String {
-        let path = "/admin-api/blobs/\(blobId)"
+    private static func blobPath(_ blobId: String, contextId: String?) throws -> String {
+        let path = try "/admin-api/blobs/\(blobId.pathSegment())"
         // `context_id`, snake_case — the same spelling `uploadBlob` uses.
         guard let contextId else { return path }
         return path + "?context_id=\(contextId.percentEncoded())"
@@ -626,25 +640,25 @@ public struct AdminApi: Sendable {
 
     public func lookupContextAlias(_ name: String) async throws -> LookupAliasResponseData {
         let resp: ApiResponse<LookupAliasResponseData> = try await http.post(
-            "/admin-api/alias/lookup/context/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/lookup/context/\(name.pathSegment())", json: EmptyObject())
         return try unwrap(resp, "lookupContextAlias")
     }
 
     public func lookupApplicationAlias(_ name: String) async throws -> LookupAliasResponseData {
         let resp: ApiResponse<LookupAliasResponseData> = try await http.post(
-            "/admin-api/alias/lookup/application/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/lookup/application/\(name.pathSegment())", json: EmptyObject())
         return try unwrap(resp, "lookupApplicationAlias")
     }
 
     public func deleteContextAlias(_ name: String) async throws -> DeleteAliasResponseData {
         let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
-            "/admin-api/alias/delete/context/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/delete/context/\(name.pathSegment())", json: EmptyObject())
         return try emptyOK(resp, "deleteContextAlias")
     }
 
     public func deleteApplicationAlias(_ name: String) async throws -> DeleteAliasResponseData {
         let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
-            "/admin-api/alias/delete/application/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/delete/application/\(name.pathSegment())", json: EmptyObject())
         return try emptyOK(resp, "deleteApplicationAlias")
     }
 
@@ -680,13 +694,13 @@ public struct AdminApi: Sendable {
 
     public func lookupDeviceAlias(_ name: String) async throws -> LookupAliasResponseData {
         let resp: ApiResponse<LookupAliasResponseData> = try await http.post(
-            "/admin-api/alias/lookup/device/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/lookup/device/\(name.pathSegment())", json: EmptyObject())
         return try unwrap(resp, "lookupDeviceAlias")
     }
 
     public func deleteDeviceAlias(_ name: String) async throws -> DeleteAliasResponseData {
         let resp: ApiResponse<DeleteAliasResponseData> = try await http.post(
-            "/admin-api/alias/delete/device/\(name.percentEncoded())", json: EmptyObject())
+            "/admin-api/alias/delete/device/\(name.pathSegment())", json: EmptyObject())
         return try emptyOK(resp, "deleteDeviceAlias")
     }
 
@@ -698,13 +712,13 @@ public struct AdminApi: Sendable {
     }
 
     public func getNamespace(_ namespaceId: String) async throws -> Namespace {
-        let resp: ApiResponse<Namespace> = try await http.get("/admin-api/namespaces/\(namespaceId)")
+        let resp: ApiResponse<Namespace> = try await http.get("/admin-api/namespaces/\(namespaceId.pathSegment())")
         return try unwrap(resp, "getNamespace")
     }
 
     public func listNamespacesForApplication(_ applicationId: String) async throws -> ListNamespacesResponseData {
         let resp: ApiResponse<ListNamespacesResponseData> = try await http.get(
-            "/admin-api/namespaces/for-application/\(applicationId)")
+            "/admin-api/namespaces/for-application/\(applicationId.pathSegment())")
         return try unwrap(resp, "listNamespacesForApplication")
     }
 
@@ -740,9 +754,9 @@ public struct AdminApi: Sendable {
         // body is empty, so always send a (possibly empty) JSON body.
         let resp: ApiResponse<DeleteNamespaceResponseData>
         if let request {
-            resp = try await http.delete("/admin-api/namespaces/\(namespaceId)", json: request)
+            resp = try await http.delete("/admin-api/namespaces/\(namespaceId.pathSegment())", json: request)
         } else {
-            resp = try await http.delete("/admin-api/namespaces/\(namespaceId)", json: EmptyObject())
+            resp = try await http.delete("/admin-api/namespaces/\(namespaceId.pathSegment())", json: EmptyObject())
         }
         return try unwrap(resp, "deleteNamespace")
     }
@@ -752,9 +766,9 @@ public struct AdminApi: Sendable {
     ) async throws -> CreateNamespaceInvitationResult {
         let resp: ApiResponse<CreateNamespaceInvitationResult>
         if let request {
-            resp = try await http.post("/admin-api/namespaces/\(namespaceId)/invite", json: request)
+            resp = try await http.post("/admin-api/namespaces/\(namespaceId.pathSegment())/invite", json: request)
         } else {
-            resp = try await http.post("/admin-api/namespaces/\(namespaceId)/invite", json: EmptyObject())
+            resp = try await http.post("/admin-api/namespaces/\(namespaceId.pathSegment())/invite", json: EmptyObject())
         }
         return try unwrap(resp, "createNamespaceInvitation")
     }
@@ -764,7 +778,7 @@ public struct AdminApi: Sendable {
     ) async throws -> JoinNamespaceResponseData {
         // Join can be slow (network sync); use the TS 65s timeout.
         let req = try jsonRequest(
-            "/admin-api/namespaces/\(namespaceId)/join", method: .post, body: request, timeout: 65)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/join", method: .post, body: request, timeout: 65)
         let resp: ApiResponse<JoinNamespaceResponseData> = try await http.send(req)
         return try unwrap(resp, "joinNamespace")
     }
@@ -781,7 +795,7 @@ public struct AdminApi: Sendable {
         _ namespaceId: String, request: AdmitJoinRequest
     ) async throws -> AdmitJoinResponseData {
         let resp: ApiResponse<AdmitJoinResponseData> = try await http.post(
-            "/admin-api/namespaces/\(namespaceId)/admit", json: request)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/admit", json: request)
         return try unwrap(resp, "admitJoin")
     }
 
@@ -791,7 +805,7 @@ public struct AdminApi: Sendable {
         _ namespaceId: String, request: RevokeDeviceRequest
     ) async throws -> RevokeDeviceResponseData {
         let resp: ApiResponse<RevokeDeviceResponseData> = try await http.post(
-            "/admin-api/namespaces/\(namespaceId)/account/revoke", json: request)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/account/revoke", json: request)
         return try unwrap(resp, "revokeDevice")
     }
 
@@ -803,7 +817,7 @@ public struct AdminApi: Sendable {
     /// The handler serializes the payload directly: there is no `{ data }`
     /// envelope. (== mero-js `listNamespaceRevokedDevices`.)
     public func listNamespaceRevokedDevices(_ namespaceId: String) async throws -> NamespaceRevokedDevices {
-        try await http.get("/admin-api/namespaces/\(namespaceId.percentEncoded())/revoked-devices")
+        try await http.get("/admin-api/namespaces/\(namespaceId.pathSegment())/revoked-devices")
     }
 
     // MARK: - Account (devices, applications, pairing)
@@ -858,7 +872,7 @@ public struct AdminApi: Sendable {
         _ deviceId: String, request: RelinkDeviceRequest = RelinkDeviceRequest()
     ) async throws -> RelinkDeviceResponseData {
         let resp: ApiResponse<RelinkDeviceResponseData> = try await http.post(
-            "/admin-api/account/devices/\(deviceId)/relink", json: request)
+            "/admin-api/account/devices/\(deviceId.pathSegment())/relink", json: request)
         return try unwrap(resp, "relinkDevice")
     }
 
@@ -876,7 +890,7 @@ public struct AdminApi: Sendable {
         _ deviceId: String, request: RescopeDeviceRequest
     ) async throws -> RescopeDeviceResponseData {
         let resp: ApiResponse<RescopeDeviceResponseData> = try await http.put(
-            "/admin-api/account/devices/\(deviceId)/scope", json: request)
+            "/admin-api/account/devices/\(deviceId.pathSegment())/scope", json: request)
         return try unwrap(resp, "rescopeDevice")
     }
 
@@ -891,7 +905,7 @@ public struct AdminApi: Sendable {
         _ deviceId: String, request: LabelDeviceRequest
     ) async throws -> LabelDeviceResponseData {
         let resp: ApiResponse<LabelDeviceResponseData> = try await http.put(
-            "/admin-api/account/devices/\(deviceId)/label", json: request)
+            "/admin-api/account/devices/\(deviceId.pathSegment())/label", json: request)
         return try unwrap(resp, "labelDevice")
     }
 
@@ -909,19 +923,20 @@ public struct AdminApi: Sendable {
         var body = request ?? CreateGroupInNamespaceRequest()
         if body.visibility == nil { body.visibility = CreateGroupInNamespaceRequest.defaultVisibility }
         let resp: ApiResponse<CreateGroupInNamespaceResponseData> = try await http.post(
-            "/admin-api/namespaces/\(namespaceId)/groups", json: body)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/groups", json: body)
         return try unwrap(resp, "createGroupInNamespace")
     }
 
     public func listNamespaceGroups(_ namespaceId: String) async throws -> [SubgroupEntry] {
-        let resp: ApiResponse<[SubgroupEntry]> = try await http.get("/admin-api/namespaces/\(namespaceId)/groups")
+        let resp: ApiResponse<[SubgroupEntry]> = try await http.get(
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/groups")
         return try unwrap(resp, "listNamespaceGroups")
     }
 
     // MARK: - Group Management
 
     public func getGroupInfo(_ groupId: String) async throws -> GroupInfoResponseData {
-        let resp: ApiResponse<GroupInfoResponseData> = try await http.get("/admin-api/groups/\(groupId)")
+        let resp: ApiResponse<GroupInfoResponseData> = try await http.get("/admin-api/groups/\(groupId.pathSegment())")
         return try unwrap(resp, "getGroupInfo")
     }
 
@@ -944,9 +959,9 @@ public struct AdminApi: Sendable {
         // empty body, so always send a (possibly empty) JSON body.
         let resp: ApiResponse<DeleteGroupResponseData>
         if let request {
-            resp = try await http.delete("/admin-api/groups/\(groupId)", json: request)
+            resp = try await http.delete("/admin-api/groups/\(groupId.pathSegment())", json: request)
         } else {
-            resp = try await http.delete("/admin-api/groups/\(groupId)", json: EmptyObject())
+            resp = try await http.delete("/admin-api/groups/\(groupId.pathSegment())", json: EmptyObject())
         }
         return try unwrap(resp, "deleteGroup")
     }
@@ -963,7 +978,7 @@ public struct AdminApi: Sendable {
         var query: [String] = []
         if let offset { query.append("offset=\(offset)") }
         if let limit { query.append("limit=\(limit)") }
-        var path = "/admin-api/groups/\(groupId)/member-devices"
+        var path = try "/admin-api/groups/\(groupId.pathSegment())/member-devices"
         if !query.isEmpty { path += "?" + query.joined(separator: "&") }
         // Un-enveloped: core returns `{ members: [...] }` directly.
         let response: ListMemberDevicesResponseData = try await http.get(path)
@@ -974,7 +989,7 @@ public struct AdminApi: Sendable {
         // Response is un-enveloped ({ members, selfIdentity }). Validate the
         // non-optional `members` field so a contract-violating response surfaces
         // as a clear error rather than silently producing an empty list.
-        let (data, _) = try await http.sendRaw(HttpRequest(path: "/admin-api/groups/\(groupId)/members"))
+        let (data, _) = try await http.sendRaw(HttpRequest(path: "/admin-api/groups/\(groupId.pathSegment())/members"))
         struct Lenient: Decodable { let members: [GroupMember]?; let selfIdentity: String? }
         let lenient = try Self.decoder.decode(Lenient.self, from: data)
         guard let members = lenient.members else {
@@ -988,27 +1003,30 @@ public struct AdminApi: Sendable {
 
     public func listGroupContexts(_ groupId: String) async throws -> ListGroupContextsResponseData {
         let resp: ApiResponse<ListGroupContextsResponseData> = try await http.get(
-            "/admin-api/groups/\(groupId)/contexts")
+            "/admin-api/groups/\(groupId.pathSegment())/contexts")
         return try unwrap(resp, "listGroupContexts")
     }
 
     public func addGroupMembers(_ groupId: String, request: AddGroupMembersRequest) async throws {
-        try await http.sendVoid(jsonRequest("/admin-api/groups/\(groupId)/members", method: .post, body: request))
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/members", method: .post, body: request))
     }
 
     public func removeGroupMembers(_ groupId: String, request: RemoveGroupMembersRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/members/remove", method: .post, body: request))
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/members/remove", method: .post, body: request))
     }
 
     public func updateMemberRole(_ groupId: String, identity: String, request: UpdateMemberRoleRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/members/\(identity)/role", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/role",
+                method: .put, body: request))
     }
 
     public func getMemberCapabilities(_ groupId: String, identity: String) async throws -> MemberCapabilities {
         let resp: ApiResponse<MemberCapabilities> = try await http.get(
-            "/admin-api/groups/\(groupId)/members/\(identity)/capabilities")
+            "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/capabilities")
         return try unwrap(resp, "getMemberCapabilities")
     }
 
@@ -1016,28 +1034,36 @@ public struct AdminApi: Sendable {
         _ groupId: String, identity: String, request: SetMemberCapabilitiesRequest
     ) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/members/\(identity)/capabilities", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/capabilities",
+                method: .put, body: request))
     }
 
     public func setDefaultCapabilities(_ groupId: String, request: SetDefaultCapabilitiesRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/settings/default-capabilities", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/settings/default-capabilities",
+                method: .put, body: request))
     }
 
     public func setSubgroupVisibility(_ groupId: String, request: SetSubgroupVisibilityRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/settings/subgroup-visibility", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/settings/subgroup-visibility",
+                method: .put, body: request))
     }
 
     public func setTeeAdmissionPolicy(_ groupId: String, request: SetTeeAdmissionPolicyRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/settings/tee-admission-policy", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/settings/tee-admission-policy",
+                method: .put, body: request))
     }
 
     public func getTeeAdmissionPolicy(_ groupId: String) async throws -> GetTeeAdmissionPolicyResponseData {
         // `data` is optional so a flat (un-enveloped) response cleanly falls back.
         let (data, _) = try await http.sendRaw(
-            HttpRequest(path: "/admin-api/groups/\(groupId)/settings/tee-admission-policy"))
+            HttpRequest(path: "/admin-api/groups/\(groupId.pathSegment())/settings/tee-admission-policy"))
         struct Env: Decodable { let data: GetTeeAdmissionPolicyResponseData? }
         if let env = try? Self.decoder.decode(Env.self, from: data), let d = env.data { return d }
         return try Self.decoder.decode(GetTeeAdmissionPolicyResponseData.self, from: data)
@@ -1046,31 +1072,38 @@ public struct AdminApi: Sendable {
     // MARK: - Group / member / context metadata
 
     public func setGroupMetadata(_ groupId: String, request: SetGroupMetadataRequest) async throws {
-        try await http.sendVoid(jsonRequest("/admin-api/groups/\(groupId)/metadata", method: .put, body: request))
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/metadata", method: .put, body: request))
     }
 
     public func getGroupMetadata(_ groupId: String) async throws -> MetadataRecord? {
-        return try await getMetadataRecord("/admin-api/groups/\(groupId)/metadata")
+        return try await getMetadataRecord("/admin-api/groups/\(groupId.pathSegment())/metadata")
     }
 
     public func setMemberMetadata(_ groupId: String, identity: String, request: SetMemberMetadataRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/members/\(identity)/metadata", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/metadata",
+                method: .put, body: request))
     }
 
     public func getMemberMetadata(_ groupId: String, identity: String) async throws -> MetadataRecord? {
-        return try await getMetadataRecord("/admin-api/groups/\(groupId)/members/\(identity)/metadata")
+        return try await getMetadataRecord(
+            "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/metadata")
     }
 
     public func setContextMetadata(
         _ groupId: String, contextId: String, request: SetContextMetadataRequest
     ) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/contexts/\(contextId)/metadata", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/contexts/\(contextId.pathSegment())/metadata",
+                method: .put, body: request))
     }
 
     public func getContextMetadata(_ groupId: String, contextId: String) async throws -> MetadataRecord? {
-        return try await getMetadataRecord("/admin-api/groups/\(groupId)/contexts/\(contextId)/metadata")
+        return try await getMetadataRecord(
+            "/admin-api/groups/\(groupId.pathSegment())/contexts/\(contextId.pathSegment())/metadata")
     }
 
     /// Core single-envelopes the record: `{ data: MetadataRecord | null }`.
@@ -1087,9 +1120,9 @@ public struct AdminApi: Sendable {
     public func syncGroup(_ groupId: String, request: SyncGroupRequest? = nil) async throws -> SyncGroupResponseData {
         let resp: ApiResponse<SyncGroupResponseData>
         if let request {
-            resp = try await http.post("/admin-api/groups/\(groupId)/sync", json: request)
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/sync", json: request)
         } else {
-            resp = try await http.post("/admin-api/groups/\(groupId)/sync", json: EmptyObject())
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/sync", json: EmptyObject())
         }
         return try unwrap(resp, "syncGroup")
     }
@@ -1124,13 +1157,14 @@ public struct AdminApi: Sendable {
 
     public func upgradeGroup(_ groupId: String, request: UpgradeGroupRequest) async throws -> UpgradeGroupResponseData {
         let resp: ApiResponse<UpgradeGroupResponseData> = try await http.post(
-            "/admin-api/groups/\(groupId)/upgrade", json: request)
+            "/admin-api/groups/\(groupId.pathSegment())/upgrade", json: request)
         return try unwrap(resp, "upgradeGroup")
     }
 
     public func getGroupUpgradeStatus(_ groupId: String) async throws -> GroupUpgradeStatusResponseData {
         // Value is `GroupUpgradeStatus | null`; return the optional directly.
-        let resp: ApiResponse<GroupUpgradeStatus> = try await http.get("/admin-api/groups/\(groupId)/upgrade/status")
+        let resp: ApiResponse<GroupUpgradeStatus> = try await http.get(
+            "/admin-api/groups/\(groupId.pathSegment())/upgrade/status")
         return resp.data
     }
 
@@ -1138,13 +1172,13 @@ public struct AdminApi: Sendable {
     /// The handler serializes the payload directly, so there is no `{ data }`
     /// envelope to unwrap here (unlike most admin reads).
     public func getMigrationStatus(_ namespaceId: String) async throws -> MigrationStatus {
-        return try await http.get("/admin-api/groups/\(namespaceId.percentEncoded())/migration-status")
+        return try await http.get("/admin-api/groups/\(namespaceId.pathSegment())/migration-status")
     }
 
     /// Per-group cascade-migration snapshots for a namespace.
     public func getCascadeStatus(_ namespaceId: String) async throws -> [CascadeStatusEntry] {
         let resp: ApiResponse<[CascadeStatusEntry]> = try await http.get(
-            "/admin-api/groups/\(namespaceId.percentEncoded())/cascade-status")
+            "/admin-api/groups/\(namespaceId.pathSegment())/cascade-status")
         return try unwrap(resp, "getCascadeStatus")
     }
 
@@ -1153,9 +1187,9 @@ public struct AdminApi: Sendable {
     ) async throws -> RetryGroupUpgradeResponseData {
         let resp: ApiResponse<RetryGroupUpgradeResponseData>
         if let request {
-            resp = try await http.post("/admin-api/groups/\(groupId)/upgrade/retry", json: request)
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/upgrade/retry", json: request)
         } else {
-            resp = try await http.post("/admin-api/groups/\(groupId)/upgrade/retry", json: EmptyObject())
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/upgrade/retry", json: EmptyObject())
         }
         return try unwrap(resp, "retryGroupUpgrade")
     }
@@ -1165,7 +1199,8 @@ public struct AdminApi: Sendable {
         _ childGroupId: String, request: ReparentGroupRequest
     ) async throws -> ReparentGroupResponseData {
         // Core returns this flat ({ reparented }); tolerate the { data } envelope too.
-        let req = try jsonRequest("/admin-api/groups/\(childGroupId)/reparent", method: .post, body: request)
+        let req = try jsonRequest(
+            "/admin-api/groups/\(childGroupId.pathSegment())/reparent", method: .post, body: request)
         let (data, _) = try await http.sendRaw(req)
         struct Env: Decodable { let data: ReparentGroupResponseData?; let reparented: Bool? }
         let env = try Self.decoder.decode(Env.self, from: data)
@@ -1175,7 +1210,7 @@ public struct AdminApi: Sendable {
 
     public func listSubgroups(_ groupId: String) async throws -> [SubgroupEntry] {
         struct Wire: Codable, Sendable { let subgroups: [SubgroupEntry]?; let data: [SubgroupEntry]? }
-        let wire: Wire = try await http.get("/admin-api/groups/\(groupId)/subgroups")
+        let wire: Wire = try await http.get("/admin-api/groups/\(groupId.pathSegment())/subgroups")
         return wire.subgroups ?? wire.data ?? []
     }
 
@@ -1184,11 +1219,14 @@ public struct AdminApi: Sendable {
     ) async throws {
         if let request {
             try await http.sendVoid(
-                jsonRequest("/admin-api/groups/\(groupId)/contexts/\(contextId)/remove", method: .post, body: request))
+                jsonRequest(
+                    "/admin-api/groups/\(groupId.pathSegment())/contexts/\(contextId.pathSegment())/remove",
+                    method: .post, body: request))
         } else {
             try await http.sendVoid(
                 jsonRequest(
-                    "/admin-api/groups/\(groupId)/contexts/\(contextId)/remove", method: .post, body: EmptyObject()))
+                    "/admin-api/groups/\(groupId.pathSegment())/contexts/\(contextId.pathSegment())/remove",
+                    method: .post, body: EmptyObject()))
         }
     }
 
@@ -1199,9 +1237,9 @@ public struct AdminApi: Sendable {
     ) async throws -> CreateGroupInvitationResult {
         let resp: ApiResponse<CreateGroupInvitationResult>
         if let request {
-            resp = try await http.post("/admin-api/groups/\(groupId)/invite", json: request)
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/invite", json: request)
         } else {
-            resp = try await http.post("/admin-api/groups/\(groupId)/invite", json: EmptyObject())
+            resp = try await http.post("/admin-api/groups/\(groupId.pathSegment())/invite", json: EmptyObject())
         }
         return try unwrap(resp, "createGroupInvitation")
     }
@@ -1213,7 +1251,7 @@ public struct AdminApi: Sendable {
 
     public func joinSubgroupInheritance(_ groupId: String) async throws -> JoinSubgroupInheritanceResponseData {
         let resp: ApiResponse<JoinSubgroupInheritanceResponseData> = try await http.post(
-            "/admin-api/groups/\(groupId)/join-via-inheritance", json: EmptyObject())
+            "/admin-api/groups/\(groupId.pathSegment())/join-via-inheritance", json: EmptyObject())
         return try unwrap(resp, "joinSubgroupInheritance")
     }
 
@@ -1283,25 +1321,30 @@ public struct AdminApi: Sendable {
 
     /// Leave a group (POST /admin-api/groups/:group_id/leave).
     public func leaveGroup(_ groupId: String, request: [String: JSONValue]? = nil) async throws {
-        try await http.sendVoid(jsonRequest("/admin-api/groups/\(groupId)/leave", method: .post, body: request ?? [:]))
+        try await http.sendVoid(
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/leave", method: .post, body: request ?? [:]))
     }
 
     /// Leave a context (POST /admin-api/contexts/:context_id/leave).
     public func leaveContext(_ contextId: String, request: [String: JSONValue]? = nil) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/contexts/\(contextId)/leave", method: .post, body: request ?? [:]))
+            jsonRequest("/admin-api/contexts/\(contextId.pathSegment())/leave", method: .post, body: request ?? [:]))
     }
 
     /// Leave a namespace (POST /admin-api/namespaces/:namespace_id/leave).
     public func leaveNamespace(_ namespaceId: String, request: [String: JSONValue]? = nil) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/namespaces/\(namespaceId)/leave", method: .post, body: request ?? [:]))
+            jsonRequest(
+                "/admin-api/namespaces/\(namespaceId.pathSegment())/leave",
+                method: .post, body: request ?? [:]))
     }
 
     /// Issue a group ownership proof (POST /admin-api/groups/:group_id/issue-ownership-proof).
     public func issueOwnershipProof(_ groupId: String, request: [String: JSONValue]? = nil) async throws -> JSONValue {
         return try await rawJSON(
-            jsonRequest("/admin-api/groups/\(groupId)/issue-ownership-proof", method: .post, body: request ?? [:]))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/issue-ownership-proof",
+                method: .post, body: request ?? [:]))
     }
 
     /// Issue a namespace ownership proof (POST /admin-api/groups/:group_id/issue-namespace-ownership-proof).
@@ -1310,19 +1353,24 @@ public struct AdminApi: Sendable {
     ) async throws -> JSONValue {
         return try await rawJSON(
             jsonRequest(
-                "/admin-api/groups/\(groupId)/issue-namespace-ownership-proof", method: .post, body: request ?? [:]))
+                "/admin-api/groups/\(groupId.pathSegment())/issue-namespace-ownership-proof",
+                method: .post, body: request ?? [:]))
     }
 
     /// Set a member's auto-follow flag (PUT /admin-api/groups/:group_id/members/:identity/auto-follow).
     public func setMemberAutoFollow(_ groupId: String, identity: String, request: [String: JSONValue]) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/members/\(identity)/auto-follow", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/members/\(identity.pathSegment())/auto-follow",
+                method: .put, body: request))
     }
 
     /// Abort a namespace migration (POST /admin-api/groups/:namespace_id/migration/abort).
     public func abortMigration(_ namespaceId: String, request: [String: JSONValue]? = nil) async throws -> JSONValue {
         return try await rawJSON(
-            jsonRequest("/admin-api/groups/\(namespaceId)/migration/abort", method: .post, body: request ?? [:]))
+            jsonRequest(
+                "/admin-api/groups/\(namespaceId.pathSegment())/migration/abort",
+                method: .post, body: request ?? [:]))
     }
 
     // MARK: - Ownership proofs (typed; core rc.83)
@@ -1333,7 +1381,9 @@ public struct AdminApi: Sendable {
         _ groupId: String, request: IssueOwnershipProofRequest
     ) async throws -> IssueOwnershipProofResponseData {
         try await flatOrEnveloped(
-            jsonRequest("/admin-api/groups/\(groupId)/issue-ownership-proof", method: .post, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/issue-ownership-proof",
+                method: .post, body: request))
     }
 
     /// Issue a namespace ownership proof, typed. Since core rc.83 the answer can
@@ -1344,7 +1394,8 @@ public struct AdminApi: Sendable {
     ) async throws -> IssueOwnershipProofResponseData {
         try await flatOrEnveloped(
             jsonRequest(
-                "/admin-api/groups/\(groupId)/issue-namespace-ownership-proof", method: .post, body: request))
+                "/admin-api/groups/\(groupId.pathSegment())/issue-namespace-ownership-proof",
+                method: .post, body: request))
     }
 
     private func flatOrEnveloped<T: Codable & Sendable>(_ req: HttpRequest) async throws -> T {
@@ -1373,7 +1424,7 @@ public struct AdminApi: Sendable {
         _ contextId: String, request: QueryContextRequest
     ) async throws -> QueryContextResponseData {
         let resp: ApiResponse<QueryContextResponseData> = try await http.post(
-            "/admin-api/contexts/\(contextId)/query", json: request)
+            "/admin-api/contexts/\(contextId.pathSegment())/query", json: request)
         return try unwrap(resp, "queryContext")
     }
 
@@ -1384,7 +1435,8 @@ public struct AdminApi: Sendable {
     /// `canAuthorOnBehalf: false` is an answer, not an error. `404` means the
     /// node holds no identity in the context, or its group names no release yet.
     public func getIntentRelay(_ contextId: String) async throws -> IntentRelayInfo {
-        let resp: ApiResponse<IntentRelayInfo> = try await http.get("/admin-api/contexts/\(contextId)/intents")
+        let resp: ApiResponse<IntentRelayInfo> = try await http.get(
+            "/admin-api/contexts/\(contextId.pathSegment())/intents")
         return try unwrap(resp, "getIntentRelay")
     }
 
@@ -1393,7 +1445,9 @@ public struct AdminApi: Sendable {
     /// Core answers `204` with no body.
     public func postPresenceIntent(_ contextId: String, request: PresenceIntentRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/contexts/\(contextId)/presence-intents", method: .post, body: request))
+            jsonRequest(
+                "/admin-api/contexts/\(contextId.pathSegment())/presence-intents",
+                method: .post, body: request))
     }
 
     /// Sign a presence update with the device key in `keys` and post it
@@ -1414,7 +1468,7 @@ public struct AdminApi: Sendable {
     public func getContextIntentRelay(
         _ groupId: String, author: String? = nil
     ) async throws -> ContextIntentRelayInfo {
-        var path = "/admin-api/groups/\(groupId)/context-intents"
+        var path = try "/admin-api/groups/\(groupId.pathSegment())/context-intents"
         if let author { path += "?author=\(author.percentEncoded())" }
         let resp: ApiResponse<ContextIntentRelayInfo> = try await http.get(path)
         return try unwrap(resp, "getContextIntentRelay")
@@ -1425,14 +1479,14 @@ public struct AdminApi: Sendable {
         _ groupId: String, request: CreateContextIntentRequest
     ) async throws -> CreateContextIntentResponseData {
         let resp: ApiResponse<CreateContextIntentResponseData> = try await http.post(
-            "/admin-api/groups/\(groupId)/context-intents", json: request)
+            "/admin-api/groups/\(groupId.pathSegment())/context-intents", json: request)
         return try unwrap(resp, "createContextIntent")
     }
 
     /// What this node can do to govern `groupId` on a member's behalf.
     public func getGovernanceIntentRelay(_ groupId: String) async throws -> GovernanceIntentRelayInfo {
         let resp: ApiResponse<GovernanceIntentRelayInfo> = try await http.get(
-            "/admin-api/groups/\(groupId)/governance-intents")
+            "/admin-api/groups/\(groupId.pathSegment())/governance-intents")
         return try unwrap(resp, "getGovernanceIntentRelay")
     }
 
@@ -1441,7 +1495,7 @@ public struct AdminApi: Sendable {
         _ groupId: String, request: GovernanceIntentRequest
     ) async throws -> GovernanceIntentResponseData {
         let resp: ApiResponse<GovernanceIntentResponseData> = try await http.post(
-            "/admin-api/groups/\(groupId)/governance-intents", json: request)
+            "/admin-api/groups/\(groupId.pathSegment())/governance-intents", json: request)
         return try unwrap(resp, "governanceIntent")
     }
 
@@ -1463,7 +1517,7 @@ public struct AdminApi: Sendable {
         _ namespaceId: String, request: LinkAccountDeviceRequest
     ) async throws -> LinkAccountDeviceResponseData {
         let resp: ApiResponse<LinkAccountDeviceResponseData> = try await http.post(
-            "/admin-api/namespaces/\(namespaceId)/account/link-device", json: request)
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/account/link-device", json: request)
         return try unwrap(resp, "linkAccountDevice")
     }
 
@@ -1473,7 +1527,7 @@ public struct AdminApi: Sendable {
         _ groupId: String, account: String, request: SealToAccountRequest
     ) async throws -> SealedEnvelope {
         let resp: ApiResponse<SealedEnvelope> = try await http.post(
-            "/admin-api/groups/\(groupId)/accounts/\(account)/seal", json: request)
+            "/admin-api/groups/\(groupId.pathSegment())/accounts/\(account.pathSegment())/seal", json: request)
         return try unwrap(resp, "sealToAccount")
     }
 
@@ -1530,13 +1584,13 @@ public struct AdminApi: Sendable {
     /// Hand `groupId` to `newOwner`, who must already be one of its admins.
     public func transferOwnership(_ groupId: String, request: TransferOwnershipRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/transfer-ownership", method: .post, body: request))
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/transfer-ownership", method: .post, body: request))
     }
 
     /// Point the namespace's admin at `newAdmin`, a member of its root group.
     public func changeNamespaceAdmin(_ namespaceId: String, request: ChangeNamespaceAdminRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/namespaces/\(namespaceId)/admin", method: .post, body: request))
+            jsonRequest("/admin-api/namespaces/\(namespaceId.pathSegment())/admin", method: .post, body: request))
     }
 
     /// Delete a group through the owner-only path. The group must hold no
@@ -1545,7 +1599,7 @@ public struct AdminApi: Sendable {
         _ groupId: String, request: RootGuardedOpRequest = RootGuardedOpRequest()
     ) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/owner-delete", method: .post, body: request))
+            jsonRequest("/admin-api/groups/\(groupId.pathSegment())/owner-delete", method: .post, body: request))
     }
 
     /// Set which admitted TEEs may author as the namespace's TEE authority.
@@ -1553,14 +1607,16 @@ public struct AdminApi: Sendable {
     /// authorship off. The node has no read-back route for this policy.
     public func setTeeAuthoringPolicy(_ groupId: String, request: SetTeeAuthoringPolicyRequest) async throws {
         try await http.sendVoid(
-            jsonRequest("/admin-api/groups/\(groupId)/settings/tee-authoring-policy", method: .put, body: request))
+            jsonRequest(
+                "/admin-api/groups/\(groupId.pathSegment())/settings/tee-authoring-policy",
+                method: .put, body: request))
     }
 
     /// Turn TEE authorship off in the namespace. Admitted TEEs stay members.
     public func disableTeeAuthoringPolicy(
         _ groupId: String, request: RootGuardedOpRequest = RootGuardedOpRequest()
     ) async throws {
-        let path = "/admin-api/groups/\(groupId)/settings/tee-authoring-policy"
+        let path = try "/admin-api/groups/\(groupId.pathSegment())/settings/tee-authoring-policy"
         if request.rootProof == nil {
             try await http.sendVoid(HttpRequest(path: path, method: .delete))
         } else {

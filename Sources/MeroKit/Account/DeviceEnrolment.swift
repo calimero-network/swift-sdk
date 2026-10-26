@@ -75,6 +75,7 @@ public enum DeviceEnrolment {
         ]
         if let state, !state.isEmpty { params.append(("state", state)) }
 
+        try TransportSecurity.checkServiceURL(walletURL, role: "wallet")
         guard var components = URLComponents(url: walletURL, resolvingAgainstBaseURL: false) else {
             throw AccountError.invalidInput("walletURL is not a URL: \(walletURL)")
         }
@@ -120,14 +121,17 @@ public enum DeviceEnrolment {
     /// half-checked credential. Every throw is a credential that must not be
     /// stored.
     ///
-    /// Checks, in order: the `state` (when the app has one to compare), the
-    /// certificate itself (``DeviceCertificates/verify(_:)``), that it
+    /// Checks, in order: the `state` — `expectState` is the one this app sent,
+    /// and with none there is nothing to answer, so the callback is refused
+    /// (``AccountError/stateMismatch``) — the certificate itself (``DeviceCertificates/verify(_:)``), that it
     /// certifies **this** app's signing and delivery keys, and that the account
     /// and device reported beside it are the ones it names.
     public static func completeEnrolment(
         _ callback: EnrolmentCallback, devicePublicKey: String, kemPublicKey: String?, expectState: String?
     ) throws -> EnrolledDevice {
-        if let expectState, expectState != callback.state {
+        // Unsolicited answers are refused: a credential the app never asked for
+        // would sign it in to whoever minted it (login CSRF).
+        guard let expectState, !expectState.isEmpty, expectState == callback.state else {
             throw AccountError.stateMismatch
         }
 

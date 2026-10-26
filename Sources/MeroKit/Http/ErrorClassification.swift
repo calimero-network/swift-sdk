@@ -203,7 +203,7 @@ private func classify(_ error: AccountError) -> ClassifiedError {
             message: reason.isEmpty ? message : reason)
     case .haRefused(_, let status, _):
         return ClassifiedError(kind: ErrorKind(status: status), status: status, message: message)
-    case .invalidInput, .credentialRejected, .stateMismatch, .protocolViolation:
+    case .invalidInput, .credentialRejected, .stateMismatch, .accountSwitch, .protocolViolation:
         return ClassifiedError(kind: .invalid, status: nil, message: message)
     case .enrolmentDeclined, .linkDeclined, .notForAccount:
         return ClassifiedError(kind: .forbidden, status: nil, message: message)

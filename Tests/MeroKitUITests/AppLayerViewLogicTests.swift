@@ -90,6 +90,19 @@ final class AppLayerViewLogicTests: XCTestCase {
         XCTAssertFalse(model.canConnect)
     }
 
+    func testATypedNodeAcrossTheNetworkMustBeHttps() async {
+        let model = NodeLoginModel(ports: [])
+        model.customURL = "http://node.example:2428"
+        XCTAssertTrue(model.isInsecure, "a password would cross the network in the clear")
+        let target = await model.resolveTarget()
+        XCTAssertNil(target)
+        XCTAssertEqual(model.error, MeroClient.insecureNodeURLMessage)
+        for url in ["https://node.example", "node.example", "http://192.168.1.5:2428", "http://localhost:2428"] {
+            model.customURL = url
+            XCTAssertFalse(model.isInsecure, url)
+        }
+    }
+
     func testTheLogoPathFillsItsViewBox() {
         let bounds = CalimeroLogoShape().path(in: CGRect(x: 0, y: 0, width: 193, height: 193)).boundingRect
         XCTAssertGreaterThan(bounds.width, 180)

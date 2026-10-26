@@ -56,7 +56,7 @@ final class RelayAttestationTests: XCTestCase {
     ) async throws -> AttestedNodeKey {
         try await attestRelayNodeKey(
             AttestRelayNodeKeyOptions(
-                relayURL: "http://r", allowMock: allowMock, verify: verify, verifyQuote: verifyQuote,
+                relayURL: "https://r", allowMock: allowMock, verify: verify, verifyQuote: verifyQuote,
                 session: MockURLProtocol.makeSession()))
     }
 
@@ -147,20 +147,27 @@ final class RelayAttestationTests: XCTestCase {
             boundPublicKey: Hex.encode(key), collateral: collateral)
     }
 
-    func testTakesAMockOnlyFromALoopbackRelay() async throws {
+    func testRefusesAMockEvenFromALoopbackRelayUnlessAllowed() async throws {
         let nonce = randomBytes(32)
         let quote = mockHeader + nonce + attestKeyBinding(key)
-        let verifier = DcapRelayKeyVerifier(
-            verifier: AnyTransportQuoteVerifier { _ in
-                XCTFail("a mock quote is never sent to the verifier")
-                return true
-            })
-        let local = try await verifier.verify(attestation(quote, relayURL: "http://localhost:2428", nonce: nonce))
-        XCTAssertEqual(local, Hex.encode(key))
+        let never = AnyTransportQuoteVerifier { _ in
+            XCTFail("a mock quote is never sent to the verifier")
+            return true
+        }
+        let verifier = DcapRelayKeyVerifier(verifier: never)
+        // Another app on the device can listen on 127.0.0.1.
+        let local = await teeAsyncThrownMessage {
+            _ = try await verifier.verify(self.attestation(quote, relayURL: "http://localhost:2428", nonce: nonce))
+        }
+        assertTeeRefusal(local, "MOCK")
         let hosted = await teeAsyncThrownMessage {
             _ = try await verifier.verify(self.attestation(quote, nonce: nonce))
         }
         assertTeeRefusal(hosted, "MOCK")
+
+        let devRig = DcapRelayKeyVerifier(verifier: never, allowMock: true)
+        let accepted = try await devRig.verify(attestation(quote, relayURL: "http://localhost:2428", nonce: nonce))
+        XCTAssertEqual(accepted, Hex.encode(key))
     }
 
     func testVerifiesARealQuoteByItsVerifierThenItsBinding() async throws {

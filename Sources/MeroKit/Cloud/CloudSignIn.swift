@@ -83,6 +83,18 @@ public struct CloudSession: Codable, Sendable, Equatable {
     public var isConfirmedRelayless: Bool { relayUrl == nil && noRelayConfirmed == true }
 }
 
+/// The enrolment this app began and has not yet had answered: the `state` it
+/// sent the wallet, and when that stops being answerable. Single-use.
+public struct PendingEnrolment: Codable, Sendable, Equatable {
+    public var state: String
+    public var expiresAt: Date
+
+    public init(state: String, expiresAt: Date) {
+        self.state = state
+        self.expiresAt = expiresAt
+    }
+}
+
 /// A live connection to the account's relay.
 public struct CloudConnection: Sendable {
     public let session: CloudSession
@@ -147,7 +159,8 @@ public actor CloudSignIn {
     private let tokenStore: any TokenStore
     private let nonces: any WarrantNonceStore
     private let urlSession: URLSession
-    private var pendingState: String?
+    private let pendingStore: AnyValueStore<PendingEnrolment>
+    private let now: @Sendable () -> Date
     /// The account's relay map, subgroup namespaces and pinned relay keys.
     public let delegatedStore: DelegatedAccountStore
 
@@ -156,9 +169,11 @@ public actor CloudSignIn {
         keyStore: AnyValueStore<DeviceKeys>,
         sessionStore: AnyValueStore<CloudSession>,
         tokenStore: any TokenStore = MemoryTokenStore(),
-        nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(),
+        nonces: any WarrantNonceStore = WarrantNonces.shared,
         urlSession: URLSession = .shared,
-        delegatedStore: DelegatedAccountStore = .shared
+        delegatedStore: DelegatedAccountStore = .shared,
+        pendingEnrolmentStore: AnyValueStore<PendingEnrolment> = .memory(),
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.config = config
         self.keyStore = keyStore
@@ -167,7 +182,12 @@ public actor CloudSignIn {
         self.nonces = nonces
         self.urlSession = urlSession
         self.delegatedStore = delegatedStore
+        self.pendingStore = pendingEnrolmentStore
+        self.now = now
     }
+
+    /// How long a begun enrolment stays answerable: 10 minutes (as SSO logins).
+    public static let enrolmentStateLifetime: TimeInterval = 10 * 60
 
     /// What the ``DelegatedAccounts`` helpers run with for this sign-in.
     public nonisolated var delegatedEnvironment: DelegatedEnvironment {
@@ -180,17 +200,27 @@ public actor CloudSignIn {
     }
 
     #if canImport(Security)
-    /// Keychain-backed device keys, session and tokens; nonces in `UserDefaults`.
+    /// Everything in the Keychain under `service`: device keys, session,
+    /// tokens, the pending enrolment (so a relaunch while the wallet is open can
+    /// still finish), warrant nonces and the relay map with its pinned relay keys
+    /// (the latter two moved over from `UserDefaults`, where earlier versions
+    /// kept them, on first read).
     public static func keychain(
         config: CloudConfig = CloudConfig(), service: String = "network.calimero.merokit",
         accessGroup: String? = nil, urlSession: URLSession = .shared
     ) -> CloudSignIn {
-        CloudSignIn(
+        let shared = service == "network.calimero.merokit" && accessGroup == nil
+        return CloudSignIn(
             config: config,
             keyStore: .keychain(account: "cloud-device-keys", service: service, accessGroup: accessGroup),
             sessionStore: .keychain(account: "cloud-session", service: service, accessGroup: accessGroup),
             tokenStore: KeychainTokenStore(service: service, account: "cloud-relay-tokens", accessGroup: accessGroup),
-            urlSession: urlSession)
+            nonces: shared
+                ? WarrantNonces.shared : StoredWarrantNonceStore.keychain(service: service, accessGroup: accessGroup),
+            urlSession: urlSession,
+            delegatedStore: shared ? .shared : .keychain(service: service, accessGroup: accessGroup),
+            pendingEnrolmentStore: .keychain(account: "cloud-enrol-pending", service: service, accessGroup: accessGroup)
+        )
     }
     #endif
 
@@ -207,34 +237,62 @@ public actor CloudSignIn {
     // MARK: - Enrolment
 
     /// The wallet URL to open, naming this device's keys and `callbackURL`.
-    /// Remembers a fresh `state` to compare on return.
+    /// Remembers a fresh `state` (in the pending-enrolment store, for
+    /// ``enrolmentStateLifetime``) to compare on return; it replaces any earlier one.
     public func beginEnrolment(callbackURL: String) throws -> URL {
         let keys = deviceKeys()
         let state = DeviceEnrolment.makeState()
         let url = try DeviceEnrolment.url(
             walletURL: config.walletURL, devicePublicKey: keys.signPublicKey, kemPublicKey: keys.kemPublicKey,
             callbackURL: callbackURL, state: state)
-        pendingState = state
+        pendingStore.save(
+            PendingEnrolment(state: state, expiresAt: now().addingTimeInterval(Self.enrolmentStateLifetime)))
         return url
     }
 
     /// Verify the wallet's answer, find the account's relay, and persist the
     /// session. Throws ``AccountError`` for a declined, foreign or invalid
-    /// enrolment — nothing is stored then.
+    /// enrolment — nothing is stored then:
+    ///
+    /// - ``AccountError/stateMismatch`` unless it answers the enrolment this
+    ///   app began (``beginEnrolment(callbackURL:)``), unexpired and not yet
+    ///   answered. An answer nobody asked for is refused.
+    /// - ``AccountError/accountSwitch(current:incoming:)`` when this device is
+    ///   signed in to another account, unless `allowAccountSwitch` (ask the
+    ///   person first). The pending state is kept, so the same callback can be
+    ///   completed again once they confirm.
     @discardableResult
-    public func completeEnrolment(callbackURL: URL) async throws -> CloudSession {
-        guard let callback = try DeviceEnrolment.readCallback(callbackURL) else {
+    public func completeEnrolment(callbackURL: URL, allowAccountSwitch: Bool = false) async throws -> CloudSession {
+        let callback: EnrolmentCallback?
+        do {
+            callback = try DeviceEnrolment.readCallback(callbackURL)
+        } catch {
+            pendingStore.clear()
+            throw error
+        }
+        guard let callback else {
             throw AccountError.protocolViolation("the wallet returned no credential")
         }
-        return try await completeEnrolment(callback)
+        return try await completeEnrolment(callback, allowAccountSwitch: allowAccountSwitch)
     }
 
-    /// As ``completeEnrolment(callbackURL:)``, from an already-parsed callback.
+    /// As ``completeEnrolment(callbackURL:allowAccountSwitch:)``, from an already-parsed callback.
     @discardableResult
-    public func completeEnrolment(_ callback: EnrolmentCallback) async throws -> CloudSession {
+    public func completeEnrolment(
+        _ callback: EnrolmentCallback, allowAccountSwitch: Bool = false
+    ) async throws -> CloudSession {
         let keys = deviceKeys()
-        let enrolled = try DeviceEnrolment.completeEnrolment(callback, keys: keys, expectState: pendingState)
-        pendingState = nil
+        var pending = pendingStore.load()
+        if let expiry = pending?.expiresAt, expiry <= now() {
+            pendingStore.clear()
+            pending = nil
+        }
+        let enrolled = try DeviceEnrolment.completeEnrolment(callback, keys: keys, expectState: pending?.state)
+        if !allowAccountSwitch, let current = sessionStore.load()?.account, current != enrolled.account {
+            throw AccountError.accountSwitch(current: current, incoming: enrolled.account)
+        }
+        // Spent before the first suspension, so the same answer cannot be completed twice.
+        pendingStore.clear()
 
         var session = CloudSession(account: enrolled.account, device: enrolled.device, credential: enrolled.credential)
         do {
@@ -423,16 +481,29 @@ public actor CloudSignIn {
 
     // MARK: - Sign out
 
-    /// Retire the relay session (`POST /auth/logout`), then forget the account.
-    /// The device keys stay unless `forgetDevice`.
+    /// Retire the relay session (`POST /auth/logout`), then forget the account:
+    /// its tokens, session, pending enrolment, relay map, subgroup namespaces
+    /// and the pinned keys of the relays it used
+    /// (``DelegatedAccountStore/forget(account:relays:)``).
+    ///
+    /// The device keys stay unless `forgetDevice`, and so do the warrant
+    /// nonces: they were spent under those keys, and a node refuses a nonce it
+    /// has seen from a device, so they go only with the keys. Pass
+    /// `forgetDevice` on a shared or handed-over device, so the next account
+    /// signs in with a fresh key rather than one certified to this one.
     public func signOut(forgetDevice: Bool = false) async {
-        if let relayUrl = sessionStore.load()?.relayUrl, let tokens = tokenStore.getTokens() {
+        let session = sessionStore.load()
+        if let relayUrl = session?.relayUrl, let tokens = tokenStore.getTokens() {
             await RelayLogin.logout(relayURL: relayUrl, refreshToken: tokens.refreshToken, session: urlSession)
         }
         tokenStore.clear()
         sessionStore.clear()
-        pendingState = nil
-        if forgetDevice { keyStore.clear() }
+        pendingStore.clear()
+        if let session { delegatedStore.forget(account: session.account, relays: session.relayUrl.map { [$0] } ?? []) }
+        if forgetDevice {
+            keyStore.clear()
+            nonces.clear()
+        }
     }
 
     private func cloudClient(keys: DeviceKeys, credential: String) -> CloudClient {

@@ -26,7 +26,7 @@ struct MeroSampleApp: App {
             config.protocolClasses = [UITestMockURLProtocol.self]
             let urlSession = URLSession(configuration: config)
             let cloud = CloudSignIn(
-                config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true)),
+                config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true)),
                 keyStore: .memory(), sessionStore: .memory(), nonces: MemoryWarrantNonceStore(),
                 urlSession: urlSession)
             _mockClient = StateObject(
