@@ -2,6 +2,18 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: outbound approvals
+
+- **A namespace approves an app's outbound requests** (calimero-network/core#4690).
+  `CreateNamespaceRequest.approveOutbound` and `UpgradeGroupRequest.approveOutbound`
+  take an `OutboundSelection` (`.manifest` or `.prefixes([...])`), sent only
+  when set; the responses carry the resulting `outboundApproval`.
+- **`listOutboundApprovals(_:)`** (`GET /namespaces/{id}/outbound-approvals`)
+  lists what a namespace approves, per publisher; **`setOutboundApproval(_:request:)`**
+  (`PUT`, same path) sets one publisher's list exactly, and an empty list revokes.
+  Both are on `AdminSurface`; an account reads the list through its relay and is
+  refused `setOutboundApproval`, and `createNamespace` with `approveOutbound`, by name.
+
 ## Unreleased: request proofs refuse a window a node would refuse
 
 - **A request-proof window is capped at `maxRequestProofTTLSeconds` (300)**,

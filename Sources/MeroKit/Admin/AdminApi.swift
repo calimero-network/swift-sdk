@@ -727,6 +727,26 @@ public struct AdminApi: Sendable {
         return try unwrap(resp, "createNamespace")
     }
 
+    /// What the namespace approves for outbound requests, one entry per
+    /// publisher (bundle signer). Readable by anyone who may read the namespace.
+    public func listOutboundApprovals(_ namespaceId: String) async throws -> ListOutboundApprovalsResponseData {
+        let resp: ApiResponse<ListOutboundApprovalsResponseData> = try await http.get(
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals")
+        return try unwrap(resp, "listOutboundApprovals")
+    }
+
+    /// Set what the namespace approves for the publisher of
+    /// `request.applicationId` (an app installed on this node) to exactly
+    /// `request.approve`: an empty ``OutboundSelection/prefixes(_:)`` revokes
+    /// everything. It takes effect at the app's next run.
+    public func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async throws -> SetOutboundApprovalResponseData {
+        let resp: ApiResponse<SetOutboundApprovalResponseData> = try await http.put(
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals", json: request)
+        return try unwrap(resp, "setOutboundApproval")
+    }
+
     public func deleteNamespace(
         _ namespaceId: String, request: DeleteNamespaceRequest? = nil
     ) async throws -> DeleteNamespaceResponseData {

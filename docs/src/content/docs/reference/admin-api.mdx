@@ -241,6 +241,18 @@ answers all four with 404.
 | `changeNamespaceAdmin(_ namespaceId: String, request: ChangeNamespaceAdminRequest)` | `POST /namespaces/{namespaceId}/admin` |
 | `listNamespaceGroups(_ namespaceId: String) -> [SubgroupEntry]` | `GET /namespaces/{namespaceId}/groups` |
 | `admitJoin(_ namespaceId: String, request: AdmitJoinRequest) -> AdmitJoinResponseData` | `POST /namespaces/{namespaceId}/admit` |
+| `listOutboundApprovals(_ namespaceId: String) -> [OutboundApproval]` | `GET /namespaces/{namespaceId}/outbound-approvals` |
+| `setOutboundApproval(_ namespaceId: String, request: SetOutboundApprovalRequest) -> SetOutboundApprovalResponseData` | `PUT /namespaces/{namespaceId}/outbound-approvals` |
+
+**Outbound approvals.** An app's outbound HTTPS request needs its namespace's
+approval for the app's publisher (bundle signer). Approve in the call that
+installs or upgrades it: `CreateNamespaceRequest.approveOutbound` and
+`UpgradeGroupRequest.approveOutbound` take an `OutboundSelection`, `.manifest`
+(every prefix the app declares; `"manifest"` on the wire) or `.prefixes([...])`.
+Left `nil`, nothing is approved and the app's requests are refused until an
+admin approves. The response's `outboundApproval` is what the namespace then
+approves. An upgrade only adds; `setOutboundApproval` sets a publisher's list
+exactly, and `.prefixes([])` revokes everything.
 
 ⚠️ **Subgroup visibility.** core rc.83 changed what an absent `visibility` means
 on `POST /namespaces/{id}/groups`: it now creates an **open** subgroup (it used to

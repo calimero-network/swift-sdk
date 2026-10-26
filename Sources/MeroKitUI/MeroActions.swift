@@ -308,6 +308,16 @@ public final class NamespaceActions: MeroMutation {
     ) async -> CreateGroupInNamespaceResponseData? {
         await withAdmin { try await $0.createGroupInNamespace(namespaceId, request: request) }
     }
+
+    /// Set what the namespace approves for an app's publisher to exactly
+    /// `request.approve`; an empty list revokes. A node's own: an account is
+    /// refused by name.
+    @discardableResult
+    public func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async -> SetOutboundApprovalResponseData? {
+        await withAdmin { try await $0.setOutboundApproval(namespaceId, request: request) }
+    }
 }
 
 /// Upgrades. (== mero-react `useUpgradeGroup`, `useRetryGroupUpgrade`,

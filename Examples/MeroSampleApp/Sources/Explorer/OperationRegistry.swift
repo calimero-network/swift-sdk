@@ -594,6 +594,21 @@ private let nsOps: [SDKOperation] = [
         Fmt.json(try await m.admin.createNamespace(try Fmt.decode(i.v("body"), CreateNamespaceRequest.self)))
     },
     SDKOperation(
+        id: "ns.outbound.list", category: "Namespaces", name: "listOutboundApprovals",
+        summary: "Outbound approvals, per publisher", fields: [.line("namespaceId", "Namespace ID")]
+    ) { m, i in
+        Fmt.json(try await m.admin.listOutboundApprovals(i.v("namespaceId")))
+    },
+    SDKOperation(
+        id: "ns.outbound.set", category: "Namespaces", name: "setOutboundApproval",
+        summary: "Set a publisher's outbound approval",
+        fields: [.line("namespaceId", "Namespace ID"), .json("body", "SetOutboundApprovalRequest")]
+    ) { m, i in
+        Fmt.json(
+            try await m.admin.setOutboundApproval(
+                i.v("namespaceId"), request: try Fmt.decode(i.v("body"), SetOutboundApprovalRequest.self)))
+    },
+    SDKOperation(
         id: "ns.delete", category: "Namespaces", name: "deleteNamespace",
         summary: "Delete a namespace",
         fields: [.line("namespaceId", "Namespace ID"), .json("body", "Body (optional)", "")]
