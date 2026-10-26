@@ -205,12 +205,12 @@ final class ChatService: ObservableObject {
     func setup() async {
         guard case .node(let mero) = backend else { return }
         await run("Installing \(Self.packageName)…") {
-            let versions = try await mero.admin.getRegistryVersions(
+            // The newest version this node's runtime installs, not merely the
+            // newest published: the registry can be a release ahead of the node.
+            let installed = try await mero.admin.installLatestFromRegistry(
                 registryUrl: Self.registryURL, packageName: Self.packageName)
-            guard let version = versions.first else { self.say("No registry versions found", error: true); return }
-            let resp = try await mero.admin.installFromRegistry(packageName: Self.packageName, version: version)
-            self.appId = resp.applicationId
-            self.say("Installed \(Self.packageName)@\(version)")
+            self.appId = installed.applicationId
+            self.say("Installed \(Self.packageName)@\(installed.version)")
             await self.loadSpaces()
         }
     }
