@@ -27,6 +27,10 @@ public struct HttpRequest: Sendable {
     public var body: HttpBody?
     public var headers: [String: String]
     public var timeout: TimeInterval?
+    /// Read the whole answer however large it is, instead of holding it to
+    /// the client's response limit. For a blob's raw bytes, which have no
+    /// natural bound; everything else stays limited.
+    var unboundedResponse = false
 
     public init(
         path: String,

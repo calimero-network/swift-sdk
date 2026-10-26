@@ -1,3 +1,4 @@
+import Compression
 import Foundation
 
 /// Turning a signed invitation into something a person can send, and back.
@@ -22,6 +23,19 @@ import Foundation
 /// bytes for the same input (Apple's and fflate's choices differ), and they do
 /// not need to: each side inflates the other's output exactly.
 public enum InviteCodec {
+
+    // MARK: Limits
+
+    /// The longest token ``decode(token:)`` looks at, in UTF-8 bytes. A real
+    /// invitation is ~540 characters and the largest legacy form (base64url of
+    /// the JSON) under 4 KB; base58 decoding is quadratic in the token length,
+    /// so a pasted megabyte must be refused before it is decoded.
+    public static let maxTokenLength = 8 * 1024
+
+    /// The most bytes ``decode(token:)`` inflates a token into. A real
+    /// invitation's JSON is ~2 KB; DEFLATE expands up to ~1000x, so an 8 KB
+    /// token could otherwise ask for megabytes.
+    public static let maxInflatedBytes = 64 * 1024
 
     // MARK: Base58
 
@@ -88,8 +102,37 @@ public enum InviteCodec {
         try? (data as NSData).compressed(using: .zlib) as Data
     }
 
-    static func inflate(_ data: Data) -> Data? {
-        try? (data as NSData).decompressed(using: .zlib) as Data
+    /// Raw INFLATE, refusing (nil) a stream that is malformed, truncated, or
+    /// expands past `limit` bytes. Streamed in small chunks, so a hostile
+    /// token never gets more than `limit` bytes allocated for it.
+    static func inflate(_ data: Data, limit: Int = maxInflatedBytes) -> Data? {
+        guard !data.isEmpty else { return nil }
+        let stream = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        defer { stream.deallocate() }
+        guard compression_stream_init(stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB) == COMPRESSION_STATUS_OK
+        else { return nil }
+        defer { compression_stream_destroy(stream) }
+
+        let chunk = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunk)
+        defer { buffer.deallocate() }
+        return data.withUnsafeBytes { (source: UnsafeRawBufferPointer) -> Data? in
+            guard let base = source.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            stream.pointee.src_ptr = base
+            stream.pointee.src_size = source.count
+            var out = Data()
+            while true {
+                stream.pointee.dst_ptr = buffer
+                stream.pointee.dst_size = chunk
+                let status = compression_stream_process(stream, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+                let produced = chunk - stream.pointee.dst_size
+                guard status != COMPRESSION_STATUS_ERROR, out.count + produced <= limit else { return nil }
+                out.append(buffer, count: produced)
+                if status == COMPRESSION_STATUS_END { return out }
+                // Input spent, nothing produced and no end marker: truncated.
+                if produced == 0 && stream.pointee.src_size == 0 { return nil }
+            }
+        }
     }
 
     // MARK: The codec
@@ -114,10 +157,12 @@ public enum InviteCodec {
     /// caller gets mojibake instead of a clear failure.
     ///
     /// Returns nil when nothing decodes, so a malformed invitation fails loudly
-    /// rather than reaching `JSONDecoder` as garbage.
+    /// rather than reaching `JSONDecoder` as garbage. A token longer than
+    /// ``maxTokenLength``, or one that inflates past ``maxInflatedBytes``, is
+    /// refused the same way.
     public static func decode(token: String) -> String? {
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard !trimmed.isEmpty, trimmed.utf8.count <= maxTokenLength else { return nil }
 
         if looksLikeJSON(trimmed) { return trimmed }
 

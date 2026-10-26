@@ -199,6 +199,15 @@ final class InvitationCaptureTests: XCTestCase {
         XCTAssertEqual(PendingIntentStore.nonce(""), "811c9dc5")
         XCTAssertEqual(PendingIntentStore.nonce("a"), "e40c292c")
     }
+
+    func testThePendingIntentStoreKeepsTheNewestTwentyAndDropsTheOldest() {
+        let store = PendingIntentStore(defaults: appLayerDefaults())
+        for i in 0..<25 { store.capture("calimero://app/join?invitation=t\(i)") }
+        let kept = store.all().map(\.raw)
+        XCTAssertEqual(kept.count, PendingIntentStore.maxPending)
+        XCTAssertEqual(kept.first, "calimero://app/join?invitation=t5", "the five oldest are gone")
+        XCTAssertEqual(kept.last, "calimero://app/join?invitation=t24")
+    }
 }
 
 /// Ports of mero-react `invitations/useInviteRedemption.test.tsx`.
