@@ -486,7 +486,6 @@ final class ChatService: ObservableObject {
                 }
             }
             let code = try ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: signed).encoded()
-            print("[MeroKit] invite code for \(space.name):\n\(code)")
             say("Invite ready. Copy or share it.")
             return code
         } catch {

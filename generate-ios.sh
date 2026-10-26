@@ -234,7 +234,7 @@ info_block = (
     "        DefaultNodeURL: \"%s\"\n"
     "        NSLocalNetworkUsageDescription: \"Connect to a Calimero node running on your Mac over the local network for development.\"\n"
     "        NSAppTransportSecurity:\n"
-    "          NSAllowsArbitraryLoads: true\n"
+    "          NSAllowsLocalNetworking: true\n"
 ) % node_url
 
 if "NSLocalNetworkUsageDescription" not in src:
