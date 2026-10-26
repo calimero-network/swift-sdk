@@ -2,6 +2,21 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: an account uploads and downloads blobs through its relay
+
+`AdminSurface` gains `uploadBlob`, `getBlob(_:contextId:)`,
+`getBlobInfo(_:contextId:)` and `listBlobs`, so an app holding an
+`any AdminSurface` (a node's admin or an account's) can send and read
+attachments and avatars the same way.
+
+On `AccountAdmin` they go to the account's relay, which grants an account
+session `blob:add-own` and `blob:get-own`: a blob is stored into, and read out
+of, a context the account is a member of, and the relay checks that on every
+call. So each call needs a `contextId` and throws `AccountError.invalidInput`
+without one, before anything is sent. With no relay, an upload or read throws
+`AccountError.noRelay` and `listBlobs` is empty. Deleting a blob stays a
+node's call. A node's `AdminApi` and `NodeAdmin` keep their behaviour.
+
 ## Unreleased: request proofs refuse a window a node would refuse
 
 - **A request-proof window is capped at `maxRequestProofTTLSeconds` (300)**,
