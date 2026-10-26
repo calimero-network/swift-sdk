@@ -42,8 +42,11 @@ targets:
         # both iOS E2E jobs failed for five weeks with "did not reach explorer".
         DefaultNodeURL: "http://localhost:4001"
         NSLocalNetworkUsageDescription: "Connect to a Calimero node running on your Mac over the local network for development."
+        # http only to a node on the local network (localhost, *.local, an
+        # IP literal such as the Mac's LAN IP generate-ios.sh bakes in for a
+        # phone); everything else stays https under ATS.
         NSAppTransportSecurity:
-          NSAllowsArbitraryLoads: true
+          NSAllowsLocalNetworking: true
     platform: iOS
     sources:
       - Sources
