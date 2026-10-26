@@ -94,6 +94,7 @@ public final class URLSessionHttpClient: HttpClient {
 
     public func download(_ req: HttpRequest, to fileURL: URL) async throws -> HeadResult {
         // Stream the body to disk rather than buffering in RAM (memory-safe for large blobs).
+        try checkTransport(buildURL(req.path))
         let urlRequest = try await authorized(buildURLRequest(req, bearer: await currentAuthToken()), body: req.body)
         let proofAttached = carriesProof(urlRequest.allHTTPHeaderFields ?? [:])
         let (tempURL, response) = try await session.download(
@@ -127,6 +128,7 @@ public final class URLSessionHttpClient: HttpClient {
         // Read the token once and keep it: a 401 has to be judged against what
         // this request actually sent, not against whatever the token is by the
         // time the response comes back.
+        try checkTransport(buildURL(req.path))
         let presentedToken = await currentAuthToken()
         let urlRequest = try await authorized(buildURLRequest(req, bearer: presentedToken), body: req.body)
         let proofAttached = carriesProof(urlRequest.allHTTPHeaderFields ?? [:])
@@ -195,6 +197,14 @@ public final class URLSessionHttpClient: HttpClient {
         }
 
         throw MeroError.http(httpError)
+    }
+
+    /// Refuse plain http to a node that is not local (``TransportSecurity``),
+    /// before a token or a proof is attached. A sealed session encrypts
+    /// end to end to the attested node, so its URL is not checked.
+    private func checkTransport(_ url: URL) throws {
+        if session.configuration.protocolClasses?.contains(where: { $0 == SealedURLProtocol.self }) == true { return }
+        try TransportSecurity.checkNodeURL(url)
     }
 
     /// - Parameter limit: the most body bytes to accept, or nil for no limit.

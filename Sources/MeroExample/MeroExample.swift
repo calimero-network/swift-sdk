@@ -70,10 +70,14 @@ struct MeroExample {
             URLComponents(string: loginURL)?.queryItems?.first { $0.name == "callback-url" }?.value ?? ""
         let callbackURL =
             returnedTo + "#access_token=AAA&refresh_token=RRR&context_id=ctx1&node_url=https%3A%2F%2Fnode.example"
-        if let parsed = Mero.parseAuthCallback(callbackURL) {
+        // A custom scheme is accepted only as the URL ASWebAuthenticationSession
+        // hands back; one opened as a link must be an https Universal Link.
+        let fromAuthSession = ParseAuthCallbackOptions(allowCustomScheme: true)
+        if let parsed = Mero.parseAuthCallback(callbackURL, options: fromAuthSession) {
             print("accessToken=\(parsed.accessToken) contextId=\(parsed.contextId) nodeUrl=\(parsed.nodeUrl)")
         }
-        print("Replayed callback accepted again: \(Mero.parseAuthCallback(callbackURL) != nil)")  // false
+        let replayed = Mero.parseAuthCallback(callbackURL, options: fromAuthSession) != nil
+        print("Replayed callback accepted again: \(replayed)")  // false
 
         section("Capability presets")
         print(

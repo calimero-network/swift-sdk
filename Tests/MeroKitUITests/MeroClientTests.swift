@@ -50,6 +50,13 @@ final class MeroClientTests: XCTestCase {
         XCTAssertNotNil(client.errorMessage)
     }
 
+    func testLoginRefusesPlainHttpAcrossTheNetwork() async {
+        let client = makeClient()
+        await client.login(nodeURL: "http://node.test", username: "dev", password: "pw")
+        XCTAssertFalse(client.isAuthenticated)
+        XCTAssertEqual(client.errorMessage, MeroClient.insecureNodeURLMessage)
+    }
+
     func testLogoutClearsState() async {
         let client = makeClient()
         await client.login(nodeURL: "https://node.test", username: "dev", password: "pw")
