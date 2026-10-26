@@ -157,6 +157,14 @@ final class CloudSignInTests: XCTestCase {
         XCTAssertThrowsError(try DeviceEnrolment.completeEnrolment(cb, keys: keys, expectState: "other")) {
             XCTAssertEqual($0 as? AccountError, .stateMismatch)
         }
+        // No pending state: an answer nobody asked for, however valid its certificate.
+        XCTAssertThrowsError(try DeviceEnrolment.completeEnrolment(cb, keys: keys, expectState: nil)) {
+            XCTAssertEqual($0 as? AccountError, .stateMismatch)
+        }
+        let unsigned = wallet.approve(keys, state: nil)
+        XCTAssertThrowsError(try DeviceEnrolment.completeEnrolment(unsigned, keys: keys, expectState: nil)) {
+            XCTAssertEqual($0 as? AccountError, .stateMismatch)
+        }
         let otherKeys = DeviceKeys.generate()
         XCTAssertThrowsError(try DeviceEnrolment.completeEnrolment(cb, keys: otherKeys, expectState: "s1")) {
             XCTAssertTrue($0.localizedDescription.contains("this app holds"))
@@ -625,18 +633,42 @@ final class CloudSignInTests: XCTestCase {
     // MARK: - End to end
 
     private func makeSignIn(
-        nonces: any WarrantNonceStore = MemoryWarrantNonceStore()
+        nonces: any WarrantNonceStore = MemoryWarrantNonceStore(),
+        sessions: AnyValueStore<CloudSession> = .memory(),
+        pending: AnyValueStore<PendingEnrolment> = .memory(),
+        clock: AuthStateClock = AuthStateClock(Date())
     ) -> (
         CloudSignIn, AnyValueStore<CloudSession>
     ) {
-        let sessions = AnyValueStore<CloudSession>.memory()
         let signIn = CloudSignIn(
             config: CloudConfig(
                 cloudBaseURL: cloud, audience: .codeSigningId("network.calimero.test"),
                 relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(keys), sessionStore: sessions, nonces: nonces, urlSession: MockURLProtocol.makeSession(),
-            delegatedStore: .memory())
+            delegatedStore: .memory(), pendingEnrolmentStore: pending, now: { clock.now })
         return (signIn, sessions)
+    }
+
+    /// Begin an enrolment on `signIn` and have the wallet approve it; the relay lookup answers "none".
+    private func approvedCallback(_ signIn: CloudSignIn) async throws -> EnrolmentCallback {
+        let url = try await signIn.beginEnrolment(callbackURL: "mero-sample://enrol")
+        let state = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "state" }?
+            .value
+        let cb = wallet.approve(keys, state: state)
+        rig.on("GET", "/api/cloud/accounts/\(cb.account)/challenge", json: #"{"nonce":"n"}"#)
+        rig.on("GET", "/api/cloud/accounts/\(cb.account)/relays", json: #"{"relays":[]}"#)
+        return cb
+    }
+
+    private func assertStateMismatch(
+        _ signIn: CloudSignIn, _ cb: EnrolmentCallback, file: StaticString = #filePath, line: UInt = #line
+    ) async {
+        do {
+            _ = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(cb))
+            XCTFail("expected a state mismatch", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? AccountError, .stateMismatch, file: file, line: line)
+        }
     }
 
     func testSignInEnrolsFindsTheRelayAndLogsIn() async throws {
@@ -687,6 +719,69 @@ final class CloudSignInTests: XCTestCase {
         }
         XCTAssertNil(sessions.load())
         XCTAssertTrue(rig.seen.isEmpty)
+    }
+
+    /// SEC-01: a credential minted for this device's (public) keys by someone
+    /// else's passkey, sent as a link, must not sign the app in to their account.
+    func testAnUnsolicitedCallbackIsRefused() async throws {
+        let (signIn, sessions) = makeSignIn()
+        await assertStateMismatch(signIn, wallet.approve(keys, state: "attacker-chosen"))
+        await assertStateMismatch(signIn, wallet.approve(keys, state: nil))
+        XCTAssertNil(sessions.load())
+        XCTAssertTrue(rig.seen.isEmpty)
+    }
+
+    func testAnAnsweredStateCannotBeAnsweredAgain() async throws {
+        let (signIn, sessions) = makeSignIn()
+        let cb = try await approvedCallback(signIn)
+        _ = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(cb))
+        XCTAssertNotNil(sessions.load())
+        await assertStateMismatch(signIn, cb)
+    }
+
+    func testAnExpiredStateIsRefused() async throws {
+        let clock = AuthStateClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let (signIn, sessions) = makeSignIn(clock: clock)
+        let cb = try await approvedCallback(signIn)
+        clock.advance(CloudSignIn.enrolmentStateLifetime + 1)
+        await assertStateMismatch(signIn, cb)
+        XCTAssertNil(sessions.load())
+    }
+
+    func testThePendingStateSurvivesARelaunch() async throws {
+        let pending = AnyValueStore<PendingEnrolment>.memory()
+        let (first, _) = makeSignIn(pending: pending)
+        let cb = try await approvedCallback(first)
+        let (relaunched, sessions) = makeSignIn(pending: pending)
+        let session = try await relaunched.completeEnrolment(callbackURL: wallet.callbackURL(cb))
+        XCTAssertEqual(session.account, wallet.account)
+        XCTAssertEqual(sessions.load()?.account, wallet.account)
+        XCTAssertNil(pending.load(), "spent")
+    }
+
+    func testSwitchingAccountNeedsConfirmation() async throws {
+        let other = CloudSession(account: rep("ab"), device: rep("cd"), credential: "00")
+        let (signIn, sessions) = makeSignIn(sessions: .memory(other))
+        let cb = try await approvedCallback(signIn)
+        do {
+            _ = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(cb))
+            XCTFail("expected an account switch refusal")
+        } catch {
+            XCTAssertEqual(error as? AccountError, .accountSwitch(current: rep("ab"), incoming: wallet.account))
+        }
+        XCTAssertEqual(sessions.load(), other, "nothing replaced")
+
+        // Confirmed: the same answer completes, since the refusal did not spend its state.
+        let session = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(cb), allowAccountSwitch: true)
+        XCTAssertEqual(session.account, wallet.account)
+        XCTAssertEqual(sessions.load()?.account, wallet.account)
+    }
+
+    func testReEnrollingTheSameAccountNeedsNoConfirmation() async throws {
+        let (signIn, sessions) = makeSignIn()
+        _ = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(try await approvedCallback(signIn)))
+        _ = try await signIn.completeEnrolment(callbackURL: wallet.callbackURL(try await approvedCallback(signIn)))
+        XCTAssertEqual(sessions.load()?.account, wallet.account)
     }
 
     func testRelaylessAccountIsStillSignedIn() async throws {

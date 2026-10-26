@@ -23,6 +23,11 @@ public enum AccountError: Error, Sendable, Equatable {
     /// `state` is not one this app began, or was already spent).
     case stateMismatch
 
+    /// A verified enrolment names `incoming`, but this device is signed in to
+    /// `current`. Nothing was stored: sign out first, or confirm the switch
+    /// (``CloudSignIn/completeEnrolment(callbackURL:allowAccountSwitch:)``).
+    case accountSwitch(current: String, incoming: String)
+
     /// The relay's node key could not be established. Reads and events need it;
     /// warranted writes do not.
     case relayKeyUnavailable(String)
@@ -93,6 +98,9 @@ extension AccountError: LocalizedError {
         case .enrolmentDeclined(let m): return m
         case .stateMismatch:
             return "This callback answers a request this app did not make — the state it carries is not one it sent."
+        case .accountSwitch(let current, let incoming):
+            return "This sign-in is for account \(incoming), but this device is signed in to \(current). "
+                + "Sign out first to switch accounts."
         case .relayKeyUnavailable(let m): return "Relay node key unavailable: \(m)"
         case .intentRefused(let reason, _, let status): return "Relay refused the intent (HTTP \(status)): \(reason)"
         case .protocolViolation(let m): return m

@@ -69,11 +69,15 @@ to `client.handleEnrolmentCallback(_:)`.
 />
 
 What the app checks before storing anything (`DeviceEnrolment.completeEnrolment`):
-the `state` it sent came back; the certificate verifies (its root signed it, the
+the `state` it sent came back (an answer to an enrolment this app did not begin,
+one older than 10 minutes, or one already answered is refused); the certificate verifies (its root signed it, the
 account is the one that root derives, the device id was minted for it); it
 certifies **this** device's signing and delivery keys; and the account and
 device reported beside it are the ones it names. Any failure throws an
-`AccountError` and nothing is saved.
+`AccountError` and nothing is saved. When the device is already signed in to a
+different account, `CloudSignIn.completeEnrolment` throws
+`AccountError.accountSwitch` instead of replacing it; ask the person, then call
+it again with `allowAccountSwitch: true`.
 
 ### Without MeroKitUI
 

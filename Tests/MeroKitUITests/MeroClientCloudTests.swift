@@ -125,6 +125,28 @@ final class MeroClientCloudTests: XCTestCase {
         XCTAssertNotNil(client.errorMessage)
     }
 
+    /// SEC-01: a wallet answer for this device's keys that this app never asked
+    /// for (someone else's passkey, sent as a link) signs nobody in.
+    func testAnUnsolicitedEnrolmentLinkIsRefused() async throws {
+        let session = MockURLProtocol.makeSession()
+        let cloud = CloudSignIn(
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            keyStore: .memory(), sessionStore: .memory(), nonces: MemoryWarrantNonceStore(), urlSession: session)
+        let client = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+        let keys = await cloud.deviceKeys()
+        let walletURL = try DeviceEnrolment.url(
+            devicePublicKey: keys.signPublicKey, kemPublicKey: keys.kemPublicKey, callbackURL: "mero-sample://enrol",
+            state: "attacker-chosen")
+        let link = try await InProcessWallet().authenticate(url: walletURL, callback: .scheme("mero-sample"))
+
+        let handled = await client.handleEnrolmentCallback(link)
+        XCTAssertTrue(handled)
+        XCTAssertFalse(client.isAuthenticated)
+        XCTAssertEqual(client.errorMessage, "That sign-in did not come from this app. Please try again.")
+        let stored = await cloud.restoreSession()
+        XCTAssertNil(stored)
+    }
+
     func testHandleEnrolmentCallbackIgnoresUnrelatedURLs() async {
         let client = makeClient()
         let handled = await client.handleEnrolmentCallback(URL(string: "mero-sample://somewhere")!)
