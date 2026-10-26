@@ -29,7 +29,8 @@ public struct RequestProofInput: Sendable {
     /// The certified device's Ed25519 secret, hex. Or pass ``signer``.
     public var deviceSecret: String?
     public var signer: (any Signer)?
-    /// Seconds the signature stays valid. Default 300.
+    /// Seconds the signature stays valid. Default 300, which is also the most
+    /// a node accepts (``maxRequestProofTTLSeconds``); more is refused.
     public var validForSeconds: UInt64?
     /// Override the clock, for tests. Unix seconds.
     public var now: UInt64?
@@ -70,11 +71,13 @@ public func signRequestProof(_ input: RequestProofInput) async throws -> String 
     guard input.deviceSecret != nil || input.signer != nil else {
         throw AccountError.invalidInput("signRequestProof needs either `deviceSecret` or `signer`")
     }
+    let validFor = try checkedRequestProofTTL(
+        input.validForSeconds ?? defaultRequestProofValidity, label: "validForSeconds")
     let issuedAt = input.now ?? unixSeconds()
     let request = try await signRequest(
         RequestSigInput(
             method: input.method, path: input.path, body: input.body, issuedAt: issuedAt,
-            expiresAt: issuedAt + (input.validForSeconds ?? defaultRequestProofValidity),
+            expiresAt: issuedAt + validFor,
             signerSecret: input.signer == nil ? input.deviceSecret : nil, signer: input.signer))
     return try callerProof(CallerProofInput(credential: input.credential, request: request))
 }
@@ -86,7 +89,8 @@ public struct ProofCredential: Sendable {
     /// The certified device's Ed25519 secret, hex. Or pass ``signer``.
     public var deviceSecret: String?
     public var signer: (any Signer)?
-    /// Seconds each signature stays valid. Default 300.
+    /// Seconds each signature stays valid. Default 300, which is also the most
+    /// a node accepts (``maxRequestProofTTLSeconds``); more is refused.
     public var validForSeconds: UInt64?
 
     public init(
@@ -128,6 +132,9 @@ public func createProofAuthorizer(_ credential: ProofCredential) throws -> Reque
         throw AccountError.invalidInput("a proof authorizer needs either `deviceSecret` or `signer`")
     }
     _ = try Hex.decodeUnsized(credential.credential, label: "credential")
+    if let validFor = credential.validForSeconds {
+        _ = try checkedRequestProofTTL(validFor, label: "validForSeconds")
+    }
     let signer = try resolveSigner(
         credential.signer == nil ? credential.deviceSecret : nil, credential.signer, label: "deviceSecret")
     return { request in
