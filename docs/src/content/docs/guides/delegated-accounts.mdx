@@ -124,7 +124,7 @@ let invite = try await admin.createNamespaceInvitation(ns.namespaceId, request: 
 | reads (`getGroupInfo`, `listGroupMembers`, status…) | the relay, unchanged |
 | `listNamespacesForApplication` | its own list, filtered |
 | `getNodeIdentity` | the account itself |
-| `createNamespace` | founded through the relay with the app's package (latest version unless pinned); `haEnabled` / `haError` ride along |
+| `createNamespace` | founded through the relay with the app's package (latest version unless pinned); `haEnabled` / `haError` ride along; refused with `approveOutbound` set |
 | `createGroupInNamespace` | a root op on the namespace; Open unless `restricted` |
 | members, roles, capabilities, metadata, settings, detach, leave | group ops on the group |
 | `deleteGroup`, `reparentGroup` | root ops on the namespace |
@@ -132,7 +132,7 @@ let invite = try await admin.createNamespaceInvitation(ns.namespaceId, request: 
 | `createContext` | a creation warrant; the account is the member key |
 | `createNamespaceInvitation` | signed by the device, the relays as admitters, refused when nobody could claim it |
 | `joinNamespace` | `AccountAdminDeps.join` (wire `joinAsAccount`) |
-| upgrades, installs, aliases, `deleteContext`, `leaveContext`, TEE policy, devices | `AccountError.notForAccount` |
+| upgrades, installs, `setOutboundApproval`, aliases, `deleteContext`, `leaveContext`, TEE policy, devices | `AccountError.notForAccount` |
 
 With no relay yet (`read: nil`) the account is a member of nothing: the
 listings are empty, `getNodeIdentity` and `joinNamespace` work, everything

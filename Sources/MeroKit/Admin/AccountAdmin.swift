@@ -207,6 +207,11 @@ public struct AccountAdmin: AdminApiForwarding {
         guard let package = app.packageName else {
             throw AccountError.notForAccount(method: "createNamespace without a packageName")
         }
+        // Founding through the relay has no outbound approval to carry, and
+        // dropping one silently would leave the app's requests refused.
+        if request.approveOutbound != nil {
+            throw AccountError.notForAccount(method: "createNamespace with approveOutbound")
+        }
         let version: String
         if let pinned = app.packageVersion {
             version = pinned
@@ -510,6 +515,14 @@ public struct AccountAdmin: AdminApiForwarding {
         _ namespaceId: String, request: DeleteNamespaceRequest? = nil
     ) async throws -> DeleteNamespaceResponseData {
         throw refusal("deleteNamespace")
+    }
+
+    /// The node publishes the approval as its own op; reading the list
+    /// (``AdminApiForwarding/listOutboundApprovals(_:)``) goes to the relay.
+    public func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async throws -> SetOutboundApprovalResponseData {
+        throw refusal("setOutboundApproval")
     }
 
     public func createGroupInvitation(

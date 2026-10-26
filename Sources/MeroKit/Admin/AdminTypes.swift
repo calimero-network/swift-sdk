@@ -961,13 +961,104 @@ public enum UpgradePolicy: String, Codable, Sendable {
     case lazyOnAccess = "LazyOnAccess"
 }
 
+// MARK: - Outbound approvals
+
+/// Which URL prefixes a namespace approves for an app's publisher to send
+/// outbound HTTPS requests under. On the wire it is the string `"manifest"` or
+/// an array of URL-prefix strings; any other string is refused.
+/// (== core `calimero_primitives::outbound::OutboundSelection`.)
+public enum OutboundSelection: Codable, Sendable, Equatable {
+    /// Every prefix the app's manifest declares, read by the node.
+    case manifest
+    /// These prefixes. Empty approves none, which on
+    /// ``AdminApi/setOutboundApproval(_:request:)`` revokes everything.
+    case prefixes([String])
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let word = try? container.decode(String.self) {
+            guard word == "manifest" else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "expected \"manifest\" or a list of URL prefixes, got \"\(word)\"")
+            }
+            self = .manifest
+            return
+        }
+        self = .prefixes(try container.decode([String].self))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .manifest: try container.encode("manifest")
+        case .prefixes(let prefixes): try container.encode(prefixes)
+        }
+    }
+}
+
+/// What a namespace approves for one publisher: the URL prefixes its apps may
+/// send outbound requests under, and the prefixes an approver was shown.
+public struct OutboundApproval: Codable, Sendable, Equatable {
+    /// The publisher's signer id (`did:key`): the bundle's signer.
+    public let signer: String
+    public let prefixes: [String]
+    /// The prefixes an approver was shown, approved or not.
+    public let reviewed: [String]
+    public init(signer: String, prefixes: [String], reviewed: [String]) {
+        self.signer = signer; self.prefixes = prefixes; self.reviewed = reviewed
+    }
+}
+
+/// `GET /admin-api/namespaces/{namespaceId}/outbound-approvals`: one entry per publisher.
+public typealias ListOutboundApprovalsResponseData = [OutboundApproval]
+
+/// `PUT /admin-api/namespaces/{namespaceId}/outbound-approvals`: set what the
+/// namespace approves for an installed app's publisher to exactly `approve`.
+/// An empty list revokes everything. The node takes exactly these two keys.
+public struct SetOutboundApprovalRequest: Codable, Sendable, Equatable {
+    public var applicationId: String
+    public var approve: OutboundSelection
+    public init(applicationId: String, approve: OutboundSelection) {
+        self.applicationId = applicationId; self.approve = approve
+    }
+}
+
+/// The publisher's approval after a ``SetOutboundApprovalRequest``. Core
+/// flattens the approval's fields into this object.
+public struct SetOutboundApprovalResponseData: Codable, Sendable, Equatable {
+    public let namespaceId: String
+    public let signer: String
+    public let prefixes: [String]
+    public let reviewed: [String]
+    /// `false` when nothing changed, so no op was published.
+    public let published: Bool
+    public init(namespaceId: String, signer: String, prefixes: [String], reviewed: [String], published: Bool) {
+        self.namespaceId = namespaceId; self.signer = signer; self.prefixes = prefixes
+        self.reviewed = reviewed; self.published = published
+    }
+
+    /// The approval itself, without the namespace and publish flag.
+    public var approval: OutboundApproval {
+        OutboundApproval(signer: signer, prefixes: prefixes, reviewed: reviewed)
+    }
+}
+
 public struct CreateNamespaceRequest: Codable, Sendable {
     public var applicationId: String
     public var name: String?
     /// Hex 32-byte blob id; pins the namespace to a specific installed version.
     public var appKey: String?
-    public init(applicationId: String, name: String? = nil, appKey: String? = nil) {
+    /// Approve outbound requests for the app's publisher in the new namespace,
+    /// in the same call. `nil` (omitted) approves none: the app's requests are
+    /// refused until an admin approves them.
+    public var approveOutbound: OutboundSelection?
+    public init(
+        applicationId: String, name: String? = nil, appKey: String? = nil,
+        approveOutbound: OutboundSelection? = nil
+    ) {
         self.applicationId = applicationId; self.name = name; self.appKey = appKey
+        self.approveOutbound = approveOutbound
     }
 
     /// Source-compatibility shim: `upgradePolicy` is accepted and dropped.
@@ -992,11 +1083,16 @@ public struct CreateNamespaceResponseData: Codable, Sendable {
     public let haEnabled: Bool?
     /// Why ``haEnabled`` is `false`, in words a person can act on.
     public let haError: String?
+    /// What the namespace approves for the app's publisher, when the request
+    /// asked for an approval (``CreateNamespaceRequest/approveOutbound``).
+    public let outboundApproval: OutboundApproval?
     public init(
-        namespaceId: String, founding: NamespaceFounding? = nil, haEnabled: Bool? = nil, haError: String? = nil
+        namespaceId: String, founding: NamespaceFounding? = nil, haEnabled: Bool? = nil, haError: String? = nil,
+        outboundApproval: OutboundApproval? = nil
     ) {
         self.namespaceId = namespaceId; self.founding = founding
         self.haEnabled = haEnabled; self.haError = haError
+        self.outboundApproval = outboundApproval
     }
 }
 
@@ -1569,8 +1665,14 @@ public struct UpgradeGroupRequest: Codable, Sendable {
     /// group only — members' subgroups never learn the migration. Server
     /// default: false.
     public var cascade: Bool?
-    public init(targetApplicationId: String, cascade: Bool? = nil) {
+    /// Approve outbound requests for the target's publisher in the group's
+    /// namespace before upgrading. Added to what the namespace already
+    /// approves; a prefix the target declares and nobody approved waits
+    /// (`AwaitingApproval`). `nil` (omitted) approves nothing new.
+    public var approveOutbound: OutboundSelection?
+    public init(targetApplicationId: String, cascade: Bool? = nil, approveOutbound: OutboundSelection? = nil) {
         self.targetApplicationId = targetApplicationId; self.cascade = cascade
+        self.approveOutbound = approveOutbound
     }
 }
 
@@ -1580,9 +1682,15 @@ public struct UpgradeGroupResponseData: Codable, Sendable {
     public let total: Int?
     public let completed: Int?
     public let failed: Int?
-    public init(groupId: String, status: String, total: Int? = nil, completed: Int? = nil, failed: Int? = nil) {
+    /// What the namespace approves for the target's publisher, when the
+    /// request asked for an approval (``UpgradeGroupRequest/approveOutbound``).
+    public let outboundApproval: OutboundApproval?
+    public init(
+        groupId: String, status: String, total: Int? = nil, completed: Int? = nil, failed: Int? = nil,
+        outboundApproval: OutboundApproval? = nil
+    ) {
         self.groupId = groupId; self.status = status; self.total = total; self.completed = completed
-        self.failed = failed
+        self.failed = failed; self.outboundApproval = outboundApproval
     }
 }
 

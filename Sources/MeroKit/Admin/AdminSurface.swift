@@ -54,6 +54,7 @@ public protocol AdminSurface: Sendable {
     func getGroupUpgradeStatus(_ groupId: String) async throws -> GroupUpgradeStatusResponseData
     func getMigrationStatus(_ namespaceId: String) async throws -> MigrationStatus
     func getCascadeStatus(_ namespaceId: String) async throws -> [CascadeStatusEntry]
+    func listOutboundApprovals(_ namespaceId: String) async throws -> ListOutboundApprovalsResponseData
 
     // MARK: Namespaces and groups, writes
 
@@ -118,6 +119,9 @@ public protocol AdminSurface: Sendable {
     func deleteNamespace(
         _ namespaceId: String, request: DeleteNamespaceRequest?
     ) async throws -> DeleteNamespaceResponseData
+    func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async throws -> SetOutboundApprovalResponseData
     func createGroupInvitation(
         _ groupId: String, request: CreateGroupInvitationRequest?
     ) async throws -> CreateGroupInvitationResult
@@ -247,6 +251,10 @@ public extension AdminApiForwarding {
 
     func getCascadeStatus(_ namespaceId: String) async throws -> [CascadeStatusEntry] {
         try await forwardedAdmin.getCascadeStatus(namespaceId)
+    }
+
+    func listOutboundApprovals(_ namespaceId: String) async throws -> ListOutboundApprovalsResponseData {
+        try await forwardedAdmin.listOutboundApprovals(namespaceId)
     }
 
     // MARK: Namespaces and groups, writes
@@ -447,6 +455,12 @@ public extension AdminApiForwarding {
         _ namespaceId: String, request: DeleteNamespaceRequest?
     ) async throws -> DeleteNamespaceResponseData {
         try await forwardedAdmin.deleteNamespace(namespaceId, request: request)
+    }
+
+    func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async throws -> SetOutboundApprovalResponseData {
+        try await forwardedAdmin.setOutboundApproval(namespaceId, request: request)
     }
 
     func createGroupInvitation(
