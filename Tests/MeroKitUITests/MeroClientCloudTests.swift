@@ -87,7 +87,7 @@ final class MeroClientCloudTests: XCTestCase {
     private func makeClient(wallet: InProcessWallet = InProcessWallet()) -> MeroClient {
         let session = MockURLProtocol.makeSession()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(), sessionStore: .memory(), nonces: MemoryWarrantNonceStore(), urlSession: session)
         return MeroClient(session: session, cloud: cloud, webAuthenticator: wallet)
     }
@@ -109,6 +109,31 @@ final class MeroClientCloudTests: XCTestCase {
         await client.logout()
         XCTAssertFalse(client.isAuthenticated)
         XCTAssertNil(client.account)
+    }
+
+    func testLogoutKeepsTheDeviceUnlessToldToForgetIt() async {
+        let session = MockURLProtocol.makeSession()
+        let keys = AnyValueStore<DeviceKeys>.memory()
+        let nonces = MemoryWarrantNonceStore()
+        let cloud = CloudSignIn(
+            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            keyStore: keys, sessionStore: .memory(), nonces: nonces, urlSession: session, delegatedStore: .memory())
+        let client = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
+
+        await client.signInWithCloud(callbackScheme: "mero-sample")
+        let device = keys.load()
+        XCTAssertNotNil(device)
+        _ = nonces.next(relay: relay)
+        await client.logout()
+        XCTAssertEqual(keys.load(), device, "a plain logout keeps the device key")
+        XCTAssertEqual(nonces.next(relay: relay), 2)
+
+        await client.signInWithCloud(callbackScheme: "mero-sample")
+        XCTAssertTrue(client.isAuthenticated)
+        await client.logout(forgetDevice: true)
+        XCTAssertFalse(client.isAuthenticated)
+        XCTAssertNil(keys.load(), "forgetDevice drops the key certified to the old account")
+        XCTAssertEqual(nonces.next(relay: relay), 1, "and the nonces spent under it")
     }
 
     func testDeclineShowsAFriendlyErrorAndStaysSignedOut() async {
@@ -159,7 +184,7 @@ final class MeroClientCloudTests: XCTestCase {
         let sessions = AnyValueStore<CloudSession>.memory()
         let keys = AnyValueStore<DeviceKeys>.memory()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: keys, sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
         let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
         await first.signInWithCloud(callbackScheme: "mero-sample")
@@ -179,7 +204,7 @@ final class MeroClientCloudTests: XCTestCase {
         let session = MockURLProtocol.makeSession()
         let sessions = AnyValueStore<CloudSession>.memory()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(), sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
         let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
         await first.signInWithCloud(callbackScheme: "mero-sample")
@@ -200,7 +225,7 @@ final class MeroClientCloudTests: XCTestCase {
         let session = MockURLProtocol.makeSession()
         let sessions = AnyValueStore<CloudSession>.memory()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(), sessionStore: sessions, nonces: MemoryWarrantNonceStore(), urlSession: session)
         let first = MeroClient(session: session, cloud: cloud, webAuthenticator: InProcessWallet())
         await first.signInWithCloud(callbackScheme: "mero-sample")

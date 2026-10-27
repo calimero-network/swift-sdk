@@ -31,9 +31,10 @@ account is a member of nothing until it redeems an invitation.
 An account's namespaces may be served by different relays. A relay admits the
 account to a namespace and then serves that namespace's contexts, so the SDK
 keeps, per account, which relay serves which namespace and context — in a
-`DelegatedAccountStore` (`UserDefaults` by default; `.keychain()` or
-`.memory()` when you prefer). It holds URLs and ids only; the device secret
-stays in the key store.
+`DelegatedAccountStore` (one Keychain item by default, moved over from
+`UserDefaults` where earlier versions kept it; `.userDefaults()` or
+`.memory()` when you prefer). It holds URLs, ids and the relays' pinned node
+keys; the device secret stays in the key store.
 
 ```swift
 let store = env.store
@@ -53,7 +54,8 @@ let namespaces = await DelegatedAccounts.listDelegatedNamespaces(session, env: e
 session change when the relay stays the same, and drops it when it does not.
 Warrant nonces are one sequence per relay (`WarrantNonceStore`);
 `markContextNonceSpent(relayURL:contextId:nonce:nonces:)` records a spent one.
-Persist the store (`UserDefaultsWarrantNonceStore`): no node serves a lookup of
+Persist the store (`WarrantNonces.shared`, in the Keychain, is the default):
+no node serves a lookup of
 the spent ledger, so a counter that restarts at 1 burns refusals until it
 catches up. A nonce refusal surfaces as `AccountError.intentRefused` with
 `retryable: true` and is not retried for you.
@@ -124,7 +126,7 @@ let invite = try await admin.createNamespaceInvitation(ns.namespaceId, request: 
 | reads (`getGroupInfo`, `listGroupMembers`, status…) | the relay, unchanged |
 | `listNamespacesForApplication` | its own list, filtered |
 | `getNodeIdentity` | the account itself |
-| `createNamespace` | founded through the relay with the app's package (latest version unless pinned); `haEnabled` / `haError` ride along |
+| `createNamespace` | founded through the relay with the app's package (latest version unless pinned); `haEnabled` / `haError` ride along; refused with `approveOutbound` set |
 | `createGroupInNamespace` | a root op on the namespace; Open unless `restricted` |
 | members, roles, capabilities, metadata, settings, detach, leave | group ops on the group |
 | `deleteGroup`, `reparentGroup` | root ops on the namespace |
@@ -132,7 +134,7 @@ let invite = try await admin.createNamespaceInvitation(ns.namespaceId, request: 
 | `createContext` | a creation warrant; the account is the member key |
 | `createNamespaceInvitation` | signed by the device, the relays as admitters, refused when nobody could claim it |
 | `joinNamespace` | `AccountAdminDeps.join` (wire `joinAsAccount`) |
-| upgrades, installs, aliases, `deleteContext`, `leaveContext`, TEE policy, devices | `AccountError.notForAccount` |
+| upgrades, installs, `setOutboundApproval`, aliases, `deleteContext`, `leaveContext`, TEE policy, devices | `AccountError.notForAccount` |
 
 With no relay yet (`read: nil`) the account is a member of nothing: the
 listings are empty, `getNodeIdentity` and `joinNamespace` work, everything

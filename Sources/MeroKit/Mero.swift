@@ -36,7 +36,8 @@ public actor Mero {
             baseURL: config.baseURL,
             timeout: config.timeout,
             hooks: hooks,
-            session: session
+            session: session,
+            maxResponseBytes: config.maxResponseBytes
         )
     }()
 
@@ -362,7 +363,9 @@ public actor Mero {
             // A bare transport: no bearer, no 401-refresh, no revoke hook. A
             // refresh triggered from inside logout would consume the very token
             // being retired.
-            let bare = URLSessionHttpClient(baseURL: config.baseURL, timeout: config.timeout, session: session)
+            let bare = URLSessionHttpClient(
+                baseURL: config.baseURL, timeout: config.timeout, session: session,
+                maxResponseBytes: config.maxResponseBytes)
             _ = try? await AuthApi(http: bare).logout(LogoutRequest(refreshToken: refreshToken))
         }
         clearToken()

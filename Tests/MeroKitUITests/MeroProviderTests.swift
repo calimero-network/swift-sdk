@@ -30,7 +30,7 @@ final class MeroProviderTests: XCTestCase {
     ) -> MeroClient {
         let session = MockURLProtocol.makeSession()
         let cloud = CloudSignIn(
-            config: CloudConfig(relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+            config: CloudConfig(relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(), sessionStore: .memory(), nonces: MemoryWarrantNonceStore(), urlSession: session,
             delegatedStore: .memory())
         let store = MemoryTokenStore()
@@ -98,6 +98,30 @@ final class MeroProviderTests: XCTestCase {
         let handled = await client.handleAuthCallback(url)
         XCTAssertFalse(handled, "a callback for a login this app never began")
         XCTAssertFalse(client.isAuthenticated)
+    }
+
+    func testACustomSchemeCallbackOpenedAsALinkIsAdoptedOnlyWhenTheAppAllowsIt() async {
+        for allowed in [false, true] {
+            let client = makeClient(config: MeroProviderConfig(allowCustomSchemeCallbacks: allowed))
+            client.storage.nodeURL = nodeURL
+            let login = Mero.buildAuthLoginUrl(
+                nodeUrl: nodeURL, options: AuthLoginOptions(callbackUrl: "myapp://auth", mode: "login"),
+                stateStore: client.authStateStore)
+            let back = URLComponents(string: login)?.queryItems?.first { $0.name == "callback-url" }?.value ?? ""
+            let url = URL(string: "\(back)#access_token=good&refresh_token=r1&node_url=\(nodeURL)")!
+            let handled = await client.handleAuthCallback(url)
+            XCTAssertEqual(handled, allowed, "any app can claim myapp://")
+            XCTAssertEqual(client.isAuthenticated, allowed)
+            await client.logout()
+        }
+    }
+
+    func testConnectToNodeRefusesPlainHttpAcrossTheNetwork() async {
+        let sheet = AppLayerLoginSheet(nodeURL: "http://node.provider.test")
+        let client = makeClient(sheet: sheet)
+        await client.connectToNode("http://node.provider.test", callbackScheme: "myapp")
+        XCTAssertEqual(client.errorMessage, MeroClient.insecureNodeURLMessage)
+        XCTAssertTrue(sheet.pages.isEmpty, "the login page is never opened")
     }
 
     func testAStreamRefusedForMissingSubscribeGrantLogsOut() async {

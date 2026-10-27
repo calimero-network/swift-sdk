@@ -172,6 +172,10 @@ final class PendingIntentStore: @unchecked Sendable {
     }
 
     static let storageKey = "calimero.platform.pendingIntents"
+    /// The most intents kept. Every distinct link adds one until it is acked,
+    /// so without a bound a stream of links grows the store forever; past it
+    /// the oldest are dropped.
+    static let maxPending = 20
     private let defaults: UserDefaults
     private let now: () -> Date
 
@@ -210,7 +214,7 @@ final class PendingIntentStore: @unchecked Sendable {
         if let existing = list.first(where: { $0.nonce == nonce }) { return existing }
         let intent = Intent(nonce: nonce, raw: raw, capturedAt: now().timeIntervalSince1970 * 1000)
         list.append(intent)
-        write(list)
+        write(Array(list.suffix(Self.maxPending)))
         return intent
     }
 
@@ -436,6 +440,13 @@ public final class InvitationCapture: ObservableObject {
     /// The attempts recorded for `token`. For tests and diagnostics.
     public func attempts(for token: String) -> Int {
         readAttempts()[token] ?? 0
+    }
+
+    /// Forget the auto-join attempt ledger, which names the invitations this
+    /// device tried. ``MeroClient/logout(forgetDevice:)`` does, so the next
+    /// account starts with none; a pending invitation stays until acked.
+    public func clearAttempts() {
+        defaults.removeObject(forKey: attemptsKey)
     }
 }
 

@@ -339,7 +339,7 @@ final class CloudSignInTests: XCTestCase {
         serveRelayLogin()
         let session = MockURLProtocol.makeSession()
         let nodeKey = try await RelayNodeKey.attest(
-            relayURL: relay, verifier: TLSRelayKeyVerifier(allowMock: true), session: session)
+            relayURL: relay, verifier: DcapRelayKeyVerifier(allowMock: true), session: session)
         XCTAssertEqual(nodeKey, Hex.encode(try Ed25519.publicKey(seed: nodeSeed)))
         let attest = try XCTUnwrap(rig.requests("POST", "/admin-api/tee/attest").first?.json)
         XCTAssertEqual(attest["bindNodeKey"], true)
@@ -371,7 +371,7 @@ final class CloudSignInTests: XCTestCase {
         let session = MockURLProtocol.makeSession()
         do {
             _ = try await RelayNodeKey.attest(
-                relayURL: relay, verifier: TLSRelayKeyVerifier(allowMock: true), session: session)
+                relayURL: relay, verifier: DcapRelayKeyVerifier(allowMock: true), session: session)
             XCTFail("a quote not carrying our nonce must be refused")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("nonce"))
@@ -386,7 +386,7 @@ final class CloudSignInTests: XCTestCase {
         serveRelayLogin(boundKey: rep("99"))
         do {
             _ = try await RelayNodeKey.attest(
-                relayURL: relay, verifier: TLSRelayKeyVerifier(allowMock: true), session: session)
+                relayURL: relay, verifier: DcapRelayKeyVerifier(allowMock: true), session: session)
             XCTFail("a quote binding another key must be refused")
         } catch {
             XCTAssertTrue(error.localizedDescription.contains("bind"))
@@ -643,7 +643,7 @@ final class CloudSignInTests: XCTestCase {
         let signIn = CloudSignIn(
             config: CloudConfig(
                 cloudBaseURL: cloud, audience: .codeSigningId("network.calimero.test"),
-                relayKeyVerifier: TLSRelayKeyVerifier(allowMock: true), sealRelays: false),
+                relayKeyVerifier: DcapRelayKeyVerifier(allowMock: true), sealRelays: false),
             keyStore: .memory(keys), sessionStore: sessions, nonces: nonces, urlSession: MockURLProtocol.makeSession(),
             delegatedStore: .memory(), pendingEnrolmentStore: pending, now: { clock.now })
         return (signIn, sessions)

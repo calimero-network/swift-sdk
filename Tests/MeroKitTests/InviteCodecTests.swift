@@ -109,6 +109,41 @@ final class InviteCodecTests: XCTestCase {
         XCTAssertNil(InviteCodec.decode(token: "   "))
     }
 
+    // MARK: Limits
+
+    func testRejectsATokenOverTheLengthCapBeforeDecodingIt() {
+        // Valid base58 all the way, so only the cap can refuse it.
+        let long = String(repeating: "z", count: InviteCodec.maxTokenLength + 1)
+        XCTAssertNil(InviteCodec.decode(token: long))
+        let padded = "{\"a\":\"" + String(repeating: "x", count: InviteCodec.maxTokenLength) + "\"}"
+        XCTAssertNil(InviteCodec.decode(token: padded), "raw JSON is held to the same cap")
+    }
+
+    func testARealInvitationIsWellUnderTheCaps() throws {
+        // A namespace invitation exactly as a live node returned it.
+        let json = try Fixture.json("rc32-namespace-invitation")
+        let token = try XCTUnwrap(InviteCodec.encode(json: json))
+        XCTAssertLessThan(token.utf8.count, InviteCodec.maxTokenLength / 4)
+        XCTAssertLessThan(json.utf8.count, InviteCodec.maxInflatedBytes / 8)
+        XCTAssertEqual(InviteCodec.decode(token: token), json)
+    }
+
+    func testRefusesATokenThatInflatesPastTheCap() throws {
+        // A few hundred bytes of DEFLATE that expand to 1 MB of JSON.
+        let bomb = "{\"a\":\"" + String(repeating: "a", count: 1 << 20) + "\"}"
+        let token = try XCTUnwrap(InviteCodec.encode(json: bomb))
+        XCTAssertLessThanOrEqual(token.utf8.count, InviteCodec.maxTokenLength)
+        XCTAssertNil(InviteCodec.decode(token: token))
+    }
+
+    func testInflateStopsAtTheLimitAndRefusesATruncatedStream() throws {
+        let data = Data(String(repeating: "b", count: 10_000).utf8)
+        let compressed = try XCTUnwrap(InviteCodec.deflate(data))
+        XCTAssertEqual(InviteCodec.inflate(compressed, limit: 10_000), data)
+        XCTAssertNil(InviteCodec.inflate(compressed, limit: 9_999))
+        XCTAssertNil(InviteCodec.inflate(compressed.prefix(compressed.count / 2)))
+    }
+
     func testBase58RejectsCharactersOutsideTheAlphabet() {
         // 0, O, I and l are deliberately absent from base58.
         XCTAssertNil(InviteCodec.base58Decode("0OIl"))

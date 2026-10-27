@@ -83,6 +83,7 @@ final class AccountAdminRecorder: @unchecked Sendable {
 /// Port of mero-js `account/account-admin.test.ts` and `node-admin.test.ts`.
 final class AccountAdminTests: XCTestCase {
     static let ns = DelegatedFixture.rep("01")
+    static let revoke = SetOutboundApprovalRequest(applicationId: "a", approve: .prefixes([]))
     static let sub = DelegatedFixture.rep("02")
     static let ctx = DelegatedFixture.rep("03")
     private let other = DelegatedFixture.rep("04")
@@ -196,6 +197,14 @@ final class AccountAdminTests: XCTestCase {
         let cascade = try await admin().getCascadeStatus(Self.ns)
         XCTAssertTrue(cascade.isEmpty)
         XCTAssertEqual(rig.requests("GET", "/admin-api/groups/\(Self.ns)/cascade-status").count, 1)
+    }
+
+    func testReadsItsNamespacesOutboundApprovalsFromTheRelay() async throws {
+        let path = "/admin-api/namespaces/\(Self.ns)/outbound-approvals"
+        rig.on("GET", path, json: #"{"data":[{"signer":"did:key:z","prefixes":["https://a/"],"reviewed":[]}]}"#)
+        let approvals = try await admin().listOutboundApprovals(Self.ns)
+        XCTAssertEqual(approvals, [OutboundApproval(signer: "did:key:z", prefixes: ["https://a/"], reviewed: [])])
+        XCTAssertEqual(rig.requests("GET", path).count, 1)
     }
 
     // MARK: - Groups
@@ -339,6 +348,16 @@ final class AccountAdminTests: XCTestCase {
         XCTAssertEqual(recorder.group, [governed(Self.ns, GovernanceOps.groupMetadataSet(name: "Team"))])
     }
 
+    /// Founding through the relay cannot carry an approval, so asking for one
+    /// is refused before anything is founded rather than silently dropped.
+    func testRefusesToFoundANamespaceWithAnOutboundApproval() async throws {
+        await assertRefused(.notForAccount(method: "createNamespace with approveOutbound")) {
+            _ = try await self.admin().createNamespace(
+                CreateNamespaceRequest(applicationId: DelegatedFixture.rep("ap"), approveOutbound: .manifest))
+        }
+        XCTAssertTrue(recorder.foundings.isEmpty)
+    }
+
     // MARK: - Inviting
 
     func testSignsAnInvitationItselfNamingTheNamespacesRelays() async throws {
@@ -437,6 +456,7 @@ final class AccountAdminTests: XCTestCase {
             ("listContextAliases", { _ = try await admin.listContextAliases() }),
             ("listDeviceAliases", { _ = try await admin.listDeviceAliases() }),
             ("deleteNamespace", { _ = try await admin.deleteNamespace(Self.ns) }),
+            ("setOutboundApproval", { _ = try await admin.setOutboundApproval(Self.ns, request: Self.revoke) }),
             ("createGroupInvitation", { _ = try await admin.createGroupInvitation(Self.sub) }),
             ("getTeeAdmissionPolicy", { _ = try await admin.getTeeAdmissionPolicy(Self.ns) }),
             ("deleteBlob", { _ = try await admin.deleteBlob("b") }),

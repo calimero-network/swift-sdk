@@ -577,9 +577,11 @@ public struct AdminApi: Sendable {
     /// this call sees the local store and nothing else, and answers 404 for a
     /// blob that plainly exists on the node next to it.
     public func getBlob(_ blobId: String, contextId: String? = nil) async throws -> Data {
-        let req = HttpRequest(
+        var req = HttpRequest(
             path: try Self.blobPath(blobId, contextId: contextId),
             timeout: contextId == nil ? nil : Self.blobDiscoveryTimeout)
+        // A blob is as large as it is: not held to the JSON response limit.
+        req.unboundedResponse = true
         let (data, _) = try await http.sendRaw(req)
         return data
     }
@@ -723,6 +725,26 @@ public struct AdminApi: Sendable {
     public func createNamespace(_ request: CreateNamespaceRequest) async throws -> CreateNamespaceResponseData {
         let resp: ApiResponse<CreateNamespaceResponseData> = try await http.post("/admin-api/namespaces", json: request)
         return try unwrap(resp, "createNamespace")
+    }
+
+    /// What the namespace approves for outbound requests, one entry per
+    /// publisher (bundle signer). Readable by anyone who may read the namespace.
+    public func listOutboundApprovals(_ namespaceId: String) async throws -> ListOutboundApprovalsResponseData {
+        let resp: ApiResponse<ListOutboundApprovalsResponseData> = try await http.get(
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals")
+        return try unwrap(resp, "listOutboundApprovals")
+    }
+
+    /// Set what the namespace approves for the publisher of
+    /// `request.applicationId` (an app installed on this node) to exactly
+    /// `request.approve`: an empty ``OutboundSelection/prefixes(_:)`` revokes
+    /// everything. It takes effect at the app's next run.
+    public func setOutboundApproval(
+        _ namespaceId: String, request: SetOutboundApprovalRequest
+    ) async throws -> SetOutboundApprovalResponseData {
+        let resp: ApiResponse<SetOutboundApprovalResponseData> = try await http.put(
+            "/admin-api/namespaces/\(namespaceId.pathSegment())/outbound-approvals", json: request)
+        return try unwrap(resp, "setOutboundApproval")
     }
 
     public func deleteNamespace(

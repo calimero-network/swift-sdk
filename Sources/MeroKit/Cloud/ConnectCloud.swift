@@ -65,7 +65,7 @@ public struct ConnectCloudOptions: Sendable {
         sessionToken: String? = nil, googleIdToken: String? = nil,
         sessionStore: AnyValueStore<CloudLoginSession>? = nil,
         onSession: (@Sendable (CloudLoginSession?) -> Void)? = nil, namespaceId: String? = nil,
-        nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(), relayNodeKey: String? = nil,
+        nonces: any WarrantNonceStore = WarrantNonces.shared, relayNodeKey: String? = nil,
         tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10,
         seal: (any TransportQuoteVerifier)? = nil
     ) {
@@ -113,7 +113,7 @@ public struct ConnectCloudWithAccountOptions: Sendable {
         root: RootSource, authorProof: String, keys: DeviceKeys, authorAccount: String? = nil,
         config: CloudConfig = CloudConfig(), sessionStore: AnyValueStore<CloudLoginSession>? = nil,
         onSession: (@Sendable (CloudLoginSession?) -> Void)? = nil, namespaceId: String? = nil,
-        nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(), relayNodeKey: String? = nil,
+        nonces: any WarrantNonceStore = WarrantNonces.shared, relayNodeKey: String? = nil,
         tokenStore: any TokenStore = MemoryTokenStore(), urlSession: URLSession = .shared, timeout: TimeInterval = 10,
         seal: (any TransportQuoteVerifier)? = nil
     ) {

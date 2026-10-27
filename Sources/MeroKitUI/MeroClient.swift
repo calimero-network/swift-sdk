@@ -462,6 +462,10 @@ public final class MeroClient: ObservableObject {
         errorMessage = nil
         var base = url.trimmingCharacters(in: .whitespacesAndNewlines)
         while base.hasSuffix("/") { base.removeLast() }
+        guard Self.mayCarryCredentials(base) else {
+            errorMessage = Self.insecureNodeURLMessage
+            return
+        }
         storage.nodeURL = base
         let options = AuthLoginOptions(
             callbackUrl: callback.url, mode: config.mode.rawValue, packageName: config.packageName,
@@ -476,7 +480,9 @@ public final class MeroClient: ObservableObject {
         defer { isLoading = false }
         do {
             let returned = try await webAuthenticator.authenticate(url: login, callback: callback)
-            if !(await handleAuthCallback(returned)) {
+            // Handed back by the auth session, never opened as a link: its
+            // scheme cannot have been claimed by another app.
+            if !(await adoptAuthCallback(returned, allowCustomScheme: true)) {
                 errorMessage = "The node's login page did not return a session."
             }
         } catch is WebAuthenticationCancelled {
@@ -494,9 +500,21 @@ public final class MeroClient: ObservableObject {
     /// (``NodeTrust``): a tampered callback's tokens are dropped and any
     /// existing session restored instead. A trusted callback's tokens replace
     /// the stored ones only when ``TokenAdoption`` says it is safe.
+    ///
+    /// The callback must be an `https` Universal Link unless
+    /// ``MeroProviderConfig/allowCustomSchemeCallbacks``: any app can claim a
+    /// custom scheme.
     @discardableResult
     public func handleAuthCallback(_ url: URL) async -> Bool {
-        guard let callback = Mero.parseAuthCallback(url.absoluteString, stateStore: authStateStore) else {
+        await adoptAuthCallback(url, allowCustomScheme: config.allowCustomSchemeCallbacks)
+    }
+
+    private func adoptAuthCallback(_ url: URL, allowCustomScheme: Bool) async -> Bool {
+        guard
+            let callback = Mero.parseAuthCallback(
+                url.absoluteString, options: ParseAuthCallbackOptions(allowCustomScheme: allowCustomScheme),
+                stateStore: authStateStore)
+        else {
             return false
         }
         let initiated = storage.nodeURL
@@ -703,6 +721,17 @@ public final class MeroClient: ObservableObject {
 
     // MARK: - Development node login
 
+    /// Why a node URL was refused: plain http to a host that is not local.
+    /// (== Kotlin `MeroClient.INSECURE_NODE_URL`.)
+    public static let insecureNodeURLMessage =
+        "This node is not on https or a local network, so its password and tokens would cross the network "
+        + "in the clear. Use an https URL."
+
+    /// https, a local address, or ``TransportSecurity/allowInsecureHTTP``.
+    static func mayCarryCredentials(_ url: String) -> Bool {
+        TransportSecurity.allowInsecureHTTP || TransportSecurity.isSecureOrLocal(url)
+    }
+
     /// Log in with username/password against `nodeURL` — a development node you
     /// run yourself. Not offered by ``LoginView``'s default; mobile sign-in is Cloud.
     ///
@@ -729,6 +758,10 @@ public final class MeroClient: ObservableObject {
         }
         guard !username.isEmpty, !password.isEmpty else {
             errorMessage = "Username and password are required."
+            return
+        }
+        guard Self.mayCarryCredentials(base) else {
+            errorMessage = Self.insecureNodeURLMessage
             return
         }
 
@@ -793,14 +826,20 @@ public final class MeroClient: ObservableObject {
     }
 
     /// Sign out and forget everything: retire the relay session and the
-    /// account (the device key stays), or the node login and its tokens, and
-    /// every remembered id. (== mero-react `logout`.)
-    public func logout() async {
+    /// account (its relay map and pinned relay keys with it), or the node login
+    /// and its tokens, every remembered id and the invitation attempt ledger.
+    /// (== mero-react `logout`.)
+    ///
+    /// The device key stays, so signing back in is one approval, unless
+    /// `forgetDevice` — pass it on a shared or handed-over device, so the next
+    /// account is not handed a key already certified to this one
+    /// (``CloudSignIn/signOut(forgetDevice:)``).
+    public func logout(forgetDevice: Bool = false) async {
         stopHealth()
         delegatedTask?.cancel()
         delegatedTask = nil
-        if connection != nil || delegatedSession != nil {
-            await cloud.signOut()
+        if connection != nil || delegatedSession != nil || forgetDevice {
+            await cloud.signOut(forgetDevice: forgetDevice)
         }
         if let mero {
             await mero.logout()
@@ -811,6 +850,7 @@ public final class MeroClient: ObservableObject {
         }
         await transport?.close()
         storage.clearAll()
+        InvitationCapture.shared.clearAttempts()
         mero = nil
         connection = nil
         transport = nil

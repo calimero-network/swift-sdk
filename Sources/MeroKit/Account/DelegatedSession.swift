@@ -10,9 +10,10 @@ import FoundationNetworking
 // subgroup).
 //
 // mero-js keeps this in `localStorage`; here it is a ``DelegatedAccountStore``
-// over any ``SecureValueStore`` — `UserDefaults` by default (URLs and ids,
-// nothing secret), the Keychain or memory when an app prefers. The device's
-// secret is never in it: that stays in the key store ``CloudSignIn`` uses.
+// over any ``SecureValueStore`` — the Keychain by default on Apple platforms
+// (the pinned relay keys are trust anchors, and the map ties an account to its
+// relays), `UserDefaults` or memory when an app chooses. The device's secret is
+// never in it: that stays in the key store ``CloudSignIn`` uses.
 
 /// What a delegated connection needs: an account, its device certificate, the
 /// device's keys, and — once there is one — the relay to write through.
@@ -116,6 +117,56 @@ public final class UserDefaultsValueStore<Value: Codable & Sendable>: SecureValu
     }
 }
 
+/// A store that takes its value over from an older one: it reads `primary`,
+/// and falls back to `legacy` only while `primary` holds nothing. A value found
+/// in `legacy` alone is copied into `primary` and deleted from `legacy` once
+/// `primary` reads it back, so nothing is lost if the copy fails (a Keychain
+/// locked before first unlock): it is tried again on the next load or save.
+/// Writes go to `primary`; ``clear()`` clears both.
+public final class MigratingValueStore<Value: Codable & Sendable>: SecureValueStore, @unchecked Sendable {
+    private let primary: AnyValueStore<Value>
+    private let legacy: AnyValueStore<Value>
+    private let lock = NSLock()
+    private var legacyGone = false
+
+    public init(primary: AnyValueStore<Value>, legacy: AnyValueStore<Value>) {
+        self.primary = primary
+        self.legacy = legacy
+    }
+
+    public func load() -> Value? {
+        lock.lock(); defer { lock.unlock() }
+        if let value = primary.load() {
+            dropLegacy()
+            return value
+        }
+        guard !legacyGone, let old = legacy.load() else { return nil }
+        primary.save(old)
+        dropLegacy()
+        return old
+    }
+
+    public func save(_ value: Value) {
+        lock.lock(); defer { lock.unlock() }
+        primary.save(value)
+        dropLegacy()
+    }
+
+    public func clear() {
+        lock.lock(); defer { lock.unlock() }
+        primary.clear()
+        legacy.clear()
+        legacyGone = true
+    }
+
+    /// Delete the legacy copy once `primary` holds a value.
+    private func dropLegacy() {
+        guard !legacyGone, primary.load() != nil else { return }
+        legacy.clear()
+        legacyGone = true
+    }
+}
+
 /// Where an account's relay map, the namespaces of its subgroups and the
 /// relays' pinned node keys are kept. Thread-safe.
 ///
@@ -123,8 +174,16 @@ public final class UserDefaultsValueStore<Value: Codable & Sendable>: SecureValu
 /// state is held in memory and written through, so a store that cannot write
 /// never turns a known relay back into an unknown one.
 public final class DelegatedAccountStore: @unchecked Sendable {
-    /// The process-wide store, in `UserDefaults` (`calimero.delegated.state`).
-    public static let shared = DelegatedAccountStore.userDefaults()
+    /// The process-wide store: one Keychain item (`delegated-state`) on Apple
+    /// platforms, taking over what an earlier version kept in `UserDefaults`
+    /// (`calimero.delegated.state`); `UserDefaults` elsewhere.
+    public static let shared: DelegatedAccountStore = {
+        #if canImport(Security)
+        return DelegatedAccountStore.keychain()
+        #else
+        return DelegatedAccountStore.userDefaults()
+        #endif
+    }()
 
     private let backing: AnyValueStore<DelegatedAccountState>
     private let lock = NSLock()
@@ -140,7 +199,8 @@ public final class DelegatedAccountStore: @unchecked Sendable {
         DelegatedAccountStore(.memory(initial))
     }
 
-    /// A store in `UserDefaults` under `key`.
+    /// A store in `UserDefaults` under `key`. A cleartext plist that rides in
+    /// backups: use it only by choice (the default is ``keychain(account:service:accessGroup:migratingFrom:legacyKey:)``).
     public static func userDefaults(
         _ defaults: UserDefaults = .standard, key: String = "calimero.delegated.state"
     ) -> DelegatedAccountStore {
@@ -149,11 +209,18 @@ public final class DelegatedAccountStore: @unchecked Sendable {
     }
 
     #if canImport(Security)
-    /// A store in one Keychain item.
+    /// A store in one Keychain item (`…ThisDeviceOnly`), moving the state an
+    /// earlier version kept in `legacy` under `legacyKey` into it on first read
+    /// (``MigratingValueStore``). `nil` moves nothing.
     public static func keychain(
-        account: String = "delegated-state", service: String = "network.calimero.merokit", accessGroup: String? = nil
+        account: String = "delegated-state", service: String = "network.calimero.merokit", accessGroup: String? = nil,
+        migratingFrom legacy: UserDefaults? = .standard, legacyKey: String = "calimero.delegated.state"
     ) -> DelegatedAccountStore {
-        DelegatedAccountStore(.keychain(account: account, service: service, accessGroup: accessGroup))
+        let keychain = AnyValueStore<DelegatedAccountState>.keychain(
+            account: account, service: service, accessGroup: accessGroup)
+        guard let legacy else { return DelegatedAccountStore(keychain) }
+        let old = UserDefaultsValueStore<DelegatedAccountState>(defaults: legacy, key: legacyKey)
+        return DelegatedAccountStore(AnyValueStore(MigratingValueStore(primary: keychain, legacy: AnyValueStore(old))))
     }
     #endif
 
@@ -217,6 +284,22 @@ public final class DelegatedAccountStore: @unchecked Sendable {
         update { $0.relayNodeKeys[DelegatedAccounts.relayOrigin(relayURL)] = nil }
     }
 
+    /// Forget what is kept about `account`: its relay map, its subgroups'
+    /// namespaces, and the pinned keys of every relay it used (those in its map
+    /// and `relays`) — what ``CloudSignIn/signOut(forgetDevice:)`` does, so the
+    /// next person on the device inherits none of it. A pin is learned again
+    /// from the relay's attestation on the next login.
+    public func forget(account: String, relays: [String] = []) {
+        let id = account.lowercased()
+        update { state in
+            let map = state.relayMaps[id] ?? RelayMap()
+            let used = Set((relays + map.namespaces.values + map.contexts.values).map(DelegatedAccounts.relayOrigin))
+            state.relayMaps[id] = nil
+            state.groupNamespaces[id] = nil
+            for relay in used { state.relayNodeKeys[relay] = nil }
+        }
+    }
+
     /// Forget everything.
     public func clear() {
         lock.lock()
@@ -268,7 +351,7 @@ public struct DelegatedEnvironment: Sendable {
 
     /// `relayKeyVerifier` defaults to a ``DcapRelayKeyVerifier`` over `urlSession`.
     public init(
-        store: DelegatedAccountStore = .shared, nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(),
+        store: DelegatedAccountStore = .shared, nonces: any WarrantNonceStore = WarrantNonces.shared,
         urlSession: URLSession = .shared, relayKeyVerifier: (any RelayKeyVerifier)? = nil,
         cloudBaseURL: URL = CloudClient.defaultBaseURL, audience: LoginAudience = .current, clientName: String? = nil,
         warrantTTLSeconds: UInt64 = 300, timeout: TimeInterval = 15,
@@ -293,7 +376,7 @@ public struct DelegatedEnvironment: Sendable {
     /// The environment ``CloudSignIn`` runs with.
     public init(
         _ config: CloudConfig, store: DelegatedAccountStore = .shared,
-        nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(), urlSession: URLSession = .shared
+        nonces: any WarrantNonceStore = WarrantNonces.shared, urlSession: URLSession = .shared
     ) {
         self.init(
             store: store, nonces: nonces, urlSession: urlSession, relayKeyVerifier: config.relayKeyVerifier,

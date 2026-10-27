@@ -112,6 +112,25 @@ final class SseConnectionTests: XCTestCase {
         XCTAssertEqual(postsAtConnect.values, [1, 2], "connect is announced once the re-subscribe has landed")
     }
 
+    func testALineOverTheLimitDropsTheStreamIsReportedAndReconnects() async {
+        let huge = "data: " + String(repeating: "x", count: SseConnection.maxLineBytes) + "\n\n"
+        let node = ScriptedNode(streams: [ScriptedNode.open(huge), ScriptedNode.open(Frames.connect("s2"))])
+        node.install()
+        let sse = SseConnection.testing()
+        let log = SyncLog<SseSeen>()
+        let messages = SyncLog<String>()
+        sse.record(into: log)
+        sse.on { event in
+            if case .error(MeroError.network(let message)) = event { messages.append(message) }
+        }
+        sse.connect()
+        defer { sse.close() }
+        let seen = await eventually { log.values == [.error(nil), .connect("s2")] }
+        XCTAssertTrue(seen, "\(log.values)")
+        XCTAssertTrue(messages.values.first?.contains("SSE line exceeds") == true, "\(messages.values)")
+        XCTAssertTrue(sse.isRunning, "an oversize line is not terminal")
+    }
+
     func testARefusedReSubscribeAnnouncesConnectThenTheError() async {
         let node = ScriptedNode(streams: [ScriptedNode.open(Frames.connect("s1"))]) { _ in
             .init(status: 500, headers: [:], body: Data("busy".utf8))

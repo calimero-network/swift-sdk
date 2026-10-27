@@ -36,19 +36,24 @@ public struct MeroConfig: Sendable {
     /// (`sse`, `ws`) still use the session; for proof-authorized SSE build an
     /// ``SseConnection`` with an `authorize:` hook.
     public var requestProof: RequestProofConfig?
+    /// The largest response body the node may send, in bytes; a larger one
+    /// fails with ``MeroError/network(_:)``. Blob downloads are not limited.
+    public var maxResponseBytes: Int
 
     public init(
         baseURL: URL,
         credentials: Credentials? = nil,
         timeout: TimeInterval = 10,
         tokenStore: (any TokenStore)? = nil,
-        requestProof: RequestProofConfig? = nil
+        requestProof: RequestProofConfig? = nil,
+        maxResponseBytes: Int = URLSessionHttpClient.defaultMaxResponseBytes
     ) {
         self.baseURL = baseURL
         self.credentials = credentials
         self.timeout = timeout
         self.tokenStore = tokenStore
         self.requestProof = requestProof
+        self.maxResponseBytes = maxResponseBytes
     }
 }
 

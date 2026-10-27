@@ -169,7 +169,7 @@ public actor CloudSignIn {
         keyStore: AnyValueStore<DeviceKeys>,
         sessionStore: AnyValueStore<CloudSession>,
         tokenStore: any TokenStore = MemoryTokenStore(),
-        nonces: any WarrantNonceStore = UserDefaultsWarrantNonceStore(),
+        nonces: any WarrantNonceStore = WarrantNonces.shared,
         urlSession: URLSession = .shared,
         delegatedStore: DelegatedAccountStore = .shared,
         pendingEnrolmentStore: AnyValueStore<PendingEnrolment> = .memory(),
@@ -200,18 +200,25 @@ public actor CloudSignIn {
     }
 
     #if canImport(Security)
-    /// Keychain-backed device keys, session, tokens and pending enrolment (so a
-    /// relaunch while the wallet is open can still finish); nonces in `UserDefaults`.
+    /// Everything in the Keychain under `service`: device keys, session,
+    /// tokens, the pending enrolment (so a relaunch while the wallet is open can
+    /// still finish), warrant nonces and the relay map with its pinned relay keys
+    /// (the latter two moved over from `UserDefaults`, where earlier versions
+    /// kept them, on first read).
     public static func keychain(
         config: CloudConfig = CloudConfig(), service: String = "network.calimero.merokit",
         accessGroup: String? = nil, urlSession: URLSession = .shared
     ) -> CloudSignIn {
-        CloudSignIn(
+        let shared = service == "network.calimero.merokit" && accessGroup == nil
+        return CloudSignIn(
             config: config,
             keyStore: .keychain(account: "cloud-device-keys", service: service, accessGroup: accessGroup),
             sessionStore: .keychain(account: "cloud-session", service: service, accessGroup: accessGroup),
             tokenStore: KeychainTokenStore(service: service, account: "cloud-relay-tokens", accessGroup: accessGroup),
+            nonces: shared
+                ? WarrantNonces.shared : StoredWarrantNonceStore.keychain(service: service, accessGroup: accessGroup),
             urlSession: urlSession,
+            delegatedStore: shared ? .shared : .keychain(service: service, accessGroup: accessGroup),
             pendingEnrolmentStore: .keychain(account: "cloud-enrol-pending", service: service, accessGroup: accessGroup)
         )
     }
@@ -474,16 +481,29 @@ public actor CloudSignIn {
 
     // MARK: - Sign out
 
-    /// Retire the relay session (`POST /auth/logout`), then forget the account.
-    /// The device keys stay unless `forgetDevice`.
+    /// Retire the relay session (`POST /auth/logout`), then forget the account:
+    /// its tokens, session, pending enrolment, relay map, subgroup namespaces
+    /// and the pinned keys of the relays it used
+    /// (``DelegatedAccountStore/forget(account:relays:)``).
+    ///
+    /// The device keys stay unless `forgetDevice`, and so do the warrant
+    /// nonces: they were spent under those keys, and a node refuses a nonce it
+    /// has seen from a device, so they go only with the keys. Pass
+    /// `forgetDevice` on a shared or handed-over device, so the next account
+    /// signs in with a fresh key rather than one certified to this one.
     public func signOut(forgetDevice: Bool = false) async {
-        if let relayUrl = sessionStore.load()?.relayUrl, let tokens = tokenStore.getTokens() {
+        let session = sessionStore.load()
+        if let relayUrl = session?.relayUrl, let tokens = tokenStore.getTokens() {
             await RelayLogin.logout(relayURL: relayUrl, refreshToken: tokens.refreshToken, session: urlSession)
         }
         tokenStore.clear()
         sessionStore.clear()
         pendingStore.clear()
-        if forgetDevice { keyStore.clear() }
+        if let session { delegatedStore.forget(account: session.account, relays: session.relayUrl.map { [$0] } ?? []) }
+        if forgetDevice {
+            keyStore.clear()
+            nonces.clear()
+        }
     }
 
     private func cloudClient(keys: DeviceKeys, credential: String) -> CloudClient {

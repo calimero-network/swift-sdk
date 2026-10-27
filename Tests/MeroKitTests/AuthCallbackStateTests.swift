@@ -122,10 +122,23 @@ final class AuthCallbackStateTests: XCTestCase {
 
     func testMeroStaticsShareTheDefaultStore() throws {
         let login = Mero.buildAuthLoginUrl(
-            nodeUrl: node, options: AuthLoginOptions(callbackUrl: "myapp://auth-callback", mode: "login"))
+            nodeUrl: node, options: AuthLoginOptions(callbackUrl: "https://app.example/auth-callback", mode: "login"))
         let back = try callback(for: login)
         XCTAssertEqual(Mero.parseAuthCallback(back)?.accessToken, "a")
         XCTAssertNil(Mero.parseAuthCallback(back))
+    }
+
+    func testRefusesACustomSchemeCallbackUnlessTheCallerOptsIn() throws {
+        let store = AuthLoginStateStore()
+        let custom = try callback(for: beginLogin(store, callbackUrl: "myapp://auth-callback"))
+        XCTAssertNil(SsoLogin.parseAuthCallback(custom, stateStore: store), "any app can claim a custom scheme")
+        let insecure = try callback(for: beginLogin(store, callbackUrl: "http://app.example/cb"))
+        XCTAssertNil(SsoLogin.parseAuthCallback(insecure, stateStore: store))
+
+        let fromAuthSession = try callback(for: beginLogin(store, callbackUrl: "myapp://auth-callback"))
+        let parsed = SsoLogin.parseAuthCallback(
+            fromAuthSession, options: ParseAuthCallbackOptions(allowCustomScheme: true), stateStore: store)
+        XCTAssertEqual(parsed?.accessToken, "a")
     }
 
     // MARK: - URL shape (byte-identical with mero-js)

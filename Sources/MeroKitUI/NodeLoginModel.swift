@@ -77,9 +77,25 @@ public final class NodeLoginModel: ObservableObject {
         return selected != nil || Self.isValidNodeURL(customURL)
     }
 
+    /// Whether the chosen node would be reached over plain http across the
+    /// network: not https, and not a local address (``TransportSecurity``).
+    /// A password or token would then travel in the clear, so
+    /// ``resolveTarget()`` refuses it; show a warning while it is `true`.
+    public var isInsecure: Bool {
+        guard !TransportSecurity.allowInsecureHTTP else { return false }
+        if let selected { return !TransportSecurity.isSecureOrLocal(selected) }
+        guard Self.isValidNodeURL(customURL) else { return false }
+        return !TransportSecurity.isSecureOrLocal(Self.normalized(customURL))
+    }
+
     /// The node to connect to, checked: a discovered one as is; a typed one
-    /// once it answers. `nil` (with ``error`` set) when it does not.
+    /// once it answers. `nil` (with ``error`` set) when it does not, or when
+    /// it ``isInsecure``.
     public func resolveTarget() async -> String? {
+        if isInsecure {
+            error = MeroClient.insecureNodeURLMessage
+            return nil
+        }
         if let selected { return selected }
         guard Self.isValidNodeURL(customURL), let base = URL(string: Self.normalized(customURL)) else { return nil }
         isChecking = true

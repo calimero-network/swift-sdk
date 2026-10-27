@@ -9,68 +9,42 @@ import Security
 /// Set `accessGroup` to a shared Keychain access-group so an SSO helper /
 /// share / notification extension can read the same tokens (required for the
 /// cross-process refresh coordination in the roadmap). Accessibility defaults to
-/// `kSecAttrAccessibleAfterFirstUnlock` so a background extension can refresh.
+/// `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`: a background extension
+/// can still refresh, and the tokens never travel in a backup or a device
+/// migration to a device that does not hold the keys they pair with. An item
+/// saved under an older class moves to this one on its next write.
+///
+/// A write that fails (the device locked, say) is counted in ``writeFailures``
+/// and handed to `onWriteFailure`, not dropped.
 public final class KeychainTokenStore: TokenStore, @unchecked Sendable {
-    private let service: String
-    private let account: String
-    private let accessGroup: String?
+    private let item: KeychainItem
     private let accessible: CFString
+    /// Failed writes, for diagnostics.
+    public let writeFailures: KeychainWriteFailures
 
     public init(
         service: String = "network.calimero.merokit",
         account: String = "mero-tokens",
         accessGroup: String? = nil,
-        accessible: CFString = kSecAttrAccessibleAfterFirstUnlock
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        onWriteFailure: (@Sendable (OSStatus) -> Void)? = nil
     ) {
-        self.service = service
-        self.account = account
-        self.accessGroup = accessGroup
+        self.item = KeychainItem(service: service, account: account, accessGroup: accessGroup)
         self.accessible = accessible
-    }
-
-    private func baseQuery() -> [String: Any] {
-        var q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ]
-        if let accessGroup {
-            q[kSecAttrAccessGroup as String] = accessGroup
-        }
-        return q
+        self.writeFailures = KeychainWriteFailures(onFailure: onWriteFailure)
     }
 
     public func getTokens() -> TokenData? {
-        var query = baseQuery()
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return try? MeroJSON.decode(TokenData.self, from: data)
+        item.read().flatMap { try? MeroJSON.decode(TokenData.self, from: $0) }
     }
 
     public func setTokens(_ data: TokenData) {
         guard let encoded = try? MeroJSON.encode(data) else { return }
-
-        let query = baseQuery()
-        let attributes: [String: Any] = [
-            kSecValueData as String: encoded,
-            kSecAttrAccessible as String: accessible,
-        ]
-
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = encoded
-            addQuery[kSecAttrAccessible as String] = accessible
-            SecItemAdd(addQuery as CFDictionary, nil)
-        }
+        writeFailures.record(item.write(encoded, accessible: accessible))
     }
 
     public func clear() {
-        SecItemDelete(baseQuery() as CFDictionary)
+        writeFailures.record(item.delete())
     }
 }
 #endif

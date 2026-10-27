@@ -183,8 +183,8 @@ public struct RelayKeyTransportError: Error, LocalizedError, Sendable {
 /// trusted by, in place of the TLS-only ``TLSRelayKeyVerifier``.
 /// (== mero-js `relayQuoteVerifier` + `attestRelayNodeKey`.)
 ///
-/// A loopback relay is a dev rig answering mock quotes: its mock is accepted
-/// (unless `allowMock` says otherwise). From any other host a mock is refused.
+/// A mock quote (a dev rig's) is refused unless `allowMock`, from a loopback
+/// relay too: another app on the device can listen on `127.0.0.1`.
 public struct DcapRelayKeyVerifier: RelayKeyVerifier {
     /// The image profile a relay must run. (mero-js `TRUSTED_RELAY_PROFILE`.)
     public static let trustedRelayProfile = TeeTrust.productionProfile
@@ -195,7 +195,8 @@ public struct DcapRelayKeyVerifier: RelayKeyVerifier {
 
     /// The quote verifier for a relay, by its URL.
     public let verifierFor: @Sendable (_ relayURL: String) -> any TransportQuoteVerifier
-    /// `nil` accepts mock quotes only from loopback relays.
+    /// Accept a mock quote, from any relay. Development and tests only;
+    /// `nil` is `false`.
     public let allowMock: Bool?
 
     /// Verify with `verifierFor(relayURL)`.
@@ -262,7 +263,7 @@ public struct DcapRelayKeyVerifier: RelayKeyVerifier {
         let nonce = try Hex.decode(attestation.nonce, label: "nonce", bytes: 32)
         let (reportData, mock) = try RelayNodeKey.reportData(of: quote)
         if mock {
-            guard allowMock ?? RelayNodeKey.isLoopback(attestation.relayURL) else {
+            guard allowMock ?? false else {
                 throw AccountError.relayKeyUnavailable(
                     "the relay answered with a MOCK quote, which proves nothing about the hardware")
             }
