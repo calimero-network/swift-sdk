@@ -547,6 +547,49 @@ public struct AccountAdmin: AdminApiForwarding {
         throw refusal("deleteBlob")
     }
 
+    // MARK: - Blobs
+
+    // An account session holds `blob:add-own` and `blob:get-own` on its relay:
+    // it may store a blob into, and read one out of, a context it is a member
+    // of, and the relay checks that membership (and, for a read, that it holds
+    // the blob against that context) on every call. So each of these names the
+    // context; without one the relay could only refuse.
+
+    /// Store `request.data` on the relay, against `request.contextId` (required:
+    /// an account uploads into a context it is a member of). The relay announces
+    /// it to the context, so the other members' nodes can fetch it.
+    public func uploadBlob(_ request: UploadBlobRequest) async throws -> UploadBlobResponseData {
+        try requireContext(request.contextId, "uploadBlob")
+        return try await forwardedAdmin.uploadBlob(request)
+    }
+
+    /// A blob's bytes, read through `contextId` (required): the relay serves
+    /// it from its own store or fetches it from a peer of that context.
+    public func getBlob(_ blobId: String, contextId: String?) async throws -> Data {
+        try requireContext(contextId, "getBlob")
+        return try await forwardedAdmin.getBlob(blobId, contextId: contextId)
+    }
+
+    /// A blob's metadata, read through `contextId` (required).
+    public func getBlobInfo(_ blobId: String, contextId: String?) async throws -> GetBlobInfoResponseData {
+        try requireContext(contextId, "getBlobInfo")
+        return try await forwardedAdmin.getBlobInfo(blobId, contextId: contextId)
+    }
+
+    /// The blobs the relay scopes to this account (those of its contexts).
+    public func listBlobs() async throws -> ListBlobsResponseData {
+        guard let read else { return ListBlobsResponseData(blobs: []) }
+        return try await read.listBlobs()
+    }
+
+    private func requireContext(_ contextId: String?, _ method: String) throws {
+        try requireRelay(method)
+        guard let contextId, !contextId.isEmpty else {
+            throw AccountError.invalidInput(
+                "\(method) needs a contextId: an account reaches blobs only through a context it is a member of")
+        }
+    }
+
     /// The wallet manages an account's devices, not an app.
     public func listAccountDevices() async throws -> [AccountDeviceEntry] {
         throw refusal("listAccountDevices")

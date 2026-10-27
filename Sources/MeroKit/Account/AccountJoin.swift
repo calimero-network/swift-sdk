@@ -14,6 +14,11 @@ public enum NamespaceOps {
     /// (calimero-network/core#4625, no layout change from 26). A node refuses
     /// any other value.
     public static let schemaVersion: UInt8 = 27
+    /// The versions a join can be signed at. 26 (core 0.11.0-rc.90) and 27
+    /// (core 0.11.0 on) sign the same layout, so a join refused by a node that
+    /// names the other one is signed again at that version: relays in the
+    /// cloud do not all move to a new core release at once.
+    public static let acceptedSchemaVersions: ClosedRange<UInt8> = 26...27
     static let signDomain = "calimero.namespace.v1"
     static let opRoot: UInt8 = 0
     static let memberJoined: UInt8 = 5
@@ -58,7 +63,8 @@ public enum NamespaceOps {
     /// The `signable` half of a member-join op (what is signed, after the domain).
     public static func memberJoinSignable(
         namespaceId: String, member: String, invitation: SignedGroupOpenInvitation, credential: String,
-        signerPublicKey: Data, nonce: UInt64, joinedAt: UInt64, parentOpHashes: [String] = []
+        signerPublicKey: Data, nonce: UInt64, joinedAt: UInt64, parentOpHashes: [String] = [],
+        schemaVersion: UInt8 = NamespaceOps.schemaVersion
     ) throws -> Data {
         var op = BorshWriter()
         op.u8(opRoot)
@@ -89,15 +95,28 @@ public enum NamespaceOps {
     /// — raw, not hashed.
     public static func signMemberJoinOp(
         namespaceId: String, member: String, invitation: SignedGroupOpenInvitation, credential: String,
-        keys: DeviceKeys, nonce: UInt64, joinedAt: UInt64? = nil, parentOpHashes: [String] = []
+        keys: DeviceKeys, nonce: UInt64, joinedAt: UInt64? = nil, parentOpHashes: [String] = [],
+        schemaVersion: UInt8 = NamespaceOps.schemaVersion
     ) throws -> String {
         let signerPublicKey = try Ed25519.publicKey(seed: keys.signSecret)
         let signable = try memberJoinSignable(
             namespaceId: namespaceId, member: member, invitation: invitation, credential: credential,
             signerPublicKey: signerPublicKey, nonce: nonce,
-            joinedAt: joinedAt ?? UInt64(Date().timeIntervalSince1970), parentOpHashes: parentOpHashes)
+            joinedAt: joinedAt ?? UInt64(Date().timeIntervalSince1970), parentOpHashes: parentOpHashes,
+            schemaVersion: schemaVersion)
         let signature = try keys.sign(Data(signDomain.utf8) + signable)
         return Hex.encode(signable + signature + Data([0]))
+    }
+
+    /// The schema version a node names when it refuses an op signed at
+    /// another one (`schema version mismatch: expected 26, got 27`), if it is
+    /// one this SDK can sign at.
+    public static func expectedSchemaVersion(fromRefusal text: String) -> UInt8? {
+        guard let range = text.range(of: #"schema version mismatch: expected (\d+)"#, options: .regularExpression),
+            let digits = text[range].split(separator: " ").last,
+            let version = UInt8(digits), acceptedSchemaVersions.contains(version)
+        else { return nil }
+        return version
     }
 
     private static func bytes32(_ value: [Int], _ label: String) throws -> Data {
@@ -353,11 +372,10 @@ public enum AccountJoin {
         account: String, credential: String, keys: DeviceKeys, nonce: UInt64, session: URLSession = .shared
     ) async -> JoinWithNodeResult {
         let relayUrl = DelegatedAccounts.relayOrigin(nodeURL)
-        let request: URLRequest
-        do {
+        func request(signedAt schemaVersion: UInt8) throws -> URLRequest {
             let signedOp = try NamespaceOps.signMemberJoinOp(
                 namespaceId: namespaceId, member: account, invitation: invitation, credential: credential, keys: keys,
-                nonce: nonce)
+                nonce: nonce, schemaVersion: schemaVersion)
             guard let url = URL(string: admitURL ?? admitPath(relayUrl, namespaceId)) else {
                 throw AccountError.invalidInput("the admit URL is not a URL")
             }
@@ -367,29 +385,64 @@ public enum AccountJoin {
             built.setValue("application/json", forHTTPHeaderField: "Content-Type")
             built.setValue("application/json", forHTTPHeaderField: "Accept")
             built.httpBody = try MeroJSON.encode(AdmitJoinRequest(invitation: invitation, signedOp: signedOp))
-            request = built
+            return built
+        }
+        var schemaVersion = NamespaceOps.schemaVersion
+        while true {
+            let attempt = await admitOnce(nodeURL: nodeURL, relayUrl: relayUrl, session: session) {
+                try request(signedAt: schemaVersion)
+            }
+            switch attempt {
+            case .done(let outcome):
+                return outcome
+            case .refused(let status, let body):
+                // A node on the neighbouring core release names the version it
+                // verifies: sign once more at that one, never twice.
+                if schemaVersion == NamespaceOps.schemaVersion,
+                    let expected = NamespaceOps.expectedSchemaVersion(fromRefusal: body), expected != schemaVersion
+                {
+                    schemaVersion = expected
+                    continue
+                }
+                return .failed(
+                    BootstrapFailure(step: .admit, reason: explainAdmitFailure(status, body), status: status))
+            }
+        }
+    }
+
+    private enum AdmitAttempt {
+        case done(JoinWithNodeResult)
+        case refused(status: Int, body: String)
+    }
+
+    private static func admitOnce(
+        nodeURL: String, relayUrl: String, session: URLSession, request makeRequest: () throws -> URLRequest
+    ) async -> AdmitAttempt {
+        let request: URLRequest
+        do {
+            request = try makeRequest()
         } catch {
-            return .failed(
-                BootstrapFailure(
-                    step: .sign,
-                    reason: "The join op could not be signed, so nothing was sent: \(RelayClient.message(error))"))
+            return .done(
+                .failed(
+                    BootstrapFailure(
+                        step: .sign,
+                        reason: "The join op could not be signed, so nothing was sent: \(RelayClient.message(error))")))
         }
         do {
             let (data, _) = try await AccountHTTP.sendRaw(request, session: session)
             let body = try? MeroJSON.decode(JSONValue.self, from: data)
             // A 2xx this client cannot read is still a node that took the
             // call: reported as not published, which is exactly what is not known.
-            return .joined(published: body?["data"]?["published"]?.boolValue == true, relayUrl: relayUrl)
+            return .done(.joined(published: body?["data"]?["published"]?.boolValue == true, relayUrl: relayUrl))
         } catch MeroError.http(let http) {
-            return .failed(
-                BootstrapFailure(
-                    step: .admit, reason: explainAdmitFailure(http.status, http.bodyText ?? ""), status: http.status))
+            return .refused(status: http.status, body: http.bodyText ?? "")
         } catch {
-            return .failed(
-                BootstrapFailure(
-                    step: .admit,
-                    reason: "The admitter at \(nodeURL) could not be reached: \(RelayClient.message(error)). The "
-                        + "invitation is untouched — this is the node being unreachable, not a refusal."))
+            return .done(
+                .failed(
+                    BootstrapFailure(
+                        step: .admit,
+                        reason: "The admitter at \(nodeURL) could not be reached: \(RelayClient.message(error)). The "
+                            + "invitation is untouched — this is the node being unreachable, not a refusal.")))
         }
     }
 

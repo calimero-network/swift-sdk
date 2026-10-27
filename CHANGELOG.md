@@ -2,17 +2,31 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased: outbound approvals
+## Unreleased: an account uploads and downloads blobs through its relay
 
-- **A namespace approves an app's outbound requests** (calimero-network/core#4690).
-  `CreateNamespaceRequest.approveOutbound` and `UpgradeGroupRequest.approveOutbound`
-  take an `OutboundSelection` (`.manifest` or `.prefixes([...])`), sent only
-  when set; the responses carry the resulting `outboundApproval`.
-- **`listOutboundApprovals(_:)`** (`GET /namespaces/{id}/outbound-approvals`)
-  lists what a namespace approves, per publisher; **`setOutboundApproval(_:request:)`**
-  (`PUT`, same path) sets one publisher's list exactly, and an empty list revokes.
-  Both are on `AdminSurface`; an account reads the list through its relay and is
-  refused `setOutboundApproval`, and `createNamespace` with `approveOutbound`, by name.
+`AdminSurface` gains `uploadBlob`, `getBlob(_:contextId:)`,
+`getBlobInfo(_:contextId:)` and `listBlobs`, so an app holding an
+`any AdminSurface` (a node's admin or an account's) can send and read
+attachments and avatars the same way.
+
+On `AccountAdmin` they go to the account's relay, which grants an account
+session `blob:add-own` and `blob:get-own`: a blob is stored into, and read out
+of, a context the account is a member of, and the relay checks that on every
+call. So each call needs a `contextId` and throws `AccountError.invalidInput`
+without one, before anything is sent. With no relay, an upload or read throws
+`AccountError.noRelay` and `listBlobs` is empty. Deleting a blob stays a
+node's call. A node's `AdminApi` and `NodeAdmin` keep their behaviour.
+## Unreleased: a join signs at the schema version the node names
+
+Relays in the cloud do not all move to a new core release at once. A relay
+still on core 0.11.0-rc.90 refused every join signed at schema 27 with
+`schema version mismatch: expected 26, got 27`, so nobody could join a
+namespace it admits for. 26 and 27 sign the same layout (core#4625), so
+`AccountJoin.joinWithNode` now signs once more at the version the node names
+when it is one of `NamespaceOps.acceptedSchemaVersions` (26...27), and never
+retries twice or guesses at a version it does not know.
+`NamespaceOps.signMemberJoinOp` / `memberJoinSignable` take an optional
+`schemaVersion` (default `NamespaceOps.schemaVersion`, still 27).
 
 ## Unreleased: request proofs refuse a window a node would refuse
 

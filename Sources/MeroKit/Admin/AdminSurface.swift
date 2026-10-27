@@ -129,6 +129,13 @@ public protocol AdminSurface: Sendable {
     func setTeeAdmissionPolicy(_ groupId: String, request: SetTeeAdmissionPolicyRequest) async throws
     func getTeeAdmissionPolicy(_ groupId: String) async throws -> GetTeeAdmissionPolicyResponseData
     func deleteBlob(_ blobId: String) async throws -> DeleteBlobResponseData
+    /// Store a blob (`PUT /admin-api/blobs`), announced to `request.contextId` when given.
+    func uploadBlob(_ request: UploadBlobRequest) async throws -> UploadBlobResponseData
+    /// A blob's bytes; `contextId` lets the node fetch one a peer of that context holds.
+    func getBlob(_ blobId: String, contextId: String?) async throws -> Data
+    /// A blob's metadata without its bytes (`HEAD /admin-api/blobs/:id`).
+    func getBlobInfo(_ blobId: String, contextId: String?) async throws -> GetBlobInfoResponseData
+    func listBlobs() async throws -> ListBlobsResponseData
     func listAccountDevices() async throws -> [AccountDeviceEntry]
     func revokeDevice(_ namespaceId: String, request: RevokeDeviceRequest) async throws -> RevokeDeviceResponseData
 }
@@ -483,6 +490,22 @@ public extension AdminApiForwarding {
 
     func deleteBlob(_ blobId: String) async throws -> DeleteBlobResponseData {
         try await forwardedAdmin.deleteBlob(blobId)
+    }
+
+    func uploadBlob(_ request: UploadBlobRequest) async throws -> UploadBlobResponseData {
+        try await forwardedAdmin.uploadBlob(request)
+    }
+
+    func getBlob(_ blobId: String, contextId: String?) async throws -> Data {
+        try await forwardedAdmin.getBlob(blobId, contextId: contextId)
+    }
+
+    func getBlobInfo(_ blobId: String, contextId: String?) async throws -> GetBlobInfoResponseData {
+        try await forwardedAdmin.getBlobInfo(blobId, contextId: contextId)
+    }
+
+    func listBlobs() async throws -> ListBlobsResponseData {
+        try await forwardedAdmin.listBlobs()
     }
 
     func listAccountDevices() async throws -> [AccountDeviceEntry] {
