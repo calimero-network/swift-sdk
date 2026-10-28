@@ -19,7 +19,7 @@ import Foundation
 /// (``parse(_:expectedSlug:)``).
 public struct AppInvitation: Sendable {
     /// What the name is read from, first match wins.
-    public static let nameKeys = ["groupName", "groupAlias", "__teamName", "teamName", "name"]
+    public static let nameKeys = ["groupName", "groupAlias", "__teamName", "teamName", "spaceName", "name"]
     /// What ``token(nameKey:)`` writes the name under unless told otherwise.
     public static let defaultNameKey = "groupName"
 

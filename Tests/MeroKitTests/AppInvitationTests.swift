@@ -70,6 +70,13 @@ final class AppInvitationTests: XCTestCase {
         XCTAssertEqual(decoded.namespaceId, Self.namespaceId)
     }
 
+    func testReadsTheKotlinSamplesSpaceName() throws {
+        let signed = try XCTUnwrap(AppInvitation.decode(token: Self.designToken)).invitation
+        let body = String(decoding: try JSONEncoder().encode(signed), as: UTF8.self)
+        let decoded = try XCTUnwrap(AppInvitation.decode(json: #"{"spaceName":"Lab","invitation":\#(body)}"#))
+        XCTAssertEqual(decoded.name, "Lab")
+    }
+
     func testRefusesWhatIsNotAnInvitation() {
         XCTAssertNil(AppInvitation.decode(token: "not a token"))
         XCTAssertNil(AppInvitation.decode(json: #"{"invitation":{"group_id":[1]}}"#))
