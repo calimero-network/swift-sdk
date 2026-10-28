@@ -15,24 +15,40 @@ public struct RecordedContractCall: Equatable, Sendable {
     public let path: Path
     public let contextId: String
     public let method: String
+    /// The arguments as a ``JSONValue``: an integer beyond 2^53 has lost
+    /// digits here; ``argsJSON`` has them all.
     public let args: JSONValue
+    /// The arguments exactly as sent, for a call made with JSON bytes
+    /// (``ContextContract/query(contextId:method:argsJSON:)``, as a
+    /// ``BoundContextContract`` makes it); `nil` for a ``JSONValue`` call.
+    public let argsJSON: Data?
 
-    public init(path: Path, contextId: String, method: String, args: JSONValue) {
+    public init(path: Path, contextId: String, method: String, args: JSONValue, argsJSON: Data? = nil) {
         self.path = path
         self.contextId = contextId
         self.method = method
         self.args = args
+        self.argsJSON = argsJSON
     }
 }
 
 /// A ``ContextContract`` that records every call and answers from a handler
 /// (`null` by default). Script the app's contract in the handler, by method.
+///
+/// A call with JSON bytes (what a ``BoundContextContract`` makes) is recorded
+/// with its exact bytes (``RecordedContractCall/argsJSON``) and answered by
+/// the raw handler when one is set (``setRawHandler(_:)``), byte for byte;
+/// else by the handler, through ``JSONValue``.
 public final class RecordingContextContract: ContextContract, @unchecked Sendable {
     public typealias Handler = @Sendable (RecordedContractCall) throws -> JSONValue?
+    /// Answers a byte-level call with the return value's JSON, or `nil` to
+    /// leave it to the ``Handler``.
+    public typealias RawHandler = @Sendable (RecordedContractCall) throws -> Data?
 
     private let lock = NSLock()
     private var recorded: [RecordedContractCall] = []
     private var handler: Handler
+    private var rawHandler: RawHandler?
 
     public init(handler: @escaping Handler = { _ in .null }) {
         self.handler = handler
@@ -56,6 +72,13 @@ public final class RecordingContextContract: ContextContract, @unchecked Sendabl
         self.handler = handler
     }
 
+    /// Answer byte-level calls with exact JSON (an integer beyond 2^53 kept).
+    public func setRawHandler(_ handler: RawHandler?) {
+        lock.lock()
+        defer { lock.unlock() }
+        rawHandler = handler
+    }
+
     public func reset() {
         lock.lock()
         defer { lock.unlock() }
@@ -68,6 +91,29 @@ public final class RecordingContextContract: ContextContract, @unchecked Sendabl
 
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
         try record(RecordedContractCall(path: .execute, contextId: contextId, method: method, args: args))
+    }
+
+    public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        try recordRaw(.query, contextId, method, argsJSON)
+    }
+
+    public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        try recordRaw(.execute, contextId, method, argsJSON)
+    }
+
+    private func recordRaw(
+        _ path: RecordedContractCall.Path, _ contextId: String, _ method: String, _ argsJSON: Data
+    ) throws -> Data {
+        let args = (try? JSONDecoder().decode(JSONValue.self, from: argsJSON)) ?? .null
+        let call = RecordedContractCall(
+            path: path, contextId: contextId, method: method, args: args, argsJSON: argsJSON)
+        lock.lock()
+        recorded.append(call)
+        let raw = rawHandler
+        let current = handler
+        lock.unlock()
+        if let answer = try raw?(call) { return answer }
+        return CanonicalJSON.data(try current(call) ?? .null)
     }
 
     private func record(_ call: RecordedContractCall) throws -> JSONValue? {

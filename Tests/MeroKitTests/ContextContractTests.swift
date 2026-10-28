@@ -20,9 +20,12 @@ final class ContextContractTests: XCTestCase {
         XCTAssertEqual(
             contract.calls,
             [
-                RecordedContractCall(path: .query, contextId: context, method: "get_post", args: ["id": "p1"]),
                 RecordedContractCall(
-                    path: .execute, contextId: context, method: "like", args: ["id": "p1", "up": true]),
+                    path: .query, contextId: context, method: "get_post", args: ["id": "p1"],
+                    argsJSON: Data(#"{"id":"p1"}"#.utf8)),
+                RecordedContractCall(
+                    path: .execute, contextId: context, method: "like", args: ["id": "p1", "up": true],
+                    argsJSON: Data(#"{"id":"p1","up":true}"#.utf8)),
             ])
     }
 

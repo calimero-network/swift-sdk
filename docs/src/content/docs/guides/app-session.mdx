@@ -136,8 +136,11 @@ let board = BoardClient(session.contract.bound(to: contextId))
 ```
 
 <Aside>
-Numbers travel as `JSONValue.number`, a `Double`, as every relay call does: an
-integer beyond 2^53 does not survive the trip. Send such values as strings.
+The bound contract passes JSON through as text (`RelayClient.queryJSON` /
+`executeJSON`), never as a `JSONValue`, so a `u64` beyond 2^53 (a nanosecond
+timestamp, `u64::MAX`) arrives and comes back digit for digit. The
+`JSONValue` calls (`query(contextId:method:args:)`) hold numbers as `Double`;
+use the `argsJSON:` overloads, or `bound(to:)`, for such values.
 </Aside>
 
 ## Testing view models

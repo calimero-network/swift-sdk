@@ -245,6 +245,79 @@ public struct RelayClient: PresenceRelay {
         try decode(type, try await execute(contextId: contextId, method: method, argsJson: argsJson).returns)
     }
 
+    // MARK: - Data writes, byte for byte
+
+    /// ``execute(contextId:method:argsJson:)`` with the arguments and the
+    /// method's return value as JSON bytes, never through ``JSONValue``: an
+    /// integer beyond 2^53 (a `u64` timestamp, `u64::MAX`) arrives exactly as
+    /// it was sent. Empty `argsJSON` is `{}`; the result is the method's
+    /// `returns` (`null` when it returns nothing). The warrant commits to the
+    /// arguments' canonical spelling, which is also what the body carries.
+    public func executeJSON(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        let args = try Self.literalArgs(argsJSON)
+        return try await executeLiteral(contextId: contextId, method: method, args: args)
+    }
+
+    /// ``query(contextId:method:argsJson:)`` byte for byte, as
+    /// ``executeJSON(contextId:method:argsJSON:)``: the session's query first,
+    /// the warrant when the node says the method is a write (409) or the
+    /// query is unavailable.
+    public func queryJSON(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        let args = try Self.literalArgs(argsJSON)
+        let key = "\(relayURL)|\(contextId)|\(method)"
+        if MethodKinds.shared.get(key) != .write, let token = await tokenProvider() {
+            do {
+                let body = LiteralJSON.Node.object(["method": .string(method), "argsJson": args])
+                let answer = try await literal(
+                    "POST", "/admin-api/contexts/\(escape(contextId))/query", body: body, bearer: token,
+                    refuseAsIntent: false)
+                MethodKinds.shared.set(key, .read)
+                return Self.returns(answer)
+            } catch MeroError.http(let http) where http.status == 409 {
+                MethodKinds.shared.set(key, .write)
+            } catch {
+                // Not an answer about the method; the warrant reads too.
+            }
+        }
+        return try await executeLiteral(contextId: contextId, method: method, args: args)
+    }
+
+    private func executeLiteral(contextId: String, method: String, args: LiteralJSON.Node) async throws -> Data {
+        let described = try await describe(contextId)
+        let executor = try checkedExecutor(described.executorAccount, described.executorKey)
+        let bytecodeId = Hex.encode(
+            try Hex.decode(described.releaseBytecodeId, label: "the relay's releaseBytecodeId", bytes: 32))
+        let warrant = try Warrants.signWarrant(
+            Warrants.WarrantInput(
+                context: contextId, authorAccount: authorAccount, executor: executor.account,
+                executorKey: executor.key, releaseBytecodeId: bytecodeId,
+                releaseVersion: described.releaseVersion, method: method, argsJson: .null,
+                nonce: nonces.next(relay: relayURL), notAfter: notAfter(),
+                canonicalArgs: Data(LiteralJSON.write(args).utf8)),
+            keys: keys)
+        let answer = try await literal(
+            "POST", "/admin-api/contexts/\(escape(contextId))/intents",
+            body: .object([
+                "method": .string(method), "argsJson": args, "warrant": .string(warrant),
+                "authorProof": .string(authorProof),
+            ]))
+        return Self.returns(answer)
+    }
+
+    private static func literalArgs(_ data: Data) throws -> LiteralJSON.Node {
+        if data.allSatisfy({ [0x20, 0x09, 0x0A, 0x0D].contains($0) }) { return .object([:]) }
+        do {
+            return try LiteralJSON.parse(data)
+        } catch {
+            throw AccountError.invalidInput("argsJSON is not JSON: \(error)")
+        }
+    }
+
+    /// `data.returns` of a relay answer, canonical; `null` when absent.
+    private static func returns(_ answer: LiteralJSON.Node) -> Data {
+        Data(LiteralJSON.write(answer["data"]?["returns"] ?? .null).utf8)
+    }
+
     // MARK: - Presence
 
     /// This device's signing key, hex: the `author` its presence statements name.
@@ -471,15 +544,45 @@ public struct RelayClient: PresenceRelay {
     private func json(
         _ method: String, _ path: String, body: JSONValue?, bearer: String? = nil, refuseAsIntent: Bool = true
     ) async throws -> JSONValue {
+        let request = try relayRequest(
+            method, path, body: body.map(CanonicalJSON.data), bearer: bearer)
+        let (data, head) = try await send(request, refuseAsIntent: refuseAsIntent)
+        return try AccountHTTP.decode(data, status: head.status)
+    }
+
+    /// As ``json(_:_:body:bearer:refuseAsIntent:)``, with every number kept as written.
+    private func literal(
+        _ method: String, _ path: String, body: LiteralJSON.Node, bearer: String? = nil, refuseAsIntent: Bool = true
+    ) async throws -> LiteralJSON.Node {
+        let request = try relayRequest(method, path, body: Data(LiteralJSON.write(body).utf8), bearer: bearer)
+        let (data, head) = try await send(request, refuseAsIntent: refuseAsIntent)
+        if data.isEmpty || head.status == 204 { return .null }
+        do {
+            return try LiteralJSON.parse(data)
+        } catch {
+            let snippet = String(decoding: data.prefix(200), as: UTF8.self)
+            throw MeroError.decoding("status \(head.status): \(snippet)")
+        }
+    }
+
+    private func relayRequest(_ method: String, _ path: String, body: Data?, bearer: String?) throws -> URLRequest {
         let url = try AccountHTTP.url(relayURL, path)
         var headers: [String: String] = [:]
         if let bearer { headers["Authorization"] = "Bearer \(bearer)" }
-        let request = AccountHTTP.jsonRequest(url, method: method, body: body, headers: headers, timeout: timeout)
+        var request = AccountHTTP.jsonRequest(url, method: method, body: nil, headers: headers, timeout: timeout)
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
+        return request
+    }
+
+    private func send(_ request: URLRequest, refuseAsIntent: Bool) async throws -> (Data, HeadResult) {
         var wait: UInt64 = 250_000_000
         var attempt = 0
         while true {
             do {
-                return try await AccountHTTP.send(request, session: session)
+                return try await AccountHTTP.sendRaw(request, session: session)
             } catch MeroError.http(let http) where http.status == 429 && attempt < rateLimitRetries {
                 attempt += 1
                 let after = http.headers["retry-after"].flatMap { UInt64($0) }.map { $0 * 1_000_000_000 }

@@ -17,12 +17,42 @@ public protocol ContextContract: Sendable {
     func query(contextId: String, method: String, args: JSONValue) async throws -> JSONValue?
     /// Run a mutation as the account: a warrant posted to the relay's intents route.
     func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue?
+
+    /// ``query(contextId:method:args:)`` with JSON bytes in and out, every
+    /// number kept as written: what ``BoundContextContract`` calls. `argsJSON`
+    /// is canonical JSON; the result is the return value (`null` for none).
+    func query(contextId: String, method: String, argsJSON: Data) async throws -> Data
+    /// ``execute(contextId:method:args:)`` with JSON bytes in and out, as
+    /// ``query(contextId:method:argsJSON:)``.
+    func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data
 }
 
 extension ContextContract {
     /// This contract with `contextId` fixed: what a generated client calls.
     public func bound(to contextId: String) -> BoundContextContract {
         BoundContextContract(contract: self, contextId: contextId)
+    }
+
+    /// Through ``query(contextId:method:args:)``, so through ``JSONValue``:
+    /// an integer beyond 2^53 loses digits. ``RelayContextContract`` keeps
+    /// them; a contract of your own should implement this to keep them too.
+    public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        let result = try await query(contextId: contextId, method: method, args: try Self.jsonValue(argsJSON))
+        return CanonicalJSON.data(result ?? .null)
+    }
+
+    /// Through ``execute(contextId:method:args:)``, as ``query(contextId:method:argsJSON:)``.
+    public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        let result = try await execute(contextId: contextId, method: method, args: try Self.jsonValue(argsJSON))
+        return CanonicalJSON.data(result ?? .null)
+    }
+
+    static func jsonValue(_ data: Data) throws -> JSONValue {
+        do {
+            return try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
+            throw AccountError.invalidInput("argsJSON is not JSON: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -50,6 +80,16 @@ public struct RelayContextContract: ContextContract {
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
         try await relay.execute(contextId: contextId, method: method, argsJson: args).returns
     }
+
+    /// ``RelayClient/queryJSON(contextId:method:argsJSON:)``: byte for byte.
+    public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        try await relay.queryJSON(contextId: contextId, method: method, argsJSON: argsJSON)
+    }
+
+    /// ``RelayClient/executeJSON(contextId:method:argsJSON:)``: byte for byte.
+    public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        try await relay.executeJSON(contextId: contextId, method: method, argsJSON: argsJSON)
+    }
 }
 
 /// The contract of an account no relay serves yet: every call throws
@@ -63,6 +103,14 @@ public struct NoRelayContextContract: ContextContract {
     }
 
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
+        throw AccountError.noRelay(method: method)
+    }
+
+    public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
+        throw AccountError.noRelay(method: method)
+    }
+
+    public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
         throw AccountError.noRelay(method: method)
     }
 }
@@ -82,11 +130,12 @@ public protocol ContextContractCalling: Sendable {
 
 /// A ``ContextContract`` with its context fixed. (== Kotlin `BoundContextContract`.)
 ///
-/// Empty `argsJSON` is read as `{}`, and anything that is not JSON is refused
-/// (``AccountError/invalidInput(_:)``) before a request is made. Numbers travel
-/// as ``JSONValue/number(_:)``, a `Double`, as every other call through the
-/// relay does: an integer beyond 2^53 does not survive the trip; send it as a
-/// string.
+/// JSON passes through as text, never as a ``JSONValue``: an integer beyond
+/// 2^53 (a `u64` nanosecond timestamp, `u64::MAX`) reaches the contract and
+/// comes back exactly as written. The arguments are checked and put in
+/// canonical spelling (keys sorted, no whitespace) before the call; empty
+/// `argsJSON` is `{}`, and anything that is not JSON is refused
+/// (``AccountError/invalidInput(_:)``) before a request is made.
 public struct BoundContextContract: ContextContractCalling {
     public let contract: any ContextContract
     public let contextId: String
@@ -97,21 +146,20 @@ public struct BoundContextContract: ContextContractCalling {
     }
 
     public func query(method: String, argsJSON: Data) async throws -> Data {
-        let result = try await contract.query(contextId: contextId, method: method, args: try Self.args(argsJSON))
-        return CanonicalJSON.data(result ?? .null)
+        try await contract.query(contextId: contextId, method: method, argsJSON: try Self.args(argsJSON))
     }
 
     public func execute(method: String, argsJSON: Data) async throws -> Data {
-        let result = try await contract.execute(contextId: contextId, method: method, args: try Self.args(argsJSON))
-        return CanonicalJSON.data(result ?? .null)
+        try await contract.execute(contextId: contextId, method: method, argsJSON: try Self.args(argsJSON))
     }
 
-    static func args(_ data: Data) throws -> JSONValue {
-        if data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }) { return [:] }
+    /// `data` in canonical spelling, `{}` when empty.
+    static func args(_ data: Data) throws -> Data {
+        if data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }) { return Data("{}".utf8) }
         do {
-            return try JSONDecoder().decode(JSONValue.self, from: data)
+            return try LiteralJSON.canonical(data)
         } catch {
-            throw AccountError.invalidInput("argsJSON is not JSON: \(error.localizedDescription)")
+            throw AccountError.invalidInput("argsJSON is not JSON: \(error)")
         }
     }
 }
