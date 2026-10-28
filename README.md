@@ -87,7 +87,8 @@ doubles — `FakeNode` (a stateful fake node: login, refresh, revoke, logout,
 JSON-RPC, scoped client keys, contexts, applications, blobs and metadata, and
 `goOffline()` for a transport failure) and `MockURLProtocol` (whose
 `Stub.transportError(_:)` fails a request with no HTTP response, as a dropped
-connection does). Add it to a test target only:
+connection does) — and `InMemoryAppBackend` / `RecordingContextContract`, for
+testing an app's view models without a relay. Add it to a test target only:
 
 ```swift
 .testTarget(name: "MyAppTests", dependencies: [
