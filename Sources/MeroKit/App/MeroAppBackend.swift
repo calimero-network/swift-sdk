@@ -54,6 +54,187 @@ public protocol MeroAppBackend: Sendable {
 
     /// Live events for one context. Finishes at once when ``canSubscribe`` is false.
     func events(contextId: String) -> AsyncThrowingStream<AppContextEvent, Error>
+
+    // MARK: Names
+
+    /// The contexts directly in `groupId`, with their names (context metadata):
+    /// ``listContexts(groupId:)`` with what a screen shows.
+    func listContextEntries(groupId: String) async throws -> [AppContextEntry]
+    /// A group's metadata (a namespace's or a subgroup's), or `nil` if never set.
+    func groupMetadata(groupId: String) async throws -> AppMetadata?
+    /// A context's metadata in its group, or `nil` if never set.
+    func contextMetadata(groupId: String, contextId: String) async throws -> AppMetadata?
+    /// Rename a namespace or subgroup (`GroupMetadataSet`), keeping its metadata's `data`.
+    func setGroupName(groupId: String, name: String) async throws
+    /// Rename a context in its group (`ContextMetadataSet`), keeping its metadata's `data`.
+    func setContextName(groupId: String, contextId: String, name: String) async throws
+
+    // MARK: Blobs
+
+    /// Store `data` on the relay against `contextId`, a context the account is a
+    /// member of; the relay announces it to the context's other members.
+    func uploadBlob(contextId: String, data: Data) async throws -> AppBlob
+    /// A blob's bytes, read through `contextId` (the relay checks the account
+    /// is a member and that the blob belongs to that context).
+    func getBlob(blobId: String, contextId: String) async throws -> Data
+
+    // MARK: Leaving and deleting
+
+    /// Leave a namespace (`MemberLeft` on it): every subgroup and context in it with it.
+    func leaveNamespace(namespaceId: String) async throws
+    /// Leave a subgroup (`MemberLeft` on it), and with it the contexts in it.
+    /// An account is a member of a context through its group, so this is also
+    /// how it leaves a context.
+    func leaveSubgroup(groupId: String) async throws
+    /// Delete a subgroup and what is in it (`GroupDeleted`, a root op on its
+    /// namespace). The relay refuses it unless the account may.
+    func deleteSubgroup(groupId: String) async throws
+    /// Take a context out of its group (`ContextDetached`): it stops being
+    /// listed and served there. The relay refuses it unless the account may.
+    func removeContext(groupId: String, contextId: String) async throws
+
+    // MARK: Members
+
+    /// The members of a namespace or subgroup, with their roles and names
+    /// (member metadata): a namespace's are the app's display names.
+    func listMembers(groupId: String) async throws -> [AppMember]
+    /// Set a member's role (`MemberRoleSet`). Admins only.
+    func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws
+    /// Remove a member (`MemberRemoved`). Admins only.
+    func removeMember(groupId: String, identity: String) async throws
+    /// Set the account's own name in a namespace or subgroup
+    /// (`MemberMetadataSet` on itself), keeping its metadata's `data`.
+    func setMemberName(groupId: String, name: String) async throws
+}
+
+/// What a ``MeroAppBackend`` that predates a call throws for it, naming the
+/// call. ``DelegatedAppBackend`` and ``InMemoryAppBackend`` implement every
+/// call. (== Kotlin `UnsupportedOperationException`.)
+public struct MeroAppBackendUnsupported: Error, Equatable, Sendable {
+    public let method: String
+
+    public init(method: String) {
+        self.method = method
+    }
+}
+
+// Defaults, so a backend of an app's own (written before these calls) still
+// conforms. Each throws ``MeroAppBackendUnsupported``.
+extension MeroAppBackend {
+    public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
+        throw MeroAppBackendUnsupported(method: "listContextEntries")
+    }
+
+    public func groupMetadata(groupId: String) async throws -> AppMetadata? {
+        throw MeroAppBackendUnsupported(method: "groupMetadata")
+    }
+
+    public func contextMetadata(groupId: String, contextId: String) async throws -> AppMetadata? {
+        throw MeroAppBackendUnsupported(method: "contextMetadata")
+    }
+
+    public func setGroupName(groupId: String, name: String) async throws {
+        throw MeroAppBackendUnsupported(method: "setGroupName")
+    }
+
+    public func setContextName(groupId: String, contextId: String, name: String) async throws {
+        throw MeroAppBackendUnsupported(method: "setContextName")
+    }
+
+    public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
+        throw MeroAppBackendUnsupported(method: "uploadBlob")
+    }
+
+    public func getBlob(blobId: String, contextId: String) async throws -> Data {
+        throw MeroAppBackendUnsupported(method: "getBlob")
+    }
+
+    public func leaveNamespace(namespaceId: String) async throws {
+        throw MeroAppBackendUnsupported(method: "leaveNamespace")
+    }
+
+    public func leaveSubgroup(groupId: String) async throws {
+        throw MeroAppBackendUnsupported(method: "leaveSubgroup")
+    }
+
+    public func deleteSubgroup(groupId: String) async throws {
+        throw MeroAppBackendUnsupported(method: "deleteSubgroup")
+    }
+
+    public func removeContext(groupId: String, contextId: String) async throws {
+        throw MeroAppBackendUnsupported(method: "removeContext")
+    }
+
+    public func listMembers(groupId: String) async throws -> [AppMember] {
+        throw MeroAppBackendUnsupported(method: "listMembers")
+    }
+
+    public func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws {
+        throw MeroAppBackendUnsupported(method: "setMemberRole")
+    }
+
+    public func removeMember(groupId: String, identity: String) async throws {
+        throw MeroAppBackendUnsupported(method: "removeMember")
+    }
+
+    public func setMemberName(groupId: String, name: String) async throws {
+        throw MeroAppBackendUnsupported(method: "setMemberName")
+    }
+}
+
+/// A context in a group, with its name. (== Kotlin `AppContextEntry`.)
+public struct AppContextEntry: Identifiable, Hashable, Sendable {
+    /// The context id.
+    public let id: String
+    /// Its name (context metadata), when it has one.
+    public let name: String?
+
+    public init(id: String, name: String?) {
+        self.id = id
+        self.name = name
+    }
+}
+
+/// A group's, member's or context's metadata record. (== Kotlin `AppMetadata`.)
+public struct AppMetadata: Hashable, Sendable {
+    public let name: String?
+    /// The record's other fields. Setting a name keeps them.
+    public let data: [String: String]
+
+    public init(name: String?, data: [String: String] = [:]) {
+        self.name = name
+        self.data = data
+    }
+}
+
+/// A member of a namespace or subgroup. (== Kotlin `AppMember`.)
+public struct AppMember: Identifiable, Hashable, Sendable {
+    /// The member's account, 64 hex.
+    public let identity: String
+    /// `Admin`, `Member` or `ReadOnly`; a relay is `RelayTee`.
+    public let role: String
+    /// The name the member set (member metadata), when it set one.
+    public let name: String?
+
+    public var id: String { identity }
+    public var isAdmin: Bool { role == GovernanceMemberRole.admin.rawValue }
+
+    public init(identity: String, role: String, name: String? = nil) {
+        self.identity = identity
+        self.role = role
+        self.name = name
+    }
+}
+
+/// A blob stored through the relay. (== Kotlin `AppBlob`.)
+public struct AppBlob: Hashable, Sendable {
+    public let blobId: String
+    public let size: Int
+
+    public init(blobId: String, size: Int) {
+        self.blobId = blobId
+        self.size = size
+    }
 }
 
 /// A namespace this account is a member of. (== Kotlin `AppNamespace`.)

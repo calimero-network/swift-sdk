@@ -132,8 +132,11 @@ public final class RecordingContextContract: ContextContract, @unchecked Sendabl
 /// namespace, creating a subgroup or a context adds it (the creator is a
 /// member of a context it creates), joining a context makes the account a
 /// member, and redeeming an invitation adds the namespace and gives a
-/// relayless account its relay. Seed state with the `namespaces`, `subgroups`
-/// and `members` properties; make every admin-side call fail with ``failure``;
+/// relayless account its relay. Names, members and blobs behave the same way:
+/// the founder or creator of a group is its `Admin`, a joiner a `Member`;
+/// leaving or deleting takes the contexts with it; a blob reads back only
+/// through the context it was stored in. Seed state with the `namespaces`,
+/// `subgroups`, `members`, `contextNames` and `groupMembers` properties; make every admin-side call fail with ``failure``;
 /// push live events with ``emit(_:)``. ``log`` lists what was asked, in order.
 public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
     public let account: String
@@ -155,6 +158,10 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         var members: Set<String> = []
         var publicSubgroups: Set<String> = []
         var initArgs: [String: JSONValue] = [:]
+        var contextNames: [String: String] = [:]
+        var groupData: [String: [String: String]] = [:]
+        var groupMembers: [String: [AppMember]] = [:]
+        var blobs: [String: (contextId: String, data: Data)] = [:]
         var log: [String] = []
         var next = 0
         var streams: [UUID: (contextId: String, continuation: AsyncThrowingStream<AppContextEvent, Error>.Continuation)] =
@@ -224,6 +231,18 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
     public var publicSubgroups: Set<String> { read { $0.publicSubgroups } }
     /// The `initArgs` each created context was given, by context id.
     public var initArgs: [String: JSONValue] { read { $0.initArgs } }
+    /// Context names (context metadata), by context id.
+    public var contextNames: [String: String] {
+        get { read { $0.contextNames } }
+        set { write { $0.contextNames = newValue } }
+    }
+    /// The members of each namespace and subgroup, by group id.
+    public var groupMembers: [String: [AppMember]] {
+        get { read { $0.groupMembers } }
+        set { write { $0.groupMembers = newValue } }
+    }
+    /// The stored blobs' bytes, by blob id.
+    public var blobs: [String: Data] { read { $0.blobs.mapValues(\.data) } }
     /// What was asked, in order: `"foundNamespace Team"`, `"joinContext <id>"`, ...
     public var log: [String] { read { $0.log } }
 
@@ -238,12 +257,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func listContexts(groupId: String) async throws -> [String] {
-        try step("listContexts \(groupId)") { state in
-            for list in state.subgroups.values {
-                if let found = list.first(where: { $0.groupId == groupId }) { return found.contextIds }
-            }
-            return state.rootContexts[groupId] ?? []
-        }
+        try step("listContexts \(groupId)") { Self.contexts(in: groupId, $0) }
     }
 
     public func isMember(contextId: String) async throws -> Bool {
@@ -259,6 +273,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
             guard state.hasRelay else { throw AccountError.noRelay(method: "foundNamespace") }
             let id = Self.mint("aa", &state.next)
             state.namespaces.append(AppNamespace(id: id, name: name, applicationId: state.applicationId, memberCount: 1))
+            state.groupMembers[id] = [AppMember(identity: account, role: GovernanceMemberRole.admin.rawValue)]
             return AppFoundedNamespace(
                 namespaceId: id, haEnabled: state.haEnabled, haError: state.haEnabled ? nil : "not hosted (fake)")
         }
@@ -269,6 +284,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
             let id = Self.mint("bb", &state.next)
             state.subgroups[namespaceId, default: []].append(AppSubgroup(groupId: id, name: name, contextIds: []))
             if isPublic { state.publicSubgroups.insert(id) }
+            state.groupMembers[id] = [AppMember(identity: account, role: GovernanceMemberRole.admin.rawValue)]
             return id
         }
     }
@@ -289,6 +305,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
             if !placed { state.rootContexts[groupId, default: []].append(id) }
             state.members.insert(id)
             state.initArgs[id] = initArgs
+            state.contextNames[id] = name
             return id
         }
     }
@@ -304,10 +321,163 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
             if !state.namespaces.contains(where: { $0.id == namespaceId }) {
                 state.namespaces.append(AppNamespace(id: namespaceId, name: nil, applicationId: state.applicationId))
             }
+            if !(state.groupMembers[namespaceId] ?? []).contains(where: { $0.identity == account }) {
+                state.groupMembers[namespaceId, default: []].append(
+                    AppMember(identity: account, role: GovernanceMemberRole.member.rawValue))
+            }
             state.hasRelay = true
             return AppJoinedNamespace(namespaceId: namespaceId, published: true, relayURL: state.joinRelayURL)
         }
     }
+
+    // MARK: Names
+
+    public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
+        try step("listContextEntries \(groupId)") { state in
+            Self.contexts(in: groupId, state).map { AppContextEntry(id: $0, name: state.contextNames[$0]) }
+        }
+    }
+
+    /// `nil` for a group this backend does not know.
+    public func groupMetadata(groupId: String) async throws -> AppMetadata? {
+        try step("groupMetadata \(groupId)") { state in
+            guard let name = Self.groupName(groupId, state) else { return nil }
+            return AppMetadata(name: name, data: state.groupData[groupId] ?? [:])
+        }
+    }
+
+    public func contextMetadata(groupId: String, contextId: String) async throws -> AppMetadata? {
+        try step("contextMetadata \(groupId) \(contextId)") { state in
+            state.contextNames[contextId].map { AppMetadata(name: $0) }
+        }
+    }
+
+    /// Renames the namespace or subgroup in the listings; throws for an unknown group.
+    public func setGroupName(groupId: String, name: String) async throws {
+        try step("setGroupName \(groupId) \(name)") { state in
+            if let index = state.namespaces.firstIndex(where: { $0.id == groupId }) {
+                let old = state.namespaces[index]
+                state.namespaces[index] = AppNamespace(
+                    id: old.id, name: name, applicationId: old.applicationId, memberCount: old.memberCount)
+                return
+            }
+            for (namespace, list) in state.subgroups {
+                guard let index = list.firstIndex(where: { $0.groupId == groupId }) else { continue }
+                state.subgroups[namespace]?[index] = AppSubgroup(
+                    groupId: groupId, name: name, contextIds: list[index].contextIds)
+                return
+            }
+            throw AccountError.invalidInput("no group \(groupId)")
+        }
+    }
+
+    public func setContextName(groupId: String, contextId: String, name: String) async throws {
+        try step("setContextName \(groupId) \(contextId) \(name)") { $0.contextNames[contextId] = name }
+    }
+
+    // MARK: Blobs
+
+    public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
+        try step("uploadBlob \(contextId) \(data.count)") { state in
+            guard state.hasRelay else { throw AccountError.noRelay(method: "uploadBlob") }
+            let id = Self.mint("dd", &state.next)
+            state.blobs[id] = (contextId, data)
+            return AppBlob(blobId: id, size: data.count)
+        }
+    }
+
+    /// Throws unless the blob was stored through `contextId`, as the relay refuses it.
+    public func getBlob(blobId: String, contextId: String) async throws -> Data {
+        try step("getBlob \(blobId) \(contextId)") { state in
+            guard let blob = state.blobs[blobId], blob.contextId == contextId else {
+                throw AccountError.invalidInput("no blob \(blobId) in context \(contextId)")
+            }
+            return blob.data
+        }
+    }
+
+    // MARK: Leaving and deleting
+
+    /// Drops the namespace, its subgroups and the account's contexts in them.
+    public func leaveNamespace(namespaceId: String) async throws {
+        try step("leaveNamespace \(namespaceId)") { state in
+            state.namespaces.removeAll { $0.id == namespaceId }
+            for subgroup in state.subgroups[namespaceId] ?? [] {
+                state.members.subtract(subgroup.contextIds)
+                Self.dropMember(account, from: subgroup.groupId, &state)
+            }
+            state.members.subtract(state.rootContexts[namespaceId] ?? [])
+            state.subgroups[namespaceId] = nil
+            Self.dropMember(account, from: namespaceId, &state)
+        }
+    }
+
+    /// The subgroup stays listed (it may be open); the account is no longer
+    /// in it or its contexts.
+    public func leaveSubgroup(groupId: String) async throws {
+        try step("leaveSubgroup \(groupId)") { state in
+            state.members.subtract(Self.contexts(in: groupId, state))
+            Self.dropMember(account, from: groupId, &state)
+        }
+    }
+
+    public func deleteSubgroup(groupId: String) async throws {
+        try step("deleteSubgroup \(groupId)") { state in
+            state.members.subtract(Self.contexts(in: groupId, state))
+            for namespace in state.subgroups.keys {
+                state.subgroups[namespace]?.removeAll { $0.groupId == groupId }
+            }
+            state.groupMembers[groupId] = nil
+            state.publicSubgroups.remove(groupId)
+        }
+    }
+
+    public func removeContext(groupId: String, contextId: String) async throws {
+        try step("removeContext \(groupId) \(contextId)") { state in
+            for (namespace, list) in state.subgroups {
+                guard let index = list.firstIndex(where: { $0.groupId == groupId }) else { continue }
+                let old = list[index]
+                state.subgroups[namespace]?[index] = AppSubgroup(
+                    groupId: groupId, name: old.name, contextIds: old.contextIds.filter { $0 != contextId })
+            }
+            state.rootContexts[groupId]?.removeAll { $0 == contextId }
+            state.members.remove(contextId)
+        }
+    }
+
+    // MARK: Members
+
+    public func listMembers(groupId: String) async throws -> [AppMember] {
+        try step("listMembers \(groupId)") { $0.groupMembers[groupId] ?? [] }
+    }
+
+    /// Throws for someone who is not a member.
+    public func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws {
+        try step("setMemberRole \(groupId) \(identity) \(role.rawValue)") { state in
+            guard let index = state.groupMembers[groupId]?.firstIndex(where: { $0.identity == identity }),
+                let old = state.groupMembers[groupId]?[index]
+            else { throw AccountError.invalidInput("\(identity) is not a member of \(groupId)") }
+            state.groupMembers[groupId]?[index] = AppMember(identity: identity, role: role.rawValue, name: old.name)
+        }
+    }
+
+    public func removeMember(groupId: String, identity: String) async throws {
+        try step("removeMember \(groupId) \(identity)") { Self.dropMember(identity, from: groupId, &$0) }
+    }
+
+    public func setMemberName(groupId: String, name: String) async throws {
+        try step("setMemberName \(groupId) \(name)") { state in
+            var list = state.groupMembers[groupId] ?? []
+            if let index = list.firstIndex(where: { $0.identity == account }) {
+                list[index] = AppMember(identity: account, role: list[index].role, name: name)
+            } else {
+                list.append(AppMember(identity: account, role: GovernanceMemberRole.member.rawValue, name: name))
+            }
+            state.groupMembers[groupId] = list
+        }
+    }
+
+    // MARK: Events
 
     public func events(contextId: String) -> AsyncThrowingStream<AppContextEvent, Error> {
         guard canSubscribe else { return AsyncThrowingStream { $0.finish() } }
@@ -348,6 +518,25 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         next += 1
         let digits = String(next, radix: 16)
         return prefix + String(repeating: "0", count: 64 - prefix.count - digits.count) + digits
+    }
+
+    private static func contexts(in groupId: String, _ state: State) -> [String] {
+        for list in state.subgroups.values {
+            if let found = list.first(where: { $0.groupId == groupId }) { return found.contextIds }
+        }
+        return state.rootContexts[groupId] ?? []
+    }
+
+    private static func groupName(_ groupId: String, _ state: State) -> String?? {
+        if let namespace = state.namespaces.first(where: { $0.id == groupId }) { return .some(namespace.name) }
+        for list in state.subgroups.values {
+            if let found = list.first(where: { $0.groupId == groupId }) { return .some(found.name) }
+        }
+        return nil
+    }
+
+    private static func dropMember(_ identity: String, from groupId: String, _ state: inout State) {
+        state.groupMembers[groupId]?.removeAll { $0.identity == identity }
     }
 
     private func step<T>(_ entry: String, _ body: (inout State) throws -> T) throws -> T {

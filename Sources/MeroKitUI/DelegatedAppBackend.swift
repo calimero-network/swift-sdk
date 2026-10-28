@@ -17,6 +17,13 @@ import MeroKit
 ///   founds through the relay; ``CloudSignIn/createNamespaceInvitation(_:namespaceId:invitedRole:validForSeconds:)``
 ///   signs invitations with the device key; ``CloudSignIn/join(namespaceId:invitation:nodeURL:)``
 ///   is direct admission (`POST …/namespaces/{id}/admit`) through the relay the cloud routes to.
+/// - Names, members, leaving and deleting: ``AccountAdmin`` reads them from the
+///   relay's caller-scoped admin (`/groups/{id}/contexts`, `/members`,
+///   `/metadata`) and turns each write into its governance op
+///   (`GroupMetadataSet`, `ContextMetadataSet`, `MemberMetadataSet`,
+///   `MemberRoleSet`, `MemberRemoved`, `MemberLeft`, `GroupDeleted`,
+///   `ContextDetached`) on the namespace's relay.
+/// - Blobs: the relay's blob routes, through a context the account is a member of.
 /// - Live updates: SSE on the relay through the connection's Bearer ``Mero``.
 public struct DelegatedAppBackend: MeroAppBackend {
     public let account: String
@@ -140,6 +147,91 @@ public struct DelegatedAppBackend: MeroAppBackend {
         let (_, outcome) = try await signIn.join(namespaceId: namespaceId, invitation: invitation, nodeURL: joinNodeURL)
         return AppJoinedNamespace(namespaceId: namespaceId, published: outcome.published, relayURL: outcome.relayUrl)
     }
+
+    // MARK: Names
+
+    public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
+        try await admin.listGroupContexts(groupId).map { AppContextEntry(id: $0.contextId, name: $0.name) }
+    }
+
+    public func groupMetadata(groupId: String) async throws -> AppMetadata? {
+        try await admin.getGroupMetadata(groupId).map(Self.metadata)
+    }
+
+    public func contextMetadata(groupId: String, contextId: String) async throws -> AppMetadata? {
+        try await admin.getContextMetadata(groupId, contextId: contextId).map(Self.metadata)
+    }
+
+    /// Setting metadata replaces the whole record, so the current `data` is
+    /// read first and sent back with the new name.
+    public func setGroupName(groupId: String, name: String) async throws {
+        let data = try await admin.getGroupMetadata(groupId)?.data
+        try await admin.setGroupMetadata(groupId, request: SetGroupMetadataRequest(name: name, data: data))
+    }
+
+    public func setContextName(groupId: String, contextId: String, name: String) async throws {
+        let data = try await admin.getContextMetadata(groupId, contextId: contextId)?.data
+        try await admin.setContextMetadata(
+            groupId, contextId: contextId, request: SetContextMetadataRequest(name: name, data: data))
+    }
+
+    // MARK: Blobs
+
+    public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
+        let stored = try await admin.uploadBlob(UploadBlobRequest(data: data, contextId: contextId))
+        return AppBlob(blobId: stored.blobId, size: stored.size)
+    }
+
+    public func getBlob(blobId: String, contextId: String) async throws -> Data {
+        try await admin.getBlob(blobId, contextId: contextId)
+    }
+
+    // MARK: Leaving and deleting
+
+    public func leaveNamespace(namespaceId: String) async throws {
+        try await admin.leaveNamespace(namespaceId, request: nil)
+    }
+
+    public func leaveSubgroup(groupId: String) async throws {
+        try await admin.leaveGroup(groupId, request: nil)
+    }
+
+    public func deleteSubgroup(groupId: String) async throws {
+        _ = try await admin.deleteGroup(groupId, request: nil)
+    }
+
+    public func removeContext(groupId: String, contextId: String) async throws {
+        try await admin.detachContextFromGroup(groupId, contextId: contextId, request: nil)
+    }
+
+    // MARK: Members
+
+    public func listMembers(groupId: String) async throws -> [AppMember] {
+        try await admin.listGroupMembers(groupId).members.map {
+            AppMember(identity: $0.identity, role: $0.role, name: $0.name)
+        }
+    }
+
+    public func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws {
+        try await admin.updateMemberRole(
+            groupId, identity: identity, request: UpdateMemberRoleRequest(role: role.rawValue))
+    }
+
+    public func removeMember(groupId: String, identity: String) async throws {
+        try await admin.removeGroupMembers(groupId, request: RemoveGroupMembersRequest(members: [identity]))
+    }
+
+    public func setMemberName(groupId: String, name: String) async throws {
+        let data = try await admin.getMemberMetadata(groupId, identity: account)?.data
+        try await admin.setMemberMetadata(
+            groupId, identity: account, request: SetMemberMetadataRequest(name: name, data: data))
+    }
+
+    private static func metadata(_ record: MetadataRecord) -> AppMetadata {
+        AppMetadata(name: record.name, data: record.data)
+    }
+
+    // MARK: Events
 
     public func events(contextId: String) -> AsyncThrowingStream<AppContextEvent, Error> {
         guard let mero = connection.mero else {

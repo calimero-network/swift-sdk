@@ -112,9 +112,33 @@ board); a **context** runs the contract in a group.
 | `createInvitation(namespaceId:)` | An invitation signed with the device key |
 | `joinNamespace(namespaceId:invitation:)` | Direct admission through an admitting relay |
 | `events(contextId:)` | Live events (finishes at once when `canSubscribe` is false: poll) |
+| `listContextEntries(groupId:)` | The contexts in a group, with their names |
+| `groupMetadata(groupId:)` / `contextMetadata(groupId:contextId:)` | A namespace's, subgroup's or context's name and data |
+| `setGroupName(groupId:name:)` / `setContextName(groupId:contextId:name:)` | Rename (`GroupMetadataSet` / `ContextMetadataSet`), keeping the data |
+| `uploadBlob(contextId:data:)` / `getBlob(blobId:contextId:)` | Attachments, through a context the account is a member of |
+| `leaveNamespace(namespaceId:)` / `leaveSubgroup(groupId:)` | `MemberLeft`: leaving a subgroup leaves its contexts |
+| `deleteSubgroup(groupId:)` / `removeContext(groupId:contextId:)` | `GroupDeleted` / `ContextDetached`, where the account may |
+| `listMembers(groupId:)` | Members with roles and names: a namespace's are the app's display names |
+| `setMemberRole(groupId:identity:role:)` / `removeMember(groupId:identity:)` | `MemberRoleSet` / `MemberRemoved` (admins) |
+| `setMemberName(groupId:name:)` | The account's own name there (`MemberMetadataSet`) |
 
 After `joinNamespace`, call `session.didJoinNamespace()`: a session that had
 no relay now has the admitting one, and reconnects to it.
+
+### Invitations the web apps share
+
+`AppInvitation` reads and writes the web apps' invitation tokens
+(`base58(deflate(JSON))`, the signed invitation wrapped with the namespace's
+name), so a link minted on the web is redeemed on the phone and the other way
+round:
+
+```swift
+guard let invite = AppInvitation.parse(pastedOrOpened, expectedSlug: "com.example.board") else { return }
+_ = try await backend.joinNamespace(namespaceId: invite.namespaceId, invitation: invite.invitation)
+
+let link = try AppInvitation(invitation: try await backend.createInvitation(namespaceId: id), name: "Team")
+  .link(slug: "com.example.board", nameKey: "__teamName")   // the key your web build reads
+```
 
 ## Calling the contract
 

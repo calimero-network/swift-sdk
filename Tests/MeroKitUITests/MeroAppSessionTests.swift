@@ -160,6 +160,67 @@ final class MeroAppSessionTests: XCTestCase {
         XCTAssertEqual(all.map(\.id), [Self.mine, Self.theirs])
     }
 
+    /// Names, blobs, leaving and members map onto the account admin's calls,
+    /// which ``AccountAdmin`` turns into reads and governance ops on the relay.
+    func testTheBackendsNamesBlobsLeavingAndMembersGoThroughTheAdmin() async throws {
+        let session = makeSession()
+        await session.signIn()
+        let client = session.client
+        let admin = RecordingAdmin()
+        let me = try XCTUnwrap(client.account)
+        admin.contexts = [GroupContextEntry(contextId: "c1", name: "Roadmap"), GroupContextEntry(contextId: "c2")]
+        admin.members = [GroupMember(identity: me, role: "Admin", name: "Ana"), GroupMember(identity: "b", role: "Member")]
+        admin.metadata = [
+            "g": MetadataRecord(name: "boards", data: ["icon": "grid"], updatedAt: 1, updatedBy: me),
+            "c1": MetadataRecord(name: "Roadmap", data: ["color": "red"], updatedAt: 1, updatedBy: me),
+            me: MetadataRecord(name: "Ana", data: ["avatar": "a1"], updatedAt: 1, updatedBy: me),
+        ]
+        let backend = DelegatedAppBackend(
+            connection: try XCTUnwrap(client.connection), admin: admin, signIn: client.cloudSignIn,
+            packageName: Self.package)
+
+        let entries = try await backend.listContextEntries(groupId: "g")
+        XCTAssertEqual(entries, [AppContextEntry(id: "c1", name: "Roadmap"), AppContextEntry(id: "c2", name: nil)])
+        let groupMeta = try await backend.groupMetadata(groupId: "g")
+        XCTAssertEqual(groupMeta, AppMetadata(name: "boards", data: ["icon": "grid"]))
+        let contextMeta = try await backend.contextMetadata(groupId: "g", contextId: "c1")
+        XCTAssertEqual(contextMeta?.name, "Roadmap")
+        let none = try await backend.groupMetadata(groupId: "unnamed")
+        XCTAssertNil(none)
+        try await backend.setGroupName(groupId: "g", name: "planning")
+        try await backend.setContextName(groupId: "g", contextId: "c1", name: "Q3")
+        try await backend.setMemberName(groupId: "g", name: "Ana B")
+
+        let blob = try await backend.uploadBlob(contextId: "c1", data: Data("hello".utf8))
+        XCTAssertEqual(blob, AppBlob(blobId: "blob1", size: 5))
+        let bytes = try await backend.getBlob(blobId: "blob1", contextId: "c1")
+        XCTAssertEqual(bytes, Data("bytes".utf8))
+
+        let members = try await backend.listMembers(groupId: "g")
+        XCTAssertEqual(
+            members, [AppMember(identity: me, role: "Admin", name: "Ana"), AppMember(identity: "b", role: "Member")])
+        try await backend.setMemberRole(groupId: "g", identity: "b", role: .readOnly)
+        try await backend.removeMember(groupId: "g", identity: "b")
+
+        try await backend.removeContext(groupId: "g", contextId: "c2")
+        try await backend.deleteSubgroup(groupId: "g")
+        try await backend.leaveSubgroup(groupId: "g2")
+        try await backend.leaveNamespace(namespaceId: "ns")
+
+        XCTAssertEqual(
+            admin.calls,
+            [
+                "listGroupContexts g", "getGroupMetadata g", "getContextMetadata g c1", "getGroupMetadata unnamed",
+                // A rename keeps the record's data: setting metadata replaces it whole.
+                "getGroupMetadata g", "setGroupMetadata g planning [\"icon=grid\"]",
+                "getContextMetadata g c1", "setContextMetadata g c1 Q3 [\"color=red\"]",
+                "getMemberMetadata g \(me)", "setMemberMetadata g \(me) Ana B [\"avatar=a1\"]",
+                "uploadBlob c1 5", "getBlob blob1 c1",
+                "listGroupMembers g", "updateMemberRole g b ReadOnly", "removeGroupMembers g [\"b\"]",
+                "detachContextFromGroup g c2", "deleteGroup g", "leaveGroup g2", "leaveNamespace ns",
+            ])
+    }
+
     func testAnInvitationForThisAppWaitsToBeConfirmed() async {
         let session = makeSession()
         let link = "https://links.calimero.network/\(Self.package)/join?invitation=abc"
