@@ -1,0 +1,162 @@
+---
+title: Mobile App Session
+description: MeroAppSession — sign-in, relay, namespaces and contract calls for a Calimero mobile app, delegated end to end, with an in-memory fake for view-model tests.
+sidebar:
+  order: 7
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A Calimero app on a phone holds no node. The person signs in with their
+Calimero account (the wallet certifies this device's key), the Cloud manager
+names the relay that serves the account, and everything goes through that
+relay: reads are its account-scoped query, writes are warrants the device key
+signs, namespaces and subgroups are governance ops it posts. `MeroAppSession`
+is that whole session, the same for every app; only the contract's methods are
+the app's own. It is the Swift twin of the Kotlin SDK's `MeroAppSession`
+(`mero-compose`), with the same names.
+
+| Type | Module | What it is |
+| --- | --- | --- |
+| `MeroAppSession` | MeroKitUI | The signed-in account: sign-in/out, restore, deep links, and the backend. |
+| `MeroAppBackend` | MeroKit | What screens need from the account: namespaces, subgroups, contexts, invitations, live events, the contract. |
+| `DelegatedAppBackend` | MeroKitUI | The real backend, over the account's relay. |
+| `ContextContract` | MeroKit | `query` / `execute` in any context: `RelayContextContract`, or `NoRelayContextContract`. |
+| `ContextContractCalling` | MeroKit | One context's contract as a generated client calls it (`contract.bound(to:)`). |
+| `InMemoryAppBackend`, `RecordingContextContract` | MeroKitTestSupport | Fakes for view-model tests. |
+
+## Set up
+
+```swift
+import MeroKitUI
+
+@main
+struct BoardApp: App {
+  @StateObject private var session = MeroAppSession(
+    packageName: "com.example.board",
+    callback: .https(host: "board.example.com", path: "/enrol"))
+
+  var body: some Scene {
+    WindowGroup {
+      RootView()
+        .environmentObject(session)
+        .task { await session.restore() }
+        .onOpenURL { url in Task { await session.handle(url) } }
+    }
+  }
+}
+```
+
+The convenience initializer keeps the device key, session and tokens in the
+Keychain. Pass `config:` for another registry or Cloud manager, `walletURL:`
+for another wallet, or build the `MeroClient` yourself and use
+`MeroAppSession(client:callback:options:)`.
+
+- `restore()` reconnects a stored session and asks the Cloud manager again
+  which relay serves the account: a relayless account may have earned one.
+- `signIn()` opens the wallet; `signOut(forgetDevice:)` signs out.
+- `handle(_:)` takes any URL the system hands the app. A wallet callback
+  finishes a sign-in (one that arrives during `restore()` waits for it). One
+  of this app's invitation links lands in `pendingInvitation` for the person
+  to confirm; `dismissPendingInvitation()` clears it. Another app's
+  invitation is not taken.
+- `isSignedIn`, `account`, `applicationId`, `hasRelay`, `canSubscribe` and
+  `contract` describe the session.
+
+## Screens and view models
+
+`session.backend` is an `any MeroAppBackend`, or `nil` when signed out. It is
+rebuilt only when the session changes (the account, its relay, its relay
+session, the application id); `session.revision` moves when it is, so a screen
+can `.task(id: session.revision)` to re-read without resetting on unrelated
+updates.
+
+```swift
+@MainActor
+final class BoardsModel: ObservableObject {
+  @Published var boards: [AppNamespace] = []
+  let backend: any MeroAppBackend
+  let applicationId: String
+
+  init(backend: any MeroAppBackend, applicationId: String) {
+    self.backend = backend
+    self.applicationId = applicationId
+  }
+
+  func load() async throws { boards = try await backend.listNamespaces() }
+
+  func create(_ name: String) async throws {
+    let founded = try await backend.foundNamespace(name: name)
+    let group = try await backend.createSubgroup(namespaceId: founded.namespaceId, name: "main", isPublic: true)
+    _ = try await backend.createContext(
+      groupId: group, applicationId: applicationId, name: "main", initArgs: ["title": .string(name)])
+  }
+}
+
+// BoardsModel(backend: backend, applicationId: session.applicationId ?? "")
+```
+
+The words are the protocol's: a **namespace** is what an app calls a
+workspace, team or space; a **subgroup** is a group under it (a channel, a
+board); a **context** runs the contract in a group.
+
+| `MeroAppBackend` | Through the relay |
+| --- | --- |
+| `listNamespaces()` | The account's namespaces, only this app's once its application id is known |
+| `listSubgroups(namespaceId:)` | Subgroups, each with its context ids |
+| `listContexts(groupId:)` | The contexts directly in a group (a namespace's root) |
+| `isMember(contextId:)` / `joinContext(contextId:)` | Membership of an open subgroup's context |
+| `foundNamespace(name:)` | Found and name a namespace running this app; ask the cloud to host it |
+| `createSubgroup(namespaceId:name:isPublic:)` | An open or restricted subgroup |
+| `createContext(groupId:applicationId:name:initArgs:)` | A context, with the contract's `init` arguments |
+| `createInvitation(namespaceId:)` | An invitation signed with the device key |
+| `joinNamespace(namespaceId:invitation:)` | Direct admission through an admitting relay |
+| `events(contextId:)` | Live events (finishes at once when `canSubscribe` is false: poll) |
+
+After `joinNamespace`, call `session.didJoinNamespace()`: a session that had
+no relay now has the admitting one, and reconnects to it.
+
+## Calling the contract
+
+```swift
+let posts = try await session.contract.query(contextId: id, method: "get_posts", args: ["limit": 20])
+_ = try await session.contract.execute(contextId: id, method: "post", args: ["text": "hi"])
+```
+
+`query` is `POST /admin-api/contexts/{id}/query` with the relay session's
+Bearer token (a warrant when there is no session yet, or when the method turns
+out to be a write); `execute` posts a warrant to `/admin-api/contexts/{id}/intents`.
+With no relay, both throw `AccountError.noRelay(method:)`.
+
+A client generated by `mero-devtools-js` takes one context's contract as a
+`ContextContractCalling` (JSON bytes in and out):
+
+```swift
+let board = BoardClient(session.contract.bound(to: contextId))
+```
+
+<Aside>
+Numbers travel as `JSONValue.number`, a `Double`, as every relay call does: an
+integer beyond 2^53 does not survive the trip. Send such values as strings.
+</Aside>
+
+## Testing view models
+
+`MeroKitTestSupport` ships `InMemoryAppBackend`: founding adds a namespace,
+creating a subgroup or context adds it (the creator is a member), joining makes
+the account a member, redeeming an invitation adds the namespace and gives a
+relayless account its relay. Its contract is a `RecordingContextContract` you
+script per method.
+
+```swift
+let backend = InMemoryAppBackend()
+backend.recording.setHandler { call in
+  call.method == "get_posts" ? .array([]) : nil
+}
+let model = BoardsModel(backend: backend, applicationId: backend.applicationId)
+try await model.create("Roadmap")
+XCTAssertEqual(backend.log.first, "foundNamespace Roadmap")
+
+backend.failure = URLError(.notConnectedToInternet)   // every admin call fails
+backend.emit(AppContextEvent(contextId: id, kind: "StateMutation"))
+```

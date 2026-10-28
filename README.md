@@ -393,6 +393,28 @@ The rest of mero-react is here too, as SwiftUI view models and views:
 
 See the [SwiftUI app layer](https://calimero-network.github.io/swift-sdk/guides/swiftui-app-layer/) guide.
 
+### A mobile app's session (`MeroAppSession`)
+
+An app on a phone holds no node: it signs in with a Calimero account and does
+everything through the account's relay. `MeroAppSession` is that session for
+any app — sign-in/out, restore, wallet callbacks and invitation links, and a
+`MeroAppBackend` (namespaces, subgroups, contexts, invitations, live events,
+the contract) rebuilt only when the session changes:
+
+```swift
+@StateObject var session = MeroAppSession(
+    packageName: "com.example.board", callback: .https(host: "board.example.com", path: "/enrol"))
+// .task { await session.restore() }  .onOpenURL { url in Task { await session.handle(url) } }
+
+let namespaces = try await session.backend?.listNamespaces()
+let posts = try await session.contract.query(contextId: id, method: "get_posts", args: [:])
+let client = BoardClient(session.contract.bound(to: id))   // a generated client
+```
+
+View models take `any MeroAppBackend`; tests hand them `MeroKitTestSupport`'s
+`InMemoryAppBackend`. See the [mobile app session](https://calimero-network.github.io/swift-sdk/guides/app-session/)
+guide. (== the Kotlin SDK's `MeroAppSession`.)
+
 A full SwiftUI sample app lives in `Examples/MeroSampleApp`, in the Calimero
 light design. It signs in with Calimero Cloud, or with "Manually enter node URL"
 signs in to a node you run (a local `merod`: URL plus its admin username and
