@@ -76,6 +76,7 @@ export default defineConfig({
             'guides/blobs',
             'guides/swiftui-frontend',
             'guides/swiftui-app-layer',
+            'guides/app-session',
           ],
         },
         {

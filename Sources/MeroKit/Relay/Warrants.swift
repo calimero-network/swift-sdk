@@ -24,7 +24,13 @@ public enum Warrants {
 
     /// The commitment to a call: `domainHash(INTENT, [method, canonicalJSON(args)])`.
     public static func intentHash(method: String, argsJson: JSONValue) -> Data {
-        domainHash(intentDomain, [Data(method.utf8), CanonicalJSON.data(argsJson)])
+        intentHash(method: method, canonicalArgs: CanonicalJSON.data(argsJson))
+    }
+
+    /// ``intentHash(method:argsJson:)`` over arguments already in canonical
+    /// spelling: the bytes the request body carries.
+    public static func intentHash(method: String, canonicalArgs: Data) -> Data {
+        domainHash(intentDomain, [Data(method.utf8), canonicalArgs])
     }
 
     /// The parts of a data-write warrant, before signing.
@@ -41,18 +47,28 @@ public enum Warrants {
         public var notAfter: UInt64
         public var accountHeads: [String]
         public var governanceFloor: [String]
+        /// The arguments' canonical bytes, when the caller holds them rather
+        /// than a ``JSONValue`` (an integer beyond 2^53 survives only as text).
+        /// Committed to in place of `argsJson` when set.
+        public var canonicalArgs: Data?
 
         public init(
             context: String, authorAccount: String, executor: String, executorKey: String,
             releaseBytecodeId: String, releaseVersion: String = "", method: String, argsJson: JSONValue,
-            nonce: UInt64, notAfter: UInt64, accountHeads: [String] = [], governanceFloor: [String] = []
+            nonce: UInt64, notAfter: UInt64, accountHeads: [String] = [], governanceFloor: [String] = [],
+            canonicalArgs: Data? = nil
         ) {
+            self.canonicalArgs = canonicalArgs
             self.context = context; self.authorAccount = authorAccount; self.executor = executor
             self.executorKey = executorKey; self.releaseBytecodeId = releaseBytecodeId
             self.releaseVersion = releaseVersion; self.method = method; self.argsJson = argsJson
             self.nonce = nonce; self.notAfter = notAfter; self.accountHeads = accountHeads
             self.governanceFloor = governanceFloor
         }
+    }
+
+    private static func inputIntentHash(_ input: WarrantInput) -> Data {
+        intentHash(method: input.method, canonicalArgs: input.canonicalArgs ?? CanonicalJSON.data(input.argsJson))
     }
 
     /// The 32-byte preimage the device signs for `input`, given its public key.
@@ -68,7 +84,7 @@ public enum Warrants {
             try Hex.decode(input.releaseBytecodeId, label: "releaseBytecodeId", bytes: 32),
             try releaseVersionBytes(input.releaseVersion),
             Data(input.method.utf8),
-            intentHash(method: input.method, argsJson: input.argsJson),
+            inputIntentHash(input),
             LittleEndian.u64(UInt64(heads.count)),
         ]
         parts += heads
@@ -99,7 +115,7 @@ public enum Warrants {
         w.raw(try Hex.decode(input.releaseBytecodeId, label: "releaseBytecodeId", bytes: 32))
         w.bytes(try releaseVersionBytes(input.releaseVersion))
         w.string(input.method)
-        w.raw(intentHash(method: input.method, argsJson: input.argsJson))
+        w.raw(inputIntentHash(input))
         w.u32(UInt32(heads.count))
         heads.forEach { w.raw($0) }
         w.u32(UInt32(floor.count))
