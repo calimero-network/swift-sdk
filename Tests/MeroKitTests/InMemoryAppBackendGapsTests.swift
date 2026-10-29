@@ -166,7 +166,9 @@ private struct MinimalBackend: MeroAppBackend {
         AppFoundedNamespace(namespaceId: "", haEnabled: false)
     }
     func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String { "" }
-    func createContext(groupId: String, applicationId: String, name: String, initArgs: JSONValue) async throws
+    func createContext(
+        groupId: String, applicationId: String, name: String, initArgs: JSONValue
+    ) async throws
         -> String
     { "" }
     func createInvitation(namespaceId: String) async throws -> SignedGroupOpenInvitation {

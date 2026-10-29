@@ -50,7 +50,9 @@ final class ContextContractTests: XCTestCase {
     }
 
     func testBoundContractPassesTheContractsFailureThrough() async {
-        let contract = RecordingContextContract { _ in throw AccountError.intentRefused(reason: "no", retryable: false, status: 403) }
+        let contract = RecordingContextContract { _ in
+            throw AccountError.intentRefused(reason: "no", retryable: false, status: 403)
+        }
         do {
             _ = try await contract.bound(to: context).execute(method: "post", argsJSON: Data("{}".utf8))
             XCTFail("expected the refusal")

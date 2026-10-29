@@ -112,7 +112,8 @@ public struct DelegatedAppBackend: MeroAppBackend {
     public func foundNamespace(name: String) async throws -> AppFoundedNamespace {
         let founded = try await signIn.foundNamespace(
             connection, name: name, package: packageName, application: foundingApplication, registryURL: registryURL)
-        return AppFoundedNamespace(namespaceId: founded.namespaceId, haEnabled: founded.haEnabled, haError: founded.haError)
+        return AppFoundedNamespace(
+            namespaceId: founded.namespaceId, haEnabled: founded.haEnabled, haError: founded.haError)
     }
 
     public func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String {

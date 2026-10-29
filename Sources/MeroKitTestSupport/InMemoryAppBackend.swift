@@ -164,8 +164,9 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         var blobs: [String: (contextId: String, data: Data)] = [:]
         var log: [String] = []
         var next = 0
-        var streams: [UUID: (contextId: String, continuation: AsyncThrowingStream<AppContextEvent, Error>.Continuation)] =
-            [:]
+        var streams:
+            [UUID: (contextId: String, continuation: AsyncThrowingStream<AppContextEvent, Error>.Continuation)] =
+                [:]
     }
 
     public init(
@@ -272,7 +273,8 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         try step("foundNamespace \(name)") { state in
             guard state.hasRelay else { throw AccountError.noRelay(method: "foundNamespace") }
             let id = Self.mint("aa", &state.next)
-            state.namespaces.append(AppNamespace(id: id, name: name, applicationId: state.applicationId, memberCount: 1))
+            state.namespaces.append(
+                AppNamespace(id: id, name: name, applicationId: state.applicationId, memberCount: 1))
             state.groupMembers[id] = [AppMember(identity: account, role: GovernanceMemberRole.admin.rawValue)]
             return AppFoundedNamespace(
                 namespaceId: id, haEnabled: state.haEnabled, haError: state.haEnabled ? nil : "not hosted (fake)")

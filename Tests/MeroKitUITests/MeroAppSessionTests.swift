@@ -169,7 +169,9 @@ final class MeroAppSessionTests: XCTestCase {
         let admin = RecordingAdmin()
         let me = try XCTUnwrap(client.account)
         admin.contexts = [GroupContextEntry(contextId: "c1", name: "Roadmap"), GroupContextEntry(contextId: "c2")]
-        admin.members = [GroupMember(identity: me, role: "Admin", name: "Ana"), GroupMember(identity: "b", role: "Member")]
+        admin.members = [
+            GroupMember(identity: me, role: "Admin", name: "Ana"), GroupMember(identity: "b", role: "Member"),
+        ]
         admin.metadata = [
             "g": MetadataRecord(name: "boards", data: ["icon": "grid"], updatedAt: 1, updatedBy: me),
             "c1": MetadataRecord(name: "Roadmap", data: ["color": "red"], updatedAt: 1, updatedBy: me),
@@ -249,7 +251,8 @@ final class MeroAppSessionTests: XCTestCase {
             cloud: CloudSignIn(
                 config: CloudConfig(), keyStore: .memory(), sessionStore: .memory(),
                 nonces: MemoryWarrantNonceStore(), urlSession: urlSession),
-            config: MeroProviderConfig(packageName: Self.package), storage: MeroAppStorage(defaults: appLayerDefaults()))
+            config: MeroProviderConfig(packageName: Self.package), storage: MeroAppStorage(defaults: appLayerDefaults())
+        )
         let session = MeroAppSession(
             client: client, callback: .scheme("board"),
             options: MeroAppSessionOptions(isInvitation: { $0.hasPrefix("board://invite/") }))
@@ -263,14 +266,20 @@ final class MeroAppSessionTests: XCTestCase {
 
     func testIsInvitationLink() {
         let pkg = Self.package
-        XCTAssertTrue(MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)/join?invitation=t", packageName: pkg))
+        XCTAssertTrue(
+            MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)/join?invitation=t", packageName: pkg)
+        )
         XCTAssertTrue(MeroAppSession.isInvitationLink("calimero://\(pkg)/join?invitation=t", packageName: pkg))
         XCTAssertTrue(
-            MeroAppSession.isInvitationLink("https://links.calimero.network/COM.Example.Board/join?invitation=t", packageName: pkg),
+            MeroAppSession.isInvitationLink(
+                "https://links.calimero.network/COM.Example.Board/join?invitation=t", packageName: pkg),
             "a mail client may change the case")
-        XCTAssertFalse(MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)-ar/join?invitation=t", packageName: pkg))
+        XCTAssertFalse(
+            MeroAppSession.isInvitationLink(
+                "https://links.calimero.network/\(pkg)-ar/join?invitation=t", packageName: pkg))
         XCTAssertFalse(MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)/join", packageName: pkg))
-        XCTAssertFalse(MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)/join?invitation=", packageName: pkg))
+        XCTAssertFalse(
+            MeroAppSession.isInvitationLink("https://links.calimero.network/\(pkg)/join?invitation=", packageName: pkg))
         XCTAssertTrue(MeroAppSession.isInvitationLink("https://x.test/anything/join?invitation=t", packageName: nil))
     }
 }

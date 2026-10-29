@@ -29,7 +29,8 @@ final class ExactNumbersTests: XCTestCase {
     func testU64sRoundTripThroughAWarrantExactly() async throws {
         let rig = CloudRig()
         DelegatedFixture.serveDescribe(rig, ctx: context)
-        rig.on("POST", "/admin-api/contexts/\(context)/intents", json: #"{"data":{"returns":\#(exact),"rootHash":"r"}}"#)
+        rig.on(
+            "POST", "/admin-api/contexts/\(context)/intents", json: #"{"data":{"returns":\#(exact),"rootHash":"r"}}"#)
         rig.install()
 
         let bound = RelayContextContract(relay: relay(token: nil)).bound(to: context)

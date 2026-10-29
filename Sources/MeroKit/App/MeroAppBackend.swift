@@ -43,7 +43,9 @@ public protocol MeroAppBackend: Sendable {
     func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String
     /// Create a context running `applicationId` in `groupId`, initialised with
     /// `initArgs` (the contract's `init` arguments). Returns its context id.
-    func createContext(groupId: String, applicationId: String, name: String, initArgs: JSONValue) async throws
+    func createContext(
+        groupId: String, applicationId: String, name: String, initArgs: JSONValue
+    ) async throws
         -> String
 
     /// Mint an invitation to a namespace, signed with the device key.
