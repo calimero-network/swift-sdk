@@ -184,7 +184,7 @@ public enum InviteCodec {
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(value)
         guard let json = String(data: data, encoding: .utf8), let token = encode(json: json) else {
-            throw MeroError.decoding("could not encode invitation payload")
+            throw AccountError.invalidInput("could not encode invitation payload")
         }
         return token
     }
@@ -192,7 +192,7 @@ public enum InviteCodec {
     /// Decode a token into a `Decodable` payload.
     public static func decode<T: Decodable>(_ type: T.Type, from token: String) throws -> T {
         guard let json = decode(token: token), let data = json.data(using: .utf8) else {
-            throw MeroError.decoding("not a recognizable invitation token")
+            throw AccountError.invalidInput("not a recognizable invitation token")
         }
         return try JSONDecoder().decode(type, from: data)
     }

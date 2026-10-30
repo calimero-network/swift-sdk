@@ -52,7 +52,7 @@ final class InMemoryAppBackendTests: XCTestCase {
         XCTAssertTrue(backend.hasRelay)
         let ids = try await backend.listNamespaces().map(\.id)
         XCTAssertEqual(ids, [namespace])
-        XCTAssertEqual(Hex.encode(invitation.invitation.groupId.map { UInt8($0) }), namespace)
+        XCTAssertEqual(invitation.orgId, namespace)
     }
 
     func testJoiningAContextMakesTheAccountAMember() async throws {

@@ -179,36 +179,28 @@ public func nodeReleaseVersionFromImage(_ osImage: String) throws -> String {
     return numbers.map { String(Int($0) ?? 0) }.joined(separator: ".")
 }
 
-/// The release the TEE node at `baseURL` says it runs, from the image name
-/// its `GET /admin-api/tee/info` reports. The node's own claim, and not
-/// trusted: it only picks which signed release to fetch, and the quote must
-/// then match that release's measurements. (== mero-js `fetchNodeReleaseVersion`.)
-///
-/// `/tee/info` is read in the clear, before any session exists. A node that
-/// requires sealing serves it unsealed from core#4196 on; an older one
-/// refuses it with `403 sealed_required`, and then this throws saying so.
-public func fetchNodeReleaseVersion(_ baseURL: String, session: URLSession = .shared) async throws -> String {
-    guard let version = try await readNodeReleaseVersion(baseURL, session: session) else {
-        throw TeeTrustError(
-            "\(TeeHTTP.infoURL(baseURL)) was refused unsealed: the node requires sealing and is too old to name its "
-                + "release before a session exists. Name the release it runs yourself "
-                + "(createSignedReleaseSealedFetch's `releaseVersion`), or upgrade the node")
-    }
-    return version
-}
+/// Where mero-tee publishes its releases' assets, as core's
+/// `calimero-tee-release` fetches them. (== mero-js `GITHUB_RELEASES`.)
+public let githubReleases = "https://github.com/calimero-network/mero-tee/releases/download"
 
-/// As ``fetchNodeReleaseVersion(_:session:)``, but `nil` when the node refuses `/tee/info` as `sealed_required`.
-func readNodeReleaseVersion(_ baseURL: String, session: URLSession) async throws -> String? {
-    let url = TeeHTTP.infoURL(baseURL)
-    let (data, status) = try await TeeHTTP.get(url, session: session)
-    let json = try? MeroJSON.decode(JSONValue.self, from: data)
-    if status == 403, json?["error"]?["code"]?.stringValue == "sealed_required" { return nil }
-    guard (200..<300).contains(status) else { throw TeeTrustError("Fetching \(url) failed: HTTP \(status)") }
-    guard let json else { throw TeeTrustError("\(url) did not answer with JSON") }
-    guard let osImage = json["data"]?["osImage"]?.stringValue else {
-        throw TeeTrustError("\(url) did not name the node's image")
+/// Node release `version` straight from its GitHub release
+/// (`mero-tee-v{version}`): `published-mrtds.json` and its cosign bundle,
+/// the files core's Rust client verifies. Only fetched: verify it with
+/// ``trustSignedRelease(_:)``. (== mero-js `fetchGithubNodeRelease`.)
+public func fetchGithubNodeRelease(
+    _ version: String, base: String = githubReleases, session: URLSession = .shared
+) async throws -> SignedNodeRelease {
+    var root = base
+    while root.hasSuffix("/") { root.removeLast() }
+    let url = "\(root)/mero-tee-v\(try ReleaseVersion.checked(version, "version"))/published-mrtds.json"
+    func get(_ url: String) async throws -> String {
+        let (data, status) = try await TeeHTTP.get(url, session: session)
+        guard (200..<300).contains(status) else { throw TeeTrustError("Fetching \(url) failed: HTTP \(status)") }
+        return String(decoding: data, as: UTF8.self)
     }
-    return try nodeReleaseVersionFromImage(osImage)
+    async let published = get(url)
+    async let bundle = get(url + ".bundle.json")
+    return SignedNodeRelease(version: version, publishedMrtds: try await published, bundle: try await bundle)
 }
 
 /// Where the cloud at `cloudURL` (e.g. ``TeeTrust/defaultReleaseMirror``)
@@ -342,101 +334,6 @@ public func createSignedReleaseVerifier(_ options: SignedReleaseVerifierOptions)
     return SignedReleaseVerifier(options: options)
 }
 
-/// Where ``createSignedReleaseSealedFetch(_:)`` gets the release a node names.
-public enum NodeReleaseSource: Sendable {
-    /// The base URL of a mirror serving ``cloudNodeReleaseUrl(_:version:)``'s path.
-    case mirror(String)
-    /// A function of the node's base URL and the version it names — a file bundled with the app, say.
-    case custom(@Sendable (_ baseURL: String, _ version: String) async throws -> SignedNodeRelease)
-}
-
-/// What ``createSignedReleaseSealedFetch(_:)`` needs. (== mero-js `SignedReleaseSealedFetchOptions`.)
-public struct SignedReleaseSealedFetchOptions: Sendable {
-    /// The TEE node's (the relay's) base URL.
-    public var baseURL: String
-    public var profile: String
-    public var allowDebugProfile: Bool
-    public var minReleaseVersion: String
-    public var identity: String?
-    public var issuer: String?
-    /// Where to get the release the node names in its `/tee/info`;
-    /// ``TeeTrust/defaultReleaseMirror`` by default. Untrusted either way.
-    public var releaseSource: NodeReleaseSource
-    /// The release to fetch when the node will not name one (it requires
-    /// sealing and predates core#4196). Used only then. Untrusted: the quote
-    /// must match the signed release, so a wrong version only fails.
-    public var releaseVersion: String?
-    /// Also require the node to run this application with this bytecode hash.
-    public var applicationId: String?
-    public var applicationHash: String?
-    /// For the release, the attestation and the envelopes.
-    public var session: URLSession
-    public var dcapVerify: DcapVerify
-    public var fetchCollateral: (@Sendable (Data) async throws -> DcapCollateral)?
-    public var now: @Sendable () -> Int64
-
-    public init(
-        baseURL: String, profile: String, minReleaseVersion: String, allowDebugProfile: Bool = false,
-        identity: String? = nil, issuer: String? = nil,
-        releaseSource: NodeReleaseSource = .mirror(TeeTrust.defaultReleaseMirror), releaseVersion: String? = nil,
-        applicationId: String? = nil, applicationHash: String? = nil, session: URLSession = .shared,
-        dcapVerify: @escaping DcapVerify = { try Dcap.verify($0, collateral: $1, nowSecs: $2) },
-        fetchCollateral: (@Sendable (Data) async throws -> DcapCollateral)? = nil,
-        now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
-    ) {
-        self.baseURL = baseURL
-        self.profile = profile
-        self.allowDebugProfile = allowDebugProfile
-        self.minReleaseVersion = minReleaseVersion
-        self.identity = identity
-        self.issuer = issuer
-        self.releaseSource = releaseSource
-        self.releaseVersion = releaseVersion
-        self.applicationId = applicationId
-        self.applicationHash = applicationHash
-        self.session = session
-        self.dcapVerify = dcapVerify
-        self.fetchCollateral = fetchCollateral
-        self.now = now
-    }
-}
-
-/// A ``SealedTransport`` for a TEE node known only by URL, trusting whatever
-/// signed release at or above `minReleaseVersion` it runs: it reads the
-/// release the node names from its `/tee/info` (or takes `releaseVersion`
-/// when a node too old to serve that unsealed requires sealing), gets that
-/// release from `releaseSource`, verifies its signature, builds the quote
-/// verifier from its measurements, attests the node and seals everything to
-/// it. (== mero-js `createSignedReleaseSealedFetch`.)
-public func createSignedReleaseSealedFetch(_ options: SignedReleaseSealedFetchOptions) throws -> SealedTransport {
-    let fallback = try options.releaseVersion.map { try ReleaseVersion.checked($0, "releaseVersion") }
-    guard let base = URL(string: options.baseURL) else { throw TeeTrustError("bad node URL \(options.baseURL)") }
-    let baseURL = options.baseURL
-    let session = options.session
-    let source = options.releaseSource
-    let release: @Sendable () async throws -> SignedNodeRelease = {
-        let version: String
-        if let fallback {
-            version = try await readNodeReleaseVersion(baseURL, session: session) ?? fallback
-        } else {
-            version = try await fetchNodeReleaseVersion(baseURL, session: session)
-        }
-        switch source {
-        case .custom(let fetch): return try await fetch(baseURL, version)
-        case .mirror(let mirror):
-            return try await fetchNodeRelease(try cloudNodeReleaseUrl(mirror, version: version), session: session)
-        }
-    }
-    let verifier = try createSignedReleaseVerifier(
-        SignedReleaseVerifierOptions(
-            release: release, profile: options.profile, minReleaseVersion: options.minReleaseVersion,
-            allowDebugProfile: options.allowDebugProfile, identity: options.identity, issuer: options.issuer,
-            dcapVerify: options.dcapVerify, fetchCollateral: options.fetchCollateral, now: options.now))
-    return try SealedTransport.attested(
-        baseURL: base, verifier: verifier, applicationId: options.applicationId,
-        applicationHash: options.applicationHash, session: session)
-}
-
 // MARK: - Versions and HTTP
 
 /// Release versions (`2.3.87`, `2.3.88-rc.1`), ordered as semver and core's
@@ -503,11 +400,6 @@ enum ReleaseVersion {
 }
 
 enum TeeHTTP {
-    static func infoURL(_ baseURL: String) -> String {
-        var base = baseURL
-        while base.hasSuffix("/") { base.removeLast() }
-        return base + "/admin-api/tee/info"
-    }
 
     /// `GET url` with `Accept: application/json`: the body and the status.
     static func get(_ url: String, session: URLSession) async throws -> (Data, Int) {

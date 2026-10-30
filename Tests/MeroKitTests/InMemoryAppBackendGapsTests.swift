@@ -175,7 +175,7 @@ private struct MinimalBackend: MeroAppBackend {
         InMemoryAppBackend.invitation(namespaceId: namespaceId)
     }
     func joinNamespace(namespaceId: String, invitation: SignedGroupOpenInvitation) async throws -> AppJoinedNamespace {
-        AppJoinedNamespace(namespaceId: namespaceId, published: false, relayURL: "")
+        AppJoinedNamespace(namespaceId: namespaceId, published: false, nodeURL: "")
     }
     func events(contextId: String) -> AsyncThrowingStream<AppContextEvent, Error> {
         AsyncThrowingStream { $0.finish() }

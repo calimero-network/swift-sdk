@@ -1,25 +1,28 @@
 import Foundation
 import MeroKit
 
-/// Opens the wallet and returns the URL it redirected back to.
+/// Opens a web page in the system browser (the node's consent page) and
+/// returns the URL it redirected back to.
 ///
 /// The production implementation is ``SystemWebAuthenticator`` (the system
-/// auth sheet). Tests and UI-test builds inject one that answers without a
-/// browser.
+/// auth sheet, `ASWebAuthenticationSession`). Tests and UI-test builds inject
+/// one that answers without a browser.
 public protocol WebAuthenticating: Sendable {
     /// Present `url`; resolve with the callback URL (fragment included).
     func authenticate(url: URL, callback: CloudCallback) async throws -> URL
 }
 
-/// Where the wallet sends the person back to.
+/// Where a page in the system browser (the consent page) sends the person
+/// back to: the consent request's `returnTo`.
 public enum CloudCallback: Sendable, Equatable {
     /// An app scheme, e.g. `mero-sample` → `mero-sample://enrol`. Works on every
-    /// iOS version; the wallet must accept non-https callbacks for it.
+    /// iOS version; the node must accept it as a `returnTo` (one the package's
+    /// manifest names).
     case scheme(String, path: String = "enrol")
     /// A verified https callback (Associated Domains), iOS 17.4+ / macOS 14.4+.
     case https(host: String, path: String)
 
-    /// The `callback-url` to send the wallet.
+    /// The callback as a URL string (a consent request's `returnTo`).
     public var url: String {
         switch self {
         case .scheme(let scheme, let path): return "\(scheme)://\(path)"
@@ -31,7 +34,7 @@ public enum CloudCallback: Sendable, Equatable {
 /// The person dismissed the sheet.
 public struct WebAuthenticationCancelled: Error, LocalizedError, Sendable {
     public init() {}
-    public var errorDescription: String? { "Sign-in was cancelled." }
+    public var errorDescription: String? { "The page was dismissed." }
 }
 
 #if canImport(AuthenticationServices) && (os(iOS) || os(macOS))
@@ -44,8 +47,8 @@ import AppKit
 
 /// `ASWebAuthenticationSession`: the system sheet, like "Sign in with Google".
 ///
-/// Not ephemeral on purpose — the wallet caches its passkey-derived root in its
-/// own origin's storage, which saves a passkey prompt on the next sign-in.
+/// Not ephemeral by default, so the consent page's own session cookie (if any)
+/// survives between approvals.
 public final class SystemWebAuthenticator: NSObject, WebAuthenticating,
     ASWebAuthenticationPresentationContextProviding, @unchecked Sendable
 {

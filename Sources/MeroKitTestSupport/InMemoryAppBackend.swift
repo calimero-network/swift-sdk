@@ -294,7 +294,17 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
     public func createContext(
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws -> String {
-        try step("createContext \(groupId) \(applicationId) \(name)") { state in
+        try await createContext(
+            groupId: groupId, applicationId: applicationId, name: name, initArgs: initArgs, service: nil)
+    }
+
+    /// As ``createContext(groupId:applicationId:name:initArgs:)``; `service`
+    /// is logged (`createContext … service=<name>`) and otherwise ignored.
+    public func createContext(
+        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
+    ) async throws -> String {
+        let entry = "createContext \(groupId) \(applicationId) \(name)" + (service.map { " service=\($0)" } ?? "")
+        return try step(entry) { state in
             let id = Self.mint("cc", &state.next)
             var placed = false
             for (namespace, list) in state.subgroups {
@@ -312,12 +322,12 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         }
     }
 
-    public func createInvitation(namespaceId: String) async throws -> SignedGroupOpenInvitation {
+    public func createInvitation(namespaceId: String) async throws -> OrgInvitation {
         try step("createInvitation \(namespaceId)") { _ in Self.invitation(namespaceId: namespaceId) }
     }
 
     public func joinNamespace(
-        namespaceId: String, invitation: SignedGroupOpenInvitation
+        namespaceId: String, invitation: OrgInvitation
     ) async throws -> AppJoinedNamespace {
         try step("joinNamespace \(namespaceId)") { state in
             if !state.namespaces.contains(where: { $0.id == namespaceId }) {
@@ -328,7 +338,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
                     AppMember(identity: account, role: GovernanceMemberRole.member.rawValue))
             }
             state.hasRelay = true
-            return AppJoinedNamespace(namespaceId: namespaceId, published: true, relayURL: state.joinRelayURL)
+            return AppJoinedNamespace(namespaceId: namespaceId, published: true, nodeURL: state.joinRelayURL)
         }
     }
 
@@ -504,14 +514,9 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         for continuation in targets { continuation.finish(throwing: error) }
     }
 
-    /// An invitation to `namespaceId` shaped like a real one (its signature is not).
-    public static func invitation(namespaceId: String) -> SignedGroupOpenInvitation {
-        let group = (try? Hex.decode(namespaceId, label: "namespaceId", bytes: 32)).map { $0.map(Int.init) }
-        return SignedGroupOpenInvitation(
-            invitation: GroupInvitationFromAdmin(
-                inviterIdentity: Array(repeating: 1, count: 32), groupId: group ?? Array(repeating: 0, count: 32),
-                expirationTimestamp: 4_102_444_800, secretSalt: Array(repeating: 2, count: 32)),
-            inviterSignature: String(repeating: "00", count: 64))
+    /// An invitation to `namespaceId` shaped like a real one (`inv_…`).
+    public static func invitation(namespaceId: String) -> OrgInvitation {
+        OrgInvitation(orgId: namespaceId, token: "inv_" + String(namespaceId.prefix(16)))
     }
 
     // MARK: Plumbing

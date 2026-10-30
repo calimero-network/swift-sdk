@@ -362,14 +362,19 @@ enum AgentGateHTTP {
     static func post(
         _ session: URLSession, _ gateURL: String, _ path: String, _ body: JSONValue
     ) async throws -> JSONValue {
-        let url = try AccountHTTP.url(gateURL, path)
-        let request = AccountHTTP.jsonRequest(url, method: "POST", body: body, timeout: 30)
+        var base = gateURL
+        while base.hasSuffix("/") { base.removeLast() }
+        guard let url = URL(string: base + path) else { throw AgentGateError("bad gate URL \(gateURL)") }
+        var request = URLRequest(url: url, timeoutInterval: 30)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = CanonicalJSON.data(body)
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let text = String(decoding: data, as: UTF8.self)
         let parsed = data.isEmpty ? nil : try? MeroJSON.decode(JSONValue.self, from: data)
         guard (200..<300).contains(status) else {
-            let code = parsed?["error"]?.stringValue
+            let code: String? = parsed?["error"]?.stringValue
             let details = parsed?["details"]?.stringValue ?? String(text.prefix(200))
             throw AgentGateError(
                 "The gate answered \(status)\(code.map { " \($0)" } ?? ""): \(details)", status: status, code: code)

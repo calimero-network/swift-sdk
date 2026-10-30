@@ -1,22 +1,17 @@
 import Foundation
 import MeroKit
 
-// A runnable tour of MeroKit.
+// A runnable tour of MeroKit against a Calimero 1.0 cluster.
 //
 //   swift run MeroExample
 //
-// With no environment configured it runs the OFFLINE demo (SSO URL building,
-// capability math, JWT/token parsing) — everything that needs no node.
+// With no environment it runs the OFFLINE part: a software passkey, the typed
+// errors a node's refusals become, and an invitation link round trip.
 //
-// Point it at a live node to run the FULL online flow:
+// Point it at a development cluster (`merod local`, mock attestation) to run
+// the ONLINE part: sign up with a software passkey, list apps, and call one.
 //
-//   MERO_NODE_URL=http://localhost:4001 \
-//   MERO_USERNAME=dev MERO_PASSWORD=dev-password \
-//   swift run MeroExample
-//
-// The username/password are the admin credentials given to `merod init`
-// (core 0.11.0-rc.17 and later create the admin there). There is no bootstrap
-// secret to supply — that flow is gone.
+//   MERO_NODE_URL=http://127.0.0.1:2501 MERO_APP=<app id> swift run MeroExample
 
 func env(_ key: String) -> String? {
     guard let value = ProcessInfo.processInfo.environment[key], !value.isEmpty else { return nil }
@@ -30,111 +25,42 @@ func section(_ title: String) {
 @main
 struct MeroExample {
     static func main() async {
-        print("MeroKit example")
+        section("Software passkey")
+        let passkey = SoftPasskey()
+        print("credential id:", passkey.credentialId, "rp:", passkey.rpId, "origin:", passkey.origin)
 
-        offlineDemo()
+        section("Typed errors")
+        let refusal: JSONValue = [
+            "error": "APP_ERROR", "message": "the app refused the call",
+            "details": ["index": 3, "error": ["code": "Taken", "fields": ["name": "ada"]]],
+        ]
+        if let error = errorFrom(status: 422, body: refusal) as? AppError {
+            print("AppError appCode:", error.appCode, "fields:", error.fields)
+        }
 
-        guard let nodeURLString = env("MERO_NODE_URL"), let nodeURL = URL(string: nodeURLString) else {
-            print("\nNo MERO_NODE_URL set — skipping the online flow.")
-            print("Set MERO_NODE_URL / MERO_USERNAME / MERO_PASSWORD to run the full tour.")
+        section("Invitation link payload")
+        let invitation = OrgInvitation(orgId: "org_example", token: "inv_example")
+        if let token = try? InviteCodec.encode(invitation) {
+            print("link:", InviteLink.invitation(token: token, slug: "com.calimero.chat"))
+        }
+
+        guard let node = env("MERO_NODE_URL") else {
+            print("\nSet MERO_NODE_URL (a `merod local` node) to run the online part.")
             return
         }
-
+        section("Online: \(node)")
+        let client = CalimeroClient(CalimeroClientOptions(baseUrl: node, policy: .development))
         do {
-            try await onlineFlow(nodeURL: nodeURL)
+            let session = try await client.signUp(passkey, name: env("MERO_NAME") ?? "example")
+            print("signed up as", session.accountId)
+            let apps = try await client.listApps()
+            print("apps:", apps.map(\.name))
+            if let app = env("MERO_APP") {
+                let answer = try await client.view(app, env("MERO_METHOD") ?? "get", [:])
+                print("view result:", answer.result ?? .null)
+            }
         } catch {
-            print("\nOnline flow failed: \(error)")
-            exit(1)
+            print("failed:", error)
         }
-    }
-
-    // MARK: - Offline (no node needed)
-
-    static func offlineDemo() {
-        section("SSO login URL")
-        let loginURL = Mero.buildAuthLoginUrl(
-            nodeUrl: "https://node.example",
-            options: AuthLoginOptions(
-                callbackUrl: "myapp://auth-callback",
-                mode: "login",
-                permissions: ["admin"]
-            )
-        )
-        print("Open this in ASWebAuthenticationSession:\n  \(loginURL)")
-
-        section("Parse an SSO callback")
-        // The node sends the person back to the callback URL it was given —
-        // which carries the `auth_state` of the login begun above — plus the
-        // tokens in the fragment. A callback with no pending state is ignored.
-        let returnedTo =
-            URLComponents(string: loginURL)?.queryItems?.first { $0.name == "callback-url" }?.value ?? ""
-        let callbackURL =
-            returnedTo + "#access_token=AAA&refresh_token=RRR&context_id=ctx1&node_url=https%3A%2F%2Fnode.example"
-        // A custom scheme is accepted only as the URL ASWebAuthenticationSession
-        // hands back; one opened as a link must be an https Universal Link.
-        let fromAuthSession = ParseAuthCallbackOptions(allowCustomScheme: true)
-        if let parsed = Mero.parseAuthCallback(callbackURL, options: fromAuthSession) {
-            print("accessToken=\(parsed.accessToken) contextId=\(parsed.contextId) nodeUrl=\(parsed.nodeUrl)")
-        }
-        let replayed = Mero.parseAuthCallback(callbackURL, options: fromAuthSession) != nil
-        print("Replayed callback accepted again: \(replayed)")  // false
-
-        section("Capability presets")
-        print(
-            "contributor=\(CapabilityPresets.contributor) collaborator=\(CapabilityPresets.collaborator) "
-                + "names=\(Capabilities.capNames(CapabilityPresets.collaborator))")
-
-        section("Capability bitmask")
-        var mask: UInt32 = 0
-        mask = Capabilities.withCap(mask, Capabilities.canInviteMembers)
-        mask = Capabilities.withCap(mask, Capabilities.manageMembers)
-        print(
-            "mask=\(mask) canInvite=\(Capabilities.hasCap(mask, Capabilities.canInviteMembers)) "
-                + "canCreateContext=\(Capabilities.hasCap(mask, Capabilities.canCreateContext))")
-
-        section("Dynamic JSON value")
-        let args: [String: JSONValue] = ["id": "42", "limit": 10, "verbose": true]
-        print("rpc argsJson would be: \(args)")
-    }
-
-    // MARK: - Online (needs a live node)
-
-    static func onlineFlow(nodeURL: URL) async throws {
-        let mero = Mero(config: MeroConfig(baseURL: nodeURL, tokenStore: MemoryTokenStore()))
-
-        section("Node health / providers")
-        let health = try await mero.auth.getHealth()
-        print("auth health: \(health.status)")
-        let providers = try await mero.auth.getProviders()
-        print("providers: \(providers.providers.map(\.name)) (count \(providers.count))")
-
-        section("Authenticate")
-        let creds = Credentials(
-            username: env("MERO_USERNAME") ?? "dev",
-            password: env("MERO_PASSWORD") ?? "dev-password"
-        )
-        let tokens = try await mero.authenticate(creds)
-        print("authenticated — access token …\(tokens.accessToken.suffix(8)), expires \(tokens.expiresAt)")
-        let authed = await mero.isAuthenticated
-        print("isAuthenticated: \(authed)")
-
-        section("Identity")
-        let identity = try await mero.auth.getIdentity()
-        print("service=\(identity.service) version=\(identity.version) mode=\(identity.authenticationMode)")
-
-        section("List contexts")
-        do {
-            let result = try await mero.admin.getContexts()
-            print("contexts: \(result.contexts.count)")
-        } catch {
-            print("getContexts not available on this node: \(error)")
-        }
-
-        section("Logout")
-        await mero.logout()
-        let stillAuthed = await mero.isAuthenticated
-        print("isAuthenticated after logout: \(stillAuthed)")
-
-        print("\nOnline flow complete ✅")
     }
 }

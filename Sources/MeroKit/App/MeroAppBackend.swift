@@ -1,60 +1,76 @@
 import Foundation
 
-/// Everything an app's screens need from a signed-in Calimero account, and
-/// nothing a node would offer: the phone holds no node. The account's relay
-/// reads, writes, creates and admits on its behalf.
+/// Everything an app's screens need from a signed-in Calimero account.
 /// (== Kotlin `com.calimero.mero.app.MeroAppBackend`.)
 ///
-/// The words are the protocol's: a *namespace* is what an app calls a
-/// workspace, team or space; a *subgroup* is a group under it (a channel's, a
-/// board's); a *context* runs the app's contract in a group.
+/// The member names predate Calimero 1.0 and are kept so the apps built on
+/// this layer port mechanically. Each maps one to one onto a 1.0 concept:
 ///
-/// `MeroKitUI`'s `DelegatedAppBackend` is the real one, and `MeroAppSession`
+/// | This protocol | Calimero 1.0 |
+/// | --- | --- |
+/// | namespace (`namespaceId`) | organization (`orgId`) |
+/// | subgroup (`groupId`) | team (`teamId`); a namespace id is also a group id: the org itself |
+/// | context (`contextId`) | app instance (`appId`) |
+/// | application (`applicationId`) | package (`com.example.app`), or a bundle hash on a dev cluster |
+/// | invitation | an org invite token (`inv_…`), ``OrgInvitation`` |
+/// | relay | the cluster's node; there is no relay |
+///
+/// `MeroKitUI`'s `CloudAppBackend` is the real one, and `MeroAppSession`
 /// builds it from the signed-in client. View models take this protocol, so a
 /// test hands them `MeroKitTestSupport`'s `InMemoryAppBackend` instead.
 public protocol MeroAppBackend: Sendable {
     /// The account, 64 hex.
     var account: String { get }
-    /// The contract in any context: relay query for reads, warrants for writes.
-    /// ``NoRelayContextContract`` while no relay serves the account.
+    /// The contract in any app instance: views for reads, intents for writes.
+    /// ``NoRelayContextContract`` while signed out.
     var contract: any ContextContract { get }
-    /// Whether a relay serves this account. Without one only joining works.
+    /// Whether a node serves this account. Always true once signed in on 1.0
+    /// (there are no relays); kept so apps that check it still build.
     var hasRelay: Bool { get }
-    /// Whether ``events(contextId:)`` streams (the relay's Bearer session is
-    /// up). When not, poll.
+    /// Whether ``events(contextId:)`` streams (`GET /apps/{app}/events`). True on 1.0.
     var canSubscribe: Bool { get }
 
-    /// The namespaces this account is in, for this app's application only
-    /// when the session knows it (an account is used across apps).
+    /// The organizations this account is in that belong to this app: those
+    /// founded by it (their metadata names its package) or running an
+    /// instance of it. All of them when the backend knows no package.
     func listNamespaces() async throws -> [AppNamespace]
-    /// The subgroups of a namespace and the contexts in each.
+    /// The teams of an organization the account sees, and the app instances in each.
     func listSubgroups(namespaceId: String) async throws -> [AppSubgroup]
-    /// The contexts directly in `groupId` (a namespace's root group, or a subgroup).
+    /// The app instances directly in `groupId`: a team's, or, for an org id,
+    /// the org-wide ones (in no team).
     func listContexts(groupId: String) async throws -> [String]
-    /// Whether the account is a member of the context's group, so its contract calls work.
+    /// Whether the account reaches the app instance, so its contract calls work.
     func isMember(contextId: String) async throws -> Bool
-    /// Join a context in an open subgroup: `MemberJoinedOpen` on its group, through the relay.
+    /// Join an app instance. On 1.0 an open team's members inherit it, so this
+    /// only checks the account reaches it (``NotFound`` when it does not).
     func joinContext(contextId: String) async throws
 
-    /// Found a namespace running this app through the relay, named `name`.
+    /// Create an organization named `name` for this app (`POST /orgs`, its
+    /// metadata naming the app's package).
     func foundNamespace(name: String) async throws -> AppFoundedNamespace
-    /// Create a subgroup under `namespaceId`, open (anyone in the namespace may
-    /// join) or restricted. Returns its group id.
+    /// Create a team in `namespaceId`, open (`join: everyone`) or
+    /// restricted (`join: invite`). Returns its team id.
     func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String
-    /// Create a context running `applicationId` in `groupId`, initialised with
-    /// `initArgs` (the contract's `init` arguments). Returns its context id.
+    /// Create an app instance of `applicationId` (a package, or a bundle hash)
+    /// in `groupId` (a team, or an org id for an org-wide one), initialised
+    /// with `initArgs`. Returns its app id.
     func createContext(
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws
         -> String
+    /// ``createContext(groupId:applicationId:name:initArgs:)`` for one service
+    /// of a multi-service package (`service`, `nil` for the default).
+    func createContext(
+        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
+    ) async throws -> String
 
-    /// Mint an invitation to a namespace, signed with the device key.
-    func createInvitation(namespaceId: String) async throws -> SignedGroupOpenInvitation
-    /// Redeem an invitation: direct admission through an admitting relay. A
-    /// relayless account gets that relay; reconnect after (`MeroAppSession.didJoinNamespace()`).
-    func joinNamespace(namespaceId: String, invitation: SignedGroupOpenInvitation) async throws -> AppJoinedNamespace
+    /// Mint an invitation to an organization: an invite token (`POST /orgs/{org}/invites`, role member).
+    func createInvitation(namespaceId: String) async throws -> OrgInvitation
+    /// Redeem an invitation (`POST /invites/{token}/redeem`): the account joins its organization.
+    func joinNamespace(namespaceId: String, invitation: OrgInvitation) async throws -> AppJoinedNamespace
 
-    /// Live events for one context. Finishes at once when ``canSubscribe`` is false.
+    /// Live events for one app instance (`GET /apps/{app}/events`, sealed SSE).
+    /// Finishes at once when ``canSubscribe`` is false.
     func events(contextId: String) -> AsyncThrowingStream<AppContextEvent, Error>
 
     // MARK: Names
@@ -62,55 +78,50 @@ public protocol MeroAppBackend: Sendable {
     /// The contexts directly in `groupId`, with their names (context metadata):
     /// ``listContexts(groupId:)`` with what a screen shows.
     func listContextEntries(groupId: String) async throws -> [AppContextEntry]
-    /// A group's metadata (a namespace's or a subgroup's), or `nil` if never set.
+    /// An org's or a team's name and metadata, or `nil` when it has neither.
     func groupMetadata(groupId: String) async throws -> AppMetadata?
-    /// A context's metadata in its group, or `nil` if never set.
+    /// An app instance's name and metadata, or `nil` when it has neither.
     func contextMetadata(groupId: String, contextId: String) async throws -> AppMetadata?
-    /// Rename a namespace or subgroup (`GroupMetadataSet`), keeping its metadata's `data`.
+    /// Rename a team (`POST /orgs/{org}/teams/{team}`), or an org (its metadata's
+    /// `name`), keeping its metadata's other fields.
     func setGroupName(groupId: String, name: String) async throws
-    /// Rename a context in its group (`ContextMetadataSet`), keeping its metadata's `data`.
+    /// Rename an app instance (its metadata's `name`), keeping its metadata's other fields.
     func setContextName(groupId: String, contextId: String, name: String) async throws
 
     // MARK: Blobs
 
-    /// Store `data` on the relay against `contextId`, a context the account is a
-    /// member of; the relay announces it to the context's other members.
+    /// Store `data` as a blob of app instance `contextId` (`POST /apps/{app}/blobs`).
     func uploadBlob(contextId: String, data: Data) async throws -> AppBlob
-    /// A blob's bytes, read through `contextId` (the relay checks the account
-    /// is a member and that the blob belongs to that context).
+    /// A blob's bytes, read through the app instance it belongs to.
     func getBlob(blobId: String, contextId: String) async throws -> Data
 
     // MARK: Leaving and deleting
 
-    /// Leave a namespace (`MemberLeft` on it): every subgroup and context in it with it.
+    /// Leave an organization (`DELETE /orgs/{org}/members/{me}`), and with it its teams and apps.
     func leaveNamespace(namespaceId: String) async throws
-    /// Leave a subgroup (`MemberLeft` on it), and with it the contexts in it.
-    /// An account is a member of a context through its group, so this is also
-    /// how it leaves a context.
+    /// Leave a team (`DELETE …/teams/{team}/members/{me}`), and with it its apps.
     func leaveSubgroup(groupId: String) async throws
-    /// Delete a subgroup and what is in it (`GroupDeleted`, a root op on its
-    /// namespace). The relay refuses it unless the account may.
+    /// Delete a team and what is in it. The node refuses it unless the account may.
     func deleteSubgroup(groupId: String) async throws
-    /// Take a context out of its group (`ContextDetached`): it stops being
-    /// listed and served there. The relay refuses it unless the account may.
+    /// Delete an app instance (`DELETE /apps/{app}`). The node refuses it unless the account may.
     func removeContext(groupId: String, contextId: String) async throws
 
     // MARK: Members
 
-    /// The members of a namespace or subgroup, with their roles and names
-    /// (member metadata): a namespace's are the app's display names.
+    /// The members of an org or a team, with their roles and names (the org's
+    /// member metadata `name`: the app's display names).
     func listMembers(groupId: String) async throws -> [AppMember]
-    /// Set a member's role (`MemberRoleSet`). Admins only.
+    /// Set a member's role in an org or a team. Admins (team leads) only.
     func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws
-    /// Remove a member (`MemberRemoved`). Admins only.
+    /// Remove a member from an org or a team. Admins (team leads) only.
     func removeMember(groupId: String, identity: String) async throws
-    /// Set the account's own name in a namespace or subgroup
-    /// (`MemberMetadataSet` on itself), keeping its metadata's `data`.
+    /// Set the account's own name in the org (`groupId` the org or one of its
+    /// teams): its member metadata's `name`, keeping the other fields.
     func setMemberName(groupId: String, name: String) async throws
 }
 
 /// What a ``MeroAppBackend`` that predates a call throws for it, naming the
-/// call. ``DelegatedAppBackend`` and ``InMemoryAppBackend`` implement every
+/// call. `CloudAppBackend` and ``InMemoryAppBackend`` implement every
 /// call. (== Kotlin `UnsupportedOperationException`.)
 public struct MeroAppBackendUnsupported: Error, Equatable, Sendable {
     public let method: String
@@ -123,6 +134,13 @@ public struct MeroAppBackendUnsupported: Error, Equatable, Sendable {
 // Defaults, so a backend of an app's own (written before these calls) still
 // conforms. Each throws ``MeroAppBackendUnsupported``.
 extension MeroAppBackend {
+    public func createContext(
+        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
+    ) async throws -> String {
+        guard service == nil else { throw MeroAppBackendUnsupported(method: "createContext(service:)") }
+        return try await createContext(groupId: groupId, applicationId: applicationId, name: name, initArgs: initArgs)
+    }
+
     public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
         throw MeroAppBackendUnsupported(method: "listContextEntries")
     }
@@ -213,7 +231,7 @@ public struct AppMetadata: Hashable, Sendable {
 public struct AppMember: Identifiable, Hashable, Sendable {
     /// The member's account, 64 hex.
     public let identity: String
-    /// `Admin`, `Member` or `ReadOnly`; a relay is `RelayTee`.
+    /// `Admin`, `Member` or `ReadOnly` (``GovernanceMemberRole``).
     public let role: String
     /// The name the member set (member metadata), when it set one.
     public let name: String?
@@ -228,7 +246,7 @@ public struct AppMember: Identifiable, Hashable, Sendable {
     }
 }
 
-/// A blob stored through the relay. (== Kotlin `AppBlob`.)
+/// A blob of an app instance. (== Kotlin `AppBlob`.)
 public struct AppBlob: Hashable, Sendable {
     public let blobId: String
     public let size: Int
@@ -241,11 +259,11 @@ public struct AppBlob: Hashable, Sendable {
 
 /// A namespace this account is a member of. (== Kotlin `AppNamespace`.)
 public struct AppNamespace: Identifiable, Hashable, Sendable {
-    /// The namespace id, 64 hex.
+    /// The organization's id.
     public let id: String
     /// Its name, when it has one.
     public let name: String?
-    /// The application it runs: what a new context in it is created with.
+    /// The package a new app instance in it is created with (the app's own).
     public let applicationId: String
     public let memberCount: Int
 
@@ -270,18 +288,19 @@ public struct AppSubgroup: Hashable, Sendable {
     }
 }
 
-/// What founding a namespace came to. (== Kotlin `AppFoundedNamespace`.)
+/// What founding a namespace (an organization) came to. (== Kotlin `AppFoundedNamespace`.)
 public struct AppFoundedNamespace: Hashable, Sendable {
+    /// The organization's id.
     public let namespaceId: String
-    /// Whether the cloud agreed to host the namespace. Invitees find it only then.
+    /// Always true on 1.0: every organization lives on the cluster. Kept so
+    /// apps that check it still build.
     public let haEnabled: Bool
-    /// Why `haEnabled` is false, in words a person can act on.
+    /// Always `nil` on 1.0.
     public let haError: String?
-    /// Why the name could not be set, when the namespace exists anyway. Always
-    /// `nil` here: this SDK throws when naming fails.
+    /// Always `nil`: this SDK throws when naming fails.
     public let nameError: String?
 
-    public init(namespaceId: String, haEnabled: Bool, haError: String? = nil, nameError: String? = nil) {
+    public init(namespaceId: String, haEnabled: Bool = true, haError: String? = nil, nameError: String? = nil) {
         self.namespaceId = namespaceId
         self.haEnabled = haEnabled
         self.haError = haError
@@ -291,27 +310,101 @@ public struct AppFoundedNamespace: Hashable, Sendable {
 
 /// What redeeming an invitation came to. (== Kotlin `AppJoinedNamespace`.)
 public struct AppJoinedNamespace: Hashable, Sendable {
+    /// The organization joined.
     public let namespaceId: String
-    /// NOT "joined": membership lands once peers apply the op.
+    /// True once the node committed the membership (1.0 commits it before answering).
     public let published: Bool
-    /// The relay that admitted the account.
-    public let relayURL: String
+    /// The node that admitted the account.
+    public let nodeURL: String
 
-    public init(namespaceId: String, published: Bool, relayURL: String) {
+    public init(namespaceId: String, published: Bool = true, nodeURL: String) {
         self.namespaceId = namespaceId
         self.published = published
-        self.relayURL = relayURL
+        self.nodeURL = nodeURL
+    }
+
+    /// The node that admitted the account; the name predates 1.0, which has no relays.
+    public var relayURL: String { nodeURL }
+}
+
+/// A live event in an app instance. (== Kotlin `AppContextEvent`.)
+public struct AppContextEvent: Hashable, Sendable {
+    /// The app instance's id.
+    public let contextId: String
+    /// The event's name (the app's `#[app::event]` variant).
+    public let kind: String
+    /// The event's payload, when it has one.
+    public let data: JSONValue?
+    /// The event's id, `index:seq`, when the node gave one.
+    public let id: String?
+
+    public init(contextId: String, kind: String, data: JSONValue? = nil, id: String? = nil) {
+        self.contextId = contextId
+        self.kind = kind
+        self.data = data
+        self.id = id
     }
 }
 
-/// A live event in a context: something changed there. (== Kotlin `AppContextEvent`.)
-public struct AppContextEvent: Hashable, Sendable {
-    public let contextId: String
-    /// The node's event kind, e.g. `StateMutation`, `ExecutionEvent`, `Ephemeral`.
-    public let kind: String
+/// An invitation to an organization: an invite token (`inv_…`) the
+/// organization's node minted, and the organization it admits to. A bearer
+/// secret: whoever holds it may join (until it expires or its uses run out).
+/// Apps carry it in their links as JSON, `{"orgId":"…","token":"inv_…"}`.
+/// (== Kotlin `OrgInvitation`.)
+public struct OrgInvitation: Codable, Hashable, Sendable {
+    public let orgId: String
+    public let token: String
 
-    public init(contextId: String, kind: String) {
-        self.contextId = contextId
-        self.kind = kind
+    public init(orgId: String, token: String) {
+        self.orgId = orgId
+        self.token = token
+    }
+}
+
+/// The pre-1.0 name of ``OrgInvitation``, kept so apps that name it build.
+/// Its shape changed: a signed group invitation became an invite token.
+public typealias SignedGroupOpenInvitation = OrgInvitation
+
+/// A member's role, in the words the app layer uses. On 1.0 an organization
+/// member's `owner`/`admin` reads as `Admin`, `member` as `Member` and
+/// `guest` as `ReadOnly`; a team row's `lead` as `Admin`, `member` as
+/// `Member`, `readOnly` as `ReadOnly`. (== Kotlin `GovernanceMemberRole`.)
+public enum GovernanceMemberRole: String, Sendable, CaseIterable {
+    case admin = "Admin"
+    case member = "Member"
+    case readOnly = "ReadOnly"
+
+    public init(_ role: OrgRole) {
+        switch role {
+        case .owner, .admin: self = .admin
+        case .member: self = .member
+        case .guest: self = .readOnly
+        }
+    }
+
+    public init(_ role: TeamRole) {
+        switch role {
+        case .lead: self = .admin
+        case .member: self = .member
+        case .readOnly: self = .readOnly
+        }
+    }
+
+    /// The organization role this sets.
+    public var orgRole: OrgRole {
+        switch self {
+        case .admin: return .admin
+        case .member: return .member
+        case .readOnly: return .guest
+        }
+    }
+
+    /// The team row this sets.
+    public var teamRole: TeamRole {
+        switch self {
+        case .admin: return .lead
+        case .member: return .member
+        case .readOnly: return .readOnly
+        }
     }
 }
