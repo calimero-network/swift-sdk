@@ -240,6 +240,11 @@ public struct ConsentStarted: Codable, Sendable, Equatable {
     public var url: String
     /// Unix seconds; a request lives 10 minutes.
     public var expiresAt: Double
+    /// The confirmation code the consent page shows (`ABC-DEF`, core's
+    /// `confirmation_code`). Show it in the app before opening the page, so
+    /// the person can check the page is the one the app asked for. `nil`
+    /// from a node that predates it.
+    public var code: String?
 }
 
 /// `pending`, `approved` or `declined`. (== mero-js `ConsentStatus`.)

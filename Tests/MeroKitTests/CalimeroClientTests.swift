@@ -329,7 +329,9 @@ final class CalimeroClientTests: XCTestCase {
             case ("POST", "/orgs/o1/invites"): return .json(["token": "inv_x"])
             case ("POST", "/invites/inv_x/redeem"): return .json(["orgId": "o1"])
             case ("POST", "/consent/requests"):
-                return .json(["requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1])
+                return .json([
+                    "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1, "code": "7KQ-M2D",
+                ])
             case ("GET", "/consent/r1/result"):
                 return .json(["requestId": "r1", "kind": "upgrade", "status": "approved", "decidedAt": 2])
             case ("POST", "/apps"): return .json(["appId": "a1", "contextId": "c"])
@@ -356,6 +358,7 @@ final class CalimeroClientTests: XCTestCase {
         ) { url in
             XCTAssertEqual(url.absoluteString, "https://node.test/consent/r1")
         }
+        XCTAssertEqual(started.code, "7KQ-M2D", "the confirmation code the app shows before opening the page")
         let consentBody = try XCTUnwrap(node.requests.first { $0.path == "/consent/requests" }?.json)
         XCTAssertEqual(consentBody["kind"], "upgrade")
         XCTAssertEqual(consentBody["subject"]?["toVersion"], "1.1.0")
