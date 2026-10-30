@@ -163,48 +163,26 @@ final class TeeNodeReleaseTests: XCTestCase {
         assertTeeRefusal(missing, "HTTP 404")
     }
 
-    // MARK: - The release a node names
+    // MARK: - The release an image names
 
-    func testReadsItFromTheImageNameOfAReleasedImage() async throws {
+    func testReadsItFromTheImageNameOfAReleasedImage() {
         XCTAssertEqual(try nodeReleaseVersionFromImage(releasedImage), "2.3.87")
         let debugImage = "merotee-ubuntu-questing-25-10-debug-read-only-2-3-100"
         XCTAssertEqual(try nodeReleaseVersionFromImage(debugImage), "2.3.100")
-        rig.on(
-            "GET", "/admin-api/tee/info",
-            json: json(["data": ["cloudProvider": "gcp", "osImage": .string(releasedImage), "mrtd": ""]]))
-        let session = MockURLProtocol.makeSession()
-        let version = try await fetchNodeReleaseVersion("https://relay.example/", session: session)
-        XCTAssertEqual(version, "2.3.87")
-        let asked = rig.requests("GET", "/admin-api/tee/info").first?.url.absoluteString
-        XCTAssertEqual(asked, "https://relay.example/admin-api/tee/info")
-    }
-
-    func testRefusesAnImageThatIsNotAReleasedMeroTeeNodeImage() async throws {
         for name in ["unknown", "ubuntu-2404-tdx-v20250115", "\(releasedImage)-d412-1", "\(releasedImage)x"] {
             assertTeeRefusal(
                 teeThrownMessage { _ = try nodeReleaseVersionFromImage(name) },
                 "not the image of a mero-tee node release")
         }
-        rig.on("GET", "/admin-api/tee/info", json: #"{"data":{}}"#)
-        let session = MockURLProtocol.makeSession()
-        let refusal = await teeAsyncThrownMessage {
-            _ = try await fetchNodeReleaseVersion("https://relay.example", session: session)
-        }
-        assertTeeRefusal(refusal, "did not name the node's image")
     }
 
-    func testSaysSoWhenANodeThatRequiresSealingRefusesTeeInfoUnsealed() async throws {
-        let session = MockURLProtocol.makeSession()
-        rig.on("GET", "/admin-api/tee/info", status: 403, json: #"{"error":{"code":"sealed_required","message":"no"}}"#)
-        let sealed = await teeAsyncThrownMessage {
-            _ = try await fetchNodeReleaseVersion("https://relay.example", session: session)
-        }
-        assertTeeRefusal(sealed, "the node requires sealing and is too old to name its release")
-        rig.on("GET", "/admin-api/tee/info", status: 403, json: #"{"error":{"code":"forbidden","message":"no"}}"#)
-        let forbidden = await teeAsyncThrownMessage {
-            _ = try await fetchNodeReleaseVersion("https://relay.example", session: session)
-        }
-        assertTeeRefusal(forbidden, "HTTP 403")
+    func testFetchesAReleaseFromGithubAsItsTwoFiles() async throws {
+        let signed = try TeeFixture.signed("2.3.87")
+        let base = "/calimero-network/mero-tee/releases/download/mero-tee-v2.3.87/published-mrtds.json"
+        rig.on("GET", base) { _ in .init(status: 200, headers: [:], body: Data(signed.publishedMrtds.utf8)) }
+        rig.on("GET", base + ".bundle.json") { _ in .init(status: 200, headers: [:], body: Data(signed.bundle.utf8)) }
+        let fetched = try await fetchGithubNodeRelease("2.3.87", session: MockURLProtocol.makeSession())
+        XCTAssertEqual(fetched, signed)
     }
 
     // MARK: - createSignedReleaseVerifier
@@ -250,111 +228,5 @@ final class TeeNodeReleaseTests: XCTestCase {
                     SignedReleaseVerifierOptions(
                         release: { r87 }, profile: "locked-read-only", minReleaseVersion: "latest"))
             }, "minReleaseVersion")
-    }
-
-    // MARK: - createSignedReleaseSealedFetch
-
-    /// A relay that names release 2.3.87 in its `/tee/info` and attests with
-    /// the real sample quote, bound to the transport key; and mirrors serving
-    /// `{data: SignedNodeRelease}` for that release.
-    private func serveNetwork(infoRefused: Bool = false) throws {
-        if infoRefused {
-            rig.on(
-                "GET", "/admin-api/tee/info", status: 403,
-                json: #"{"error":{"code":"sealed_required","message":"sealed only"}}"#)
-        } else {
-            rig.on(
-                "GET", "/admin-api/tee/info",
-                json: json(["data": ["cloudProvider": "gcp", "osImage": .string(releasedImage), "mrtd": ""]]))
-        }
-        let release = json(["data": signedJSON(try TeeFixture.signed("2.3.87"))])
-        rig.on("GET", "/api/tee/node-releases/2.3.87", json: release)
-        let quote = try TeeFixture.quote.base64EncodedString()
-        let collateral = try MeroJSON.decode(JSONValue.self, from: try TeeFixture.data("tdx_quote_collateral.json"))
-        let body = json(
-            [
-                "data": [
-                    "quoteB64": .string(quote), "quote": [:],
-                    "transportPublicKey": .string(String(repeating: "44", count: 32)), "collateral": collateral,
-                ]
-            ])
-        rig.on("POST", "/admin-api/tee/attest") { seen in
-            XCTAssertEqual(seen.json?["bindTransportKey"], true)
-            XCTAssertEqual(seen.json?["includeCollateral"], true)
-            return CloudRig.stub(200, body)
-        }
-    }
-
-    private func sealedRefusal(_ options: SignedReleaseSealedFetchOptions) async -> String? {
-        await teeAsyncThrownMessage {
-            let transport = try createSignedReleaseSealedFetch(options)
-            var request = URLRequest(url: URL(string: "https://relay.example/admin-api/health")!)
-            request.httpMethod = "GET"
-            _ = try await transport.send(request)
-        }
-    }
-
-    private func options(
-        source: NodeReleaseSource = .mirror(TeeTrust.defaultReleaseMirror), releaseVersion: String? = nil,
-        minimum: String = "2.3.86"
-    ) -> SignedReleaseSealedFetchOptions {
-        SignedReleaseSealedFetchOptions(
-            baseURL: "https://relay.example", profile: "locked-read-only", minReleaseVersion: minimum,
-            releaseSource: source, releaseVersion: releaseVersion, session: MockURLProtocol.makeSession(),
-            now: { TeeFixture.at })
-    }
-
-    private var paths: [String] { rig.seen.map { "\($0.url.host ?? "")\($0.url.path)" } }
-
-    func testGetsTheReleaseTheRelayNamesFromThePublicMirrorAndRefusesAQuoteNotOfIt() async throws {
-        try serveNetwork()
-        assertTeeRefusal(await sealedRefusal(options()), "are not an image this verifier trusts")
-        XCTAssertEqual(
-            paths,
-            [
-                "relay.example/admin-api/tee/attest", "relay.example/admin-api/tee/info",
-                "cloud.calimero.network/api/tee/node-releases/2.3.87",
-            ])
-    }
-
-    func testTakesTheReleaseFromAnotherMirrorOrFromAFunction() async throws {
-        try serveNetwork()
-        assertTeeRefusal(await sealedRefusal(options(source: .mirror("https://cloud.example"))), "are not an image")
-        XCTAssertTrue(paths.contains("cloud.example/api/tee/node-releases/2.3.87"))
-        XCTAssertFalse(paths.contains("cloud.calimero.network/api/tee/node-releases/2.3.87"))
-
-        let signed = try TeeFixture.signed("2.3.87")
-        let named = TeeSecondsBox()
-        let custom = NodeReleaseSource.custom { baseURL, version in
-            XCTAssertEqual(baseURL, "https://relay.example")
-            named.record(version == "2.3.87" ? 1 : 0)
-            return signed
-        }
-        assertTeeRefusal(await sealedRefusal(options(source: custom)), "are not an image")
-        XCTAssertEqual(named.value, 1)
-    }
-
-    func testTakesReleaseVersionWhenANodeThatRequiresSealingWillNotNameItsReleaseAndOnlyThen() async throws {
-        try serveNetwork(infoRefused: true)
-        assertTeeRefusal(await sealedRefusal(options()), "`releaseVersion`")
-        assertTeeRefusal(await sealedRefusal(options(releaseVersion: "2.3.87")), "are not an image")
-        XCTAssertTrue(paths.contains("cloud.calimero.network/api/tee/node-releases/2.3.87"))
-
-        // A node that names its release is taken at its word, as untrusted as ever.
-        rig = CloudRig()
-        rig.install()
-        try serveNetwork()
-        assertTeeRefusal(await sealedRefusal(options(releaseVersion: "2.3.99")), "are not an image")
-        XCTAssertTrue(paths.contains("cloud.calimero.network/api/tee/node-releases/2.3.87"))
-        XCTAssertFalse(paths.contains("cloud.calimero.network/api/tee/node-releases/2.3.99"))
-
-        let latest = options(releaseVersion: "latest")
-        assertTeeRefusal(teeThrownMessage { _ = try createSignedReleaseSealedFetch(latest) }, "releaseVersion")
-    }
-
-    func testRefusesARelayThatServesAReleaseBelowTheMinimumBeforeTrustingItsQuote() async throws {
-        try serveNetwork()
-        assertTeeRefusal(
-            await sealedRefusal(options(minimum: "2.3.88")), "Release 2.3.87 is older than the minimum trusted, 2.3.88")
     }
 }

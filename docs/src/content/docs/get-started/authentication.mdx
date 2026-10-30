@@ -1,443 +1,55 @@
 ---
 title: Authentication
-description: Cloud sign-in (wallet passkey → device certificate → hosted relay) for mobile apps, development-node logins, and the actor-serialised token lifecycle.
+description: Passkeys, sessions and refresh tokens, API keys, step-up confirmations, and moving between nodes.
 sidebar:
   order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-import SeqDiagram from '../../../components/SeqDiagram.astro';
+There is no auth service: the node registers passkeys, mints sessions and
+checks API keys, all inside the sealed channel.
 
-**Mobile apps sign in with Calimero Cloud.** The person approves this device on
-the Calimero wallet with their passkey, the wallet returns a certificate for a
-key that never leaves the device, and the app talks to the hosted relay that
-serves their account. There is no node URL and no password in the app.
+| Who | Credential | Lifetime |
+| --- | --- | --- |
+| A person | a passkey, which opens a session `v2.…` | 15 minutes, refresh token `rt_…` 30 days |
+| A service | an API key `cal_…` (`useApiKey`) | up to 365 days |
 
-Logging in to a node directly (credentials or the node's hosted SSO) is still
-available for **development nodes you run yourself**; see
-[Development nodes](#development-nodes) below.
+## Passkeys
 
-## Cloud sign-in
+- `signUp(passkey, name:)`: `POST /auth/passkey/register/{begin,finish}`.
+- `signIn(passkey)`: `POST /auth/passkey/login/{begin,finish}`. Begin and finish reach the same node.
+- `PasskeyProvider` is what holds the key: `PlatformPasskey` (MeroKitUI,
+  `ASAuthorizationPlatformPublicKeyCredentialProvider`) or `SoftPasskey`
+  (software, development clusters; the same JSON as `meroctl --dev-passkey`).
+- A dismissed prompt throws `PasskeyCancelled`; in a confirmation it surfaces as `ConfirmCancelled`.
 
-The shortest path is MeroKitUI: one "Continue with Calimero" button.
+## Sessions
 
-```swift
-import MeroKitUI
+`CalimeroClient` holds the session (`useSession`, `session`). `onSessionChange`
+reports every new one (sign-in, refresh, sign-out) so a mobile app can keep it
+in the Keychain (`KeychainCloudSessionStore`); `MeroClient` does this for you.
 
-@main
-struct MyApp: App {
-  @StateObject private var client = MeroClient()   // Keychain-backed by default
-  var body: some Scene {
-    WindowGroup {
-      // Restores a stored session, shows LoginView otherwise, handles onOpenURL.
-      MeroRootView(callbackScheme: "myapp").environmentObject(client)
-    }
-  }
-}
-```
+- A `401` to a request that carried a session triggers **one** refresh
+  (`POST /auth/refresh`), shared by every request that needs it at that moment:
+  a refresh token is used once, and reusing one revokes the session. The
+  request is then repeated. A refused refresh surfaces as `LoginRequired`.
+- `421 WRONG_NODE`: this node's release may not serve the account. The client
+  moves to the next node in `nodes` and repeats the request (a refresh tries
+  each node once; a sign-in is the caller's to repeat).
+- `421 NOT_LEADER`: repeated at `details.leaderUrl` when that is one of `nodes`.
 
-`client.signInWithCloud(callbackScheme:)` opens the wallet in
-`ASWebAuthenticationSession` (the system sheet, like "Sign in with Google"),
-verifies the answer, finds the account's relay and logs in there. Afterwards
-`client.account`, `client.relayURL`, `client.isSignedInWithoutRelay` and
-`client.connection` (a relay `Mero` + `RelayClient`) describe the session. If the
-callback reaches the app some other way (a Universal Link, `onOpenURL`), pass it
-to `client.handleEnrolmentCallback(_:)`.
+## Step-up confirmations
 
-<SeqDiagram
-  id="d-cloud"
-  title="Cloud sign-in"
-  lanes={[
-    { label: 'Your app', color: '#3fb950' },
-    { label: 'Wallet (system sheet)', color: '#a371f7' },
-    { label: 'Cloud manager', color: '#f0883e' },
-    { label: 'Hosted relay', color: '#58a6ff' },
-  ]}
-  steps={[
-    { from: 0, to: 0, label: 'device keys (Ed25519 + X25519) in the Keychain' },
-    { from: 0, to: 1, label: 'account-enroll?enrol-device&enrol-kem&callback-url&state' },
-    { from: 1, to: 1, label: 'passkey: approve this device' },
-    { from: 1, to: 0, label: 'myapp://enrol#credential=…&account=…&device=…&state=…', dashed: true },
-    { from: 0, to: 0, label: 'verify certificate, keys, account, state' },
-    { from: 0, to: 2, label: 'GET /accounts/{a}/relays (routing proof)' },
-    { from: 2, to: 0, label: 'relay URL + executor account', dashed: true },
-    { from: 0, to: 3, label: 'POST /admin-api/tee/attest → node key' },
-    { from: 0, to: 3, label: '/auth/challenge → /auth/token (account_proof)' },
-    { from: 3, to: 0, label: 'Bearer session: admin reads + SSE', dashed: true, color: '#a5ff11' },
-    { type: 'divider', label: 'writes go through warrants; no token needed for them' },
-  ]}
-/>
+`412 CONFIRM_REQUIRED` asks for a passkey assertion over the exact request:
+the `*Confirmed` methods (`callConfirmed`, `postConfirmed`, `deleteOrg`,
+`upgradeApp(passkey:)`, `approveRelease`, …) answer it with the passkey you
+give them and send the request once more with `confirm`.
 
-What the app checks before storing anything (`DeviceEnrolment.completeEnrolment`):
-the `state` it sent came back (an answer to an enrolment this app did not begin,
-one older than 10 minutes, or one already answered is refused); the certificate verifies (its root signed it, the
-account is the one that root derives, the device id was minted for it); it
-certifies **this** device's signing and delivery keys; and the account and
-device reported beside it are the ones it names. Any failure throws an
-`AccountError` and nothing is saved. When the device is already signed in to a
-different account, `CloudSignIn.completeEnrolment` throws
-`AccountError.accountSwitch` instead of replacing it; ask the person, then call
-it again with `allowAccountSwitch: true`.
+## Approvals happen on the node's consent page
 
-### Without MeroKitUI
-
-`CloudSignIn` is the UI-free core, usable from any UI framework:
+Release, upgrade and outbound approvals are never made inside an app:
 
 ```swift
-import MeroKit
-
-let cloud = CloudSignIn.keychain()   // device keys, session, tokens in the Keychain
-
-let walletURL = try await cloud.beginEnrolment(callbackURL: "myapp://enrol")
-// … present walletURL in ASWebAuthenticationSession (callbackURLScheme: "myapp") …
-let session = try await cloud.completeEnrolment(callbackURL: returnedURL)
-let connection = await cloud.connect(session)
-
-// Writes: warranted intents through the relay, as the account.
-let result = try await connection.relay?.execute(
-  contextId: contextId, method: "send_message", argsJson: ["message": "hi"])
-// Reads: the relay's query route (falls back to a warrant for non-views).
-let page = try await connection.relay?.query(contextId: contextId, method: "get_messages")
-// Admin reads and events: an ordinary Mero holding the relay's Bearer session.
-let spaces = try await connection.mero?.admin.listNamespaces()
-```
-
-`await cloud.restoreSession()` returns the stored session on the next launch;
-`await cloud.signOut()` retires the relay session (`POST /auth/logout`) and
-forgets the account: its tokens, session, relay map, subgroup namespaces and
-the pinned keys of its relays. The device keys and the warrant nonces spent
-under them stay, so signing back in is one approval;
-`signOut(forgetDevice: true)` (or `MeroClient.logout(forgetDevice: true)`)
-drops them too. Use it on a shared or handed-over device, so the next account
-does not sign in with a key already certified to this one.
-
-### The callback URL
-
-The SDK accepts **any** callback: an app scheme (`.scheme("myapp")`, any iOS
-version) or a verified https Universal Link (`.https(host:path:)`, iOS 17.4+,
-needs Associated Domains and an AASA file). The wallet shows the callback's
-origin as the app's identity.
-
-<Aside type="caution">
-  The hosted wallet currently returns only to `https://` callbacks. Accepting app
-  schemes is a pending wallet change; until it ships, use an https callback in
-  production. The certificate only covers a key that never leaves the app, so a
-  scheme callback cannot hand someone else your account.
-</Aside>
-
-### Signed in, no relay
-
-A brand-new account is a member of nothing, so no relay serves it yet.
-`CloudSession.relayUrl` is then `nil` and `MeroClient.isSignedInWithoutRelay` is
-`true`: still signed in. Redeeming an invitation admits the account and gives it
-a relay:
-
-```swift
-do {
-    let (session, outcome) = try await cloud.join(namespaceId: ns, invitation: invitation)
-} catch let failure as BootstrapFailure {
-    // failure.step says what to do: .notInvited → ask for a fresh invitation,
-    // .noRelayURL → try shortly, .admit → the node's refusal (failure.status)…
-}
-```
-
-The admitting node comes from the cloud's routing for the namespace, narrowed
-to the invitation's signed admitters — never from an address the invitation
-carries. See [Delegated accounts](/guides/delegated-accounts/) for the rest of
-the account layer.
-
-### The relay's node key
-
-The relay session is bound to the relay's node key, learned from
-`POST {relay}/admin-api/tee/attest`. The default `DcapRelayKeyVerifier` verifies
-the TDX DCAP quote on the device, checks it is of the signed mero-tee release the
-relay runs, and that it binds this request's nonce and the key the relay named.
-A mock quote is refused unless you pass `allowMock: true`, from a loopback relay
-too. `TLSRelayKeyVerifier` (the binding alone, over TLS) and
-`PinnedRelayKeyVerifier` (a key pinned out of band) are deprecated: they are for
-dev rigs and tests. Warranted writes do not depend on the node key; only Bearer
-reads and events do.
-
-### Signed in to the cloud as a user
-
-The routes above are proven by the device certificate. The cloud's
-signed-in routes — owned namespaces and their relays, HA, linking accounts —
-take a cloud login instead (Google, or the account root), and
-`connectCloud` / `connectCloudWithAccount` reach a relay from one. See
-[Calimero Cloud](/guides/calimero-cloud/).
-
-## Development nodes
-
-For a node you run yourself, exchange its admin username and password for a
-token bundle.
-These are the admin credentials the node was initialised with — core
-0.11.0-rc.17 creates the admin at `merod init`, so there is no first-login
-setup code.
-
-```swift
-let tokens = try await mero.authenticate(
-  Credentials(username: "alice", password: "s3cr3t")
-)
-let authed = await mero.isAuthenticated   // true
-```
-
-<SeqDiagram
-  id="d-direct-login"
-  title="Direct credential login"
-  lanes={[
-    { label: 'Your app', color: '#3fb950' },
-    { label: 'Mero (actor)', color: '#a5ff11' },
-    { label: 'Node /auth', color: '#58a6ff' },
-  ]}
-  steps={[
-    { from: 0, to: 1, label: 'authenticate(Credentials)' },
-    { from: 1, to: 2, label: 'POST /auth/token (user_password)' },
-    { from: 2, to: 1, label: 'access + refresh token', dashed: true },
-    { from: 1, to: 1, label: 'persist bundle to TokenStore' },
-    { from: 1, to: 0, label: 'TokenData', dashed: true, color: '#a5ff11' },
-    { type: 'divider', label: 'every later request carries Authorization: Bearer' },
-  ]}
-/>
-
-You can also put credentials in the config and call `authenticate()` with no
-argument:
-
-```swift
-let mero = Mero(config: MeroConfig(
-  baseURL: URL(string: "https://your-node.example")!,
-  credentials: Credentials(username: "alice", password: "s3cr3t")
-))
-try await mero.authenticate() // uses config.credentials
-```
-
-## The token lifecycle
-
-Refresh is **reactive**: the SDK never refreshes proactively (the server rejects
-a refresh while the access token is still valid). A `401` with
-`x-auth-error: token_expired` drives a single refresh and one retry — invisible
-to the caller.
-
-Because `Mero` is an **`actor`**, concurrent requests that all hit a `401` share
-**one** in-flight refresh. And because refresh tokens are **single-use**
-(rotated on every refresh), the SDK re-reads the token store first — so if
-another process or app extension already rotated the token, that newer bundle is
-adopted instead of replaying a consumed one (which would revoke the whole token
-family).
-
-<SeqDiagram
-  id="d-refresh"
-  title="Reactive 401 → refresh → retry (actor-serialised)"
-  lanes={[
-    { label: 'Caller', color: '#3fb950' },
-    { label: 'Mero (actor)', color: '#a5ff11' },
-    { label: 'TokenStore', color: '#f0883e' },
-    { label: 'Node', color: '#58a6ff' },
-  ]}
-  steps={[
-    { from: 0, to: 1, label: 'admin.getContexts()' },
-    { from: 1, to: 3, label: 'GET /admin-api/contexts (Bearer)' },
-    { from: 3, to: 1, label: '401 · x-auth-error: token_expired', dashed: true, color: '#f0883e' },
-    { from: 1, to: 1, label: 'serialise: one refresh at a time' },
-    { from: 1, to: 2, label: 're-read store (adopt if already rotated)' },
-    { from: 1, to: 3, label: 'POST /auth/refresh' },
-    { from: 3, to: 1, label: 'rotated bundle', dashed: true },
-    { from: 1, to: 2, label: 'persist rotated bundle' },
-    { from: 1, to: 3, label: 'retry request (new Bearer)', color: '#a5ff11' },
-    { from: 3, to: 1, label: '200 contexts', dashed: true },
-    { from: 1, to: 0, label: 'contexts', dashed: true, color: '#a5ff11' },
-    { type: 'divider', label: 'the 401 + retry never surface to the caller' },
-  ]}
-/>
-
-<Aside type="caution">
-  Terminal errors force re-login. `x-auth-error: token_reuse | token_revoked` is
-  never retried — it surfaces as `MeroError.authRevoked(reason:http:)` and the
-  token bundle is cleared. Catch it and route the user back to login. See the
-  [error model](/reference/error-model/).
-</Aside>
-
-## Hosted SSO (deep link)
-
-For a development node's own hosted login page, build the node's login URL, present it in
-`ASWebAuthenticationSession`, and feed the callback URL back in — the native
-analog of the web redirect flow.
-
-```swift
-import AuthenticationServices
-
-// 1. Build the login URL.
-let loginURL = Mero.buildAuthLoginUrl(
-  nodeUrl: "https://your-node.example",
-  options: AuthLoginOptions(callbackUrl: "myapp://auth-callback", mode: "login",
-                            permissions: ["admin"])
-)
-
-// 2. Present it (ASWebAuthenticationSession), then on the URL it hands back:
-if let callback = Mero.parseAuthCallback(
-  callbackURL.absoluteString, options: ParseAuthCallbackOptions(allowCustomScheme: true)) {
-  await mero.setTokenData(from: callback)
-  // callback also carries applicationId, contextId, contextIdentity, nodeUrl
-}
-```
-
-<Aside type="caution">
-  **A custom scheme is accepted only from the auth session.** Any app can
-  register `myapp://`, and the callback carries the session's tokens.
-  `parseAuthCallback` returns `nil` for a callback that is not `https` unless
-  you pass `allowCustomScheme: true`; pass it only for the URL
-  `ASWebAuthenticationSession` hands back, which never travels as a link. A
-  callback that reaches `onOpenURL` should be an `https` Universal Link
-  (`MeroClient.handleAuthCallback` refuses anything else unless
-  `MeroProviderConfig.allowCustomSchemeCallbacks`). The lasting fix, an
-  authorization code with PKCE in place of tokens in the link, needs the node.
-</Aside>
-
-<Aside type="caution">
-  **Only a callback for a login this app began is accepted.** Anyone can open
-  your app with a URL carrying tokens of their choosing; adopting them would
-  sign the person in to the sender's node and account. So `buildAuthLoginUrl`
-  records a random, single-use `auth_state` (alive 10 minutes) and adds it to the
-  callback URL's query, and `parseAuthCallback` returns `nil` unless the callback
-  carries a pending one — and consumes it, so a replay is refused too.
-
-  The state lives in an `AuthLoginStateStore`: `.shared` (in memory) by default,
-  which covers a login begun and finished in one launch. If the callback can
-  arrive after a relaunch or in an extension, pass the same Keychain-backed
-  store to both calls:
-
-  ```swift
-  let states = AuthLoginStateStore.keychain()     // or AuthLoginStateStore(store: yourAnyValueStore)
-  let loginURL = Mero.buildAuthLoginUrl(nodeUrl: node, options: options, stateStore: states)
-  // …
-  let callback = Mero.parseAuthCallback(url.absoluteString, stateStore: states)
-  ```
-
-  A host that injects tokens itself, with no login to begin, can opt out with
-  `ParseAuthCallbackOptions(allowUnsolicited: true)` — anyone who can open the
-  URL then chooses the session.
-</Aside>
-
-<SeqDiagram
-  id="d-sso"
-  title="Hosted SSO via ASWebAuthenticationSession"
-  lanes={[
-    { label: 'Your app', color: '#3fb950' },
-    { label: 'ASWebAuthSession', color: '#a371f7' },
-    { label: 'Mero (actor)', color: '#a5ff11' },
-  ]}
-  steps={[
-    { from: 2, to: 0, label: 'buildAuthLoginUrl(nodeUrl, options)', dashed: true },
-    { from: 0, to: 1, label: 'present(loginURL)' },
-    { from: 1, to: 1, label: 'user signs in on the node' },
-    { from: 1, to: 0, label: 'callback: myapp://…#access_token=…', dashed: true },
-    { from: 0, to: 0, label: 'Mero.parseAuthCallback(url) → AuthCallbackResult' },
-    { from: 0, to: 2, label: 'setTokenData(from: callback)' },
-    { type: 'divider', label: 'authenticated — no password entered in-app' },
-  ]}
-/>
-
-`parseAuthCallback` reads the URL hash fragment
-(`access_token`, `refresh_token`, `application_id`, `context_id`,
-`context_identity`, `node_url`) and returns `nil` if no access token is present
-or the callback answers no pending login. Both SSO helpers are `static` on `Mero`.
-
-## Request proofs (no session)
-
-A keyholder can skip the session entirely: the device key signs **each
-request**, and the certificate its account signed says whose key that is. The
-node verifies both from the `X-Calimero-Proof` header with no store read
-(core `proof_auth.rs`), which is how a relay serves a caller it has never seen.
-The node honours it only with `--delegated-access`; one without answers `403`,
-distinct from the `401` a bad proof gets.
-
-```swift
-// Mint proofs from the device key and its certificate.
-let mero = Mero(config: MeroConfig(
-    baseURL: relayURL,
-    requestProof: .keys(ProofSignerOptions(credential: certificateHex, signerSecret: keys.deviceSecret))))
-
-// Or a three-link chain: a session key under a device-signed login statement.
-//   .keys(ProofSignerOptions(credential: cert, session: statementHex, signerSecret: sessionKeyHex))
-// Or your own signer, when the key must not reach the SDK: .custom { request in … }
-// Or an authorizer: .authorizer(try createProofAuthorizer(ProofCredential(credential: cert, keys: keys)))
-```
-
-Every `auth`, `admin` and `rpc` call is then signed over its method, its path
-**and query** exactly as sent (`signedPath(_:)`), and its exact body
-(`requestBodyHash`). Each signature is valid for a short window (120 s for
-`.keys`, 300 s for a `ProofCredential`) — that window is what bounds replay.
-A file upload (`HttpBody.file`) cannot be signed; send bytes, or use a session.
-
-A request carrying a proof **never follows a redirect**: it would carry the
-header to a location it was not signed for. The `3xx` surfaces as
-`MeroError.http` with status `0` ("Redirect Not Followed"), and nothing is
-re-sent.
-
-The event streams are long-lived connections, not requests, so `Mero.sse`
-still uses the session. For a proof-authorized stream, build the connection
-with an authorizer — the stream and every subscription `POST` are signed:
-
-```swift
-let sse = SseConnection(baseURL: relayURL, authorize: try createProofAuthorizer(credential))
-sse.connect()
-```
-
-The pieces are public: `signRequest` (a borsh `RequestSig`), `callerProof`
-(concatenates the links), `createProofSigner`, `signRequestProof`,
-`createProofAuthorizer`, and `requestProofHeader`. They are pinned to core's
-`request_wire_fixture.rs`.
-
-## Find a local node
-
-A development or desktop node answers `GET /admin-api/health` unauthenticated.
-`NodeDiscovery` probes the usual local ports (`2428`, `2429`, `2528`, `2529`) in
-parallel, each capped at 2 s, and returns the ones that report `alive`, in port
-order (port of mero-js `discoverLocalNodes`):
-
-```swift
-let nodes = await NodeDiscovery.discoverLocalNodes()          // [http://localhost:2428, …]
-let custom = await NodeDiscovery.discoverLocalNodes(ports: [3000], timeout: 1)
-let ok = await NodeDiscovery.probeNodeHealth(URL(string: "http://host/node1")!)  // keeps the /node1 prefix
-```
-
-Probes never throw; cancelling the calling task cancels them all.
-
-## Persistence
-
-Pass a `tokenStore` in the config so tokens survive app launches. The Keychain
-store is the secure default; the memory store is ephemeral.
-
-```swift
-// Secure, persisted across launches — backed by the iOS/macOS Keychain
-let mero = Mero(config: MeroConfig(
-  baseURL: URL(string: "https://your-node.example")!,
-  tokenStore: KeychainTokenStore()
-))
-
-// Share tokens with an app extension via a Keychain access group:
-let shared = KeychainTokenStore(accessGroup: "TEAMID.group.myapp")
-
-// Ephemeral (the default when tokenStore is nil)
-let ephemeral = Mero(config: MeroConfig(
-  baseURL: URL(string: "https://your-node.example")!,
-  tokenStore: MemoryTokenStore()
-))
-```
-
-The bundle `Mero` persists is **bound to its node**: it carries
-`TokenData.nodeOrigin` (origin plus path prefix), and an instance pointed at
-another node — or a bundle saved by an earlier SDK release, which names no
-node — reads the store as empty. So one shared Keychain item never sends one
-node's tokens to another; after upgrading, sign in once.
-
-Conform to `TokenStore` (`getTokens` / `setTokens` / `clear`) to back tokens with
-anything else — see the [reference](/reference/mero/#token-stores).
-
-## Inspecting and clearing auth state
-
-```swift
-await mero.isAuthenticated        // Bool — is a bundle present?
-await mero.currentTokenData()     // TokenData? (debugging / handoff)
-await mero.clearToken()           // drop the bundle + clear the store
-await mero.logout()               // clearToken() + close() — full sign-out
+let started = try await client.requestConsent(upgradeConsent(app: app, toVersion: "1.2.0", returnTo: "myapp://consent"))
+// open started.url in the system browser (MeroClient.requestConsent uses ASWebAuthenticationSession)
+let result = try await client.consentResult(started.requestId)
 ```

@@ -1,0 +1,23 @@
+---
+title: CalimeroClient
+description: Every CalimeroClient method, grouped as mero-js groups them.
+sidebar:
+  order: 1
+---
+
+`CalimeroClient(CalimeroClientOptions(baseUrl:nodes:policy:session:retry:))`,
+an actor. Method names follow mero-js's `CalimeroClient`.
+
+| Group | Methods |
+| --- | --- |
+| Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `nodeUrl`, `nodeUrls` |
+| Identity | `signUp`, `signIn`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey`, `removePasskey`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey`, `revokeApiKey` |
+| Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed` |
+| Bundles, blobs | `uploadBundle`, `uploadBlob`, `downloadBlob`, `listBlobs`, `blobInfo`, `deleteBlob` |
+| Packages | `uploadPackage`, `installPackage`, `packages`, `package`, `uninstallPackage` |
+| App instances | `listApps`, `getApp`, `createApp`, `deleteApp`, `setAccess`, `setAppMetadata`, `appStorage`, `appAbi`, `transferApp`, `upgradeApp` |
+| Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events` |
+| Presence, aliases | `publishPresence`, `presence`, `presenceStream`, `setAlias`, `aliases`, `alias`, `deleteAlias` |
+| Organizations | `createOrg`, `getOrg`, `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember`, `removeMember`, `setCapabilities`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember`, `removeTeamMember`, `invite`, `redeemInvite` |
+| Approvals | `approveRelease`, `approveOutbound`, `appsReport`, `appsReportAll`, `releaseRules`, `pendingApprovals`, `requestConsent`, `openConsentPage`, `consentResult`, `waitForConsent`, `publisherBinding`, `bindPublisher`, `upgradePublished` |
+| Operator | `opsApps`, `opsOrgs`, `setReleaseDeadline`, `liftReleaseDeadline` |

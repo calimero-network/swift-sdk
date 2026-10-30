@@ -3,7 +3,7 @@ import Foundation
 /// A dynamic JSON value. Swift has no native `any Codable`, so this enum backs
 /// the SDK's arbitrary-JSON fields: RPC `argsJson`/`data`, admin metadata,
 /// provider config, etc. (== the `unknown`/`Record<string, unknown>` fields in mero-js.)
-public enum JSONValue: Codable, Sendable, Equatable {
+public enum JSONValue: Codable, Sendable, Hashable {
     case null
     case bool(Bool)
     case number(Double)

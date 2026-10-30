@@ -5,43 +5,59 @@ import MeroKit
 import Combine
 #endif
 
-/// How a ``MeroAppSession`` treats links and where it founds and joins.
-/// (== Kotlin `MeroAppSessionOptions`.)
+/// How a ``MeroAppSession`` treats links. (== Kotlin `MeroAppSessionOptions`.)
 public struct MeroAppSessionOptions: Sendable {
     /// Whether a link the system handed the app is one of this app's
     /// invitations. `nil` takes ``MeroAppSession/isInvitationLink(_:packageName:)``:
     /// a link carrying `invitation=…` whose path names the app's package.
     public var isInvitation: (@Sendable (String) -> Bool)?
-    /// What a new namespace is founded with. `nil` resolves the app's package
-    /// from the registry. (``DelegatedAppBackend/foundingApplication``.)
-    public var foundingApplication: FoundingApplication?
-    /// Where to send a join. `nil` asks the Cloud manager for the admitting
-    /// relay. (``DelegatedAppBackend/joinNodeURL``.)
-    public var joinNodeURL: String?
 
-    public init(
-        isInvitation: (@Sendable (String) -> Bool)? = nil, foundingApplication: FoundingApplication? = nil,
-        joinNodeURL: String? = nil
-    ) {
+    public init(isInvitation: (@Sendable (String) -> Bool)? = nil) {
         self.isInvitation = isInvitation
-        self.foundingApplication = foundingApplication
-        self.joinNodeURL = joinNodeURL
     }
 }
 
-/// A Calimero app's signed-in account, delegated only: Calimero Cloud
-/// enrolment (the wallet certifies this device's key), the account's relay
-/// from the Cloud manager, and the ``MeroAppBackend`` built over that relay.
-/// Keep one for the app's life (a `@StateObject` at the root).
-/// (== Kotlin `com.calimero.mero.compose.MeroAppSession`.)
-///
-/// There is no node login and no node URL: the ``MeroClient`` is only driven
-/// through its Cloud entry points (`signInWithCloud`, `restoreCloudSession`,
-/// `handleEnrolmentCallback`, `logout`).
+/// Opens the node's consent page in the system browser
+/// (`ASWebAuthenticationSession`), where the account holder approves a
+/// release, an upgrade or outbound hosts with their passkey. Approvals happen
+/// only there, never in the app: the app asks
+/// (``CalimeroClient/requestConsent(_:)``), the page decides, and sends the
+/// person back to the request's `returnTo` with `?request_id=…&result=…`,
+/// which the app hands to ``MeroAppSession/handle(_:)`` (or reads with
+/// `consentReturn`) and confirms with ``CalimeroClient/consentResult(_:)``.
+/// (== Kotlin `ConsentLauncher`, which opens a Custom Tab.)
+public enum ConsentLauncher {
+    /// Open `url` in the system browser; returns the URL the page sent the
+    /// person back to, or `nil` when they dismissed it.
+    @MainActor
+    public static func open(
+        _ url: URL, callback: CloudCallback, opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async -> URL? {
+        try? await opener.authenticate(url: url, callback: callback)
+    }
+
+    /// ``CalimeroClient/openConsentPage(_:navigate:)`` in the system browser.
+    /// Answers the request once the page sent the person back (or was dismissed).
+    @MainActor
+    public static func request(
+        client: CalimeroClient, request: ConsentRequest, callback: CloudCallback,
+        opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async throws -> (started: ConsentStarted, returned: URL?) {
+        let started = try await client.requestConsent(request)
+        guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
+        return (started, await open(url, callback: callback, opener: opener))
+    }
+}
+
+/// A Calimero app's signed-in account on a Calimero 1.0 cluster: passkey
+/// sign-in (``MeroClient``), and the ``MeroAppBackend`` built over it
+/// (``CalimeroAppBackend``). Keep one for the app's life (a `@StateObject` at
+/// the root). (== Kotlin `com.calimero.mero.compose.MeroAppSession`.)
 ///
 /// ```swift
 /// @StateObject var session = MeroAppSession(
-///     packageName: "com.example.board", callback: .https(host: "board.example.com", path: "/enrol"))
+///     packageName: "com.example.board", callback: .scheme("board"),
+///     config: MeroProviderConfig(nodeURL: "https://node.example"))
 ///
 /// .task { await session.restore() }
 /// .onOpenURL { url in Task { await session.handle(url) } }
@@ -50,24 +66,26 @@ public struct MeroAppSessionOptions: Sendable {
 /// Screens read ``backend`` (and re-read when ``revision`` moves); view
 /// models take it as `any MeroAppBackend`, so a test hands them
 /// `MeroKitTestSupport`'s `InMemoryAppBackend`. A generated contract client
-/// calls `session.contract.bound(to: contextId)`.
+/// calls `session.contract.bound(to: appId)`.
 @MainActor
 public final class MeroAppSession: ObservableObject {
     public let client: MeroClient
-    /// Where the wallet sends the person back to.
+    /// Where the consent page sends the person back to (its `returnTo`).
     public let callback: CloudCallback
     public let options: MeroAppSessionOptions
 
     /// The signed-in account's backend, or `nil` when signed out.
     @Published public private(set) var backend: (any MeroAppBackend)?
-    /// Bumped whenever ``backend`` is rebuilt, so screens re-read. Not bumped
-    /// when nothing about the session changed, so open screens are not reset.
+    /// Bumped whenever ``backend`` is rebuilt, so screens re-read.
     @Published public private(set) var revision = 0
     /// ``restore()`` is running.
     @Published public private(set) var isRestoring = false
     /// An invitation link that arrived (``handle(_:)``) and waits to be
-    /// redeemed. Clear it with ``dismissPendingInvitation()``.
+    /// redeemed (``redeemPendingInvitation()``). Clear it with ``dismissPendingInvitation()``.
     @Published public private(set) var pendingInvitation: String?
+    /// The decision on the last consent request, once the page sent the
+    /// person back (``handle(_:)``) and the node confirmed it.
+    @Published public private(set) var consentResult: ConsentResult?
 
     private var lastKey = ""
     private var restoreTask: Task<Void, Never>?
@@ -75,16 +93,12 @@ public final class MeroAppSession: ObservableObject {
     private var watching: AnyCancellable?
     #endif
 
-    /// A session over `client`, whose ``MeroProviderConfig/packageName`` names
-    /// the app's registry package.
+    /// A session over `client`, whose ``MeroProviderConfig/packageName`` names the app's package.
     public init(client: MeroClient, callback: CloudCallback, options: MeroAppSessionOptions = MeroAppSessionOptions()) {
         self.client = client
         self.callback = callback
         self.options = options
         #if canImport(Combine)
-        // The client learns things after a call returns (the application id,
-        // a relay key): rebuild then too. `@Published` fires before the
-        // value is set, so the rebuild runs on the next turn.
         watching = client.objectWillChange.sink { [weak self] _ in
             Task { @MainActor in self?.rebuild() }
         }
@@ -93,15 +107,13 @@ public final class MeroAppSession: ObservableObject {
     }
 
     #if canImport(Security)
-    /// A session with its own ``MeroClient``: device keys, session and
-    /// tokens in the Keychain under `keychainService`.
+    /// A session with its own ``MeroClient``, its session kept in the
+    /// Keychain under `keychainService`.
     ///
     /// - Parameters:
-    ///   - packageName: the app's registry package (`com.example.board`):
-    ///     what namespaces are founded with and invitation links carry.
-    ///   - config: the registry and Cloud manager; its `packageName` is
-    ///     replaced by `packageName`.
-    ///   - walletURL: the wallet's enrolment page, when not the default.
+    ///   - packageName: the app's package (`com.example.board`).
+    ///   - config: the cluster; its `packageName` is replaced by `packageName`.
+    ///   - walletURL: ignored on 1.0 (there is no wallet); kept so apps that pass it build.
     public convenience init(
         packageName: String, callback: CloudCallback, config: MeroProviderConfig = MeroProviderConfig(),
         walletURL: URL? = nil, keychainService: String = "network.calimero.merokit",
@@ -109,40 +121,35 @@ public final class MeroAppSession: ObservableObject {
     ) {
         var config = config
         config.packageName = packageName
-        var cloud = CloudConfig(cloudBaseURL: config.cloudBaseURL ?? CloudClient.defaultBaseURL)
-        if let walletURL { cloud.walletURL = walletURL }
-        let client = MeroClient(
-            cloud: CloudSignIn.keychain(config: cloud, service: keychainService), config: config)
+        let client = MeroClient(config: config, store: KeychainCloudSessionStore(service: keychainService))
         self.init(client: client, callback: callback, options: options)
     }
     #endif
 
     // MARK: - State
 
-    /// Signed in with a Calimero account.
-    public var isSignedIn: Bool { client.isAuthenticated && client.isDelegated }
-    /// The account, 64 hex, or `nil`.
+    /// Signed in.
+    public var isSignedIn: Bool { client.isAuthenticated }
+    /// The account, or `nil`.
     public var account: String? { client.account }
-    /// The app's application id, once resolved from its package.
-    public var applicationId: String? { client.applicationId }
-    /// Whether a relay serves the account. Without one only joining works.
+    /// The app's package: what a new org is founded for and an app instance
+    /// created from (1.0's word for the application).
+    public var applicationId: String? { client.config.packageName }
+    /// True once signed in: a node serves every account on 1.0.
     public var hasRelay: Bool { backend?.hasRelay ?? false }
-    /// Whether ``MeroAppBackend/events(contextId:)`` streams; when not, poll.
+    /// Whether ``MeroAppBackend/events(contextId:)`` streams.
     public var canSubscribe: Bool { backend?.canSubscribe ?? false }
-    /// The contract in any context: ``NoRelayContextContract`` while signed
-    /// out or relayless. `contract.bound(to: contextId)` for a generated client.
-    public var contract: any ContextContract { backend?.contract ?? NoRelayContextContract() }
+    /// The contract in any app instance: ``SignedOutContextContract`` while signed out.
+    public var contract: any ContextContract { backend?.contract ?? SignedOutContextContract() }
 
     // MARK: - Sign-in
 
-    /// Reconnect the stored Cloud session, if there is one. The Cloud manager
-    /// is asked again which relay serves the account: a relayless session may
-    /// have earned one by joining elsewhere. A wallet callback that arrives
-    /// meanwhile (a cold start from the wallet) waits for this to finish.
+    /// Reconnect the stored session, if there is one. A link that arrives
+    /// meanwhile (a cold start) waits for this to finish.
     public func restore() async {
         if let restoreTask { return await restoreTask.value }
         isRestoring = true
-        let task = Task { _ = await client.restoreCloudSession() }
+        let task = Task { _ = await client.restore() }
         restoreTask = task
         await task.value
         restoreTask = nil
@@ -150,35 +157,46 @@ public final class MeroAppSession: ObservableObject {
         rebuild()
     }
 
-    /// Open the wallet to approve this device; returns once it is approved,
-    /// declined or dismissed. A failure lands in the client's `errorMessage`.
+    /// Sign in with a passkey (the device's; on a development cluster a soft
+    /// one kept for the node). A failure lands in the client's `errorMessage`.
     public func signIn() async {
-        await client.signInWithCloud(callback: callback)
+        await client.signIn()
         rebuild()
     }
 
-    /// Sign out. The device key stays (the next sign-in reuses it) unless
-    /// `forgetDevice`.
+    /// Create an account named `name` with a new passkey, and sign in.
+    public func signUp(name: String) async {
+        await client.signUp(name: name)
+        rebuild()
+    }
+
+    /// Talk to `nodeURL` (a development cluster with `allowMock`) before signing in.
+    public func connect(nodeURL: String, allowMock: Bool = false) {
+        client.connect(nodeURL: nodeURL, allowMock: allowMock)
+        rebuild()
+    }
+
+    /// Sign out. `forgetDevice` is ignored on 1.0 (the passkey stays on the
+    /// device either way); kept so apps that pass it build.
     public func signOut(forgetDevice: Bool = false) async {
-        await client.logout(forgetDevice: forgetDevice)
+        await client.logout()
         rebuild()
     }
 
-    /// A URL the system handed the app: a wallet callback that finishes a
-    /// sign-in, or one of this app's invitation links (held in
-    /// ``pendingInvitation`` for the person to confirm). Returns whether it
-    /// was either.
+    /// A URL the system handed the app: the consent page sending the person
+    /// back (`returnTo?request_id=…&result=…`, confirmed with the node into
+    /// ``consentResult``), or one of this app's invitation links (held in
+    /// ``pendingInvitation`` for the person to confirm). Returns whether it was either.
     @discardableResult
     public func handle(_ url: URL) async -> Bool {
         if let restoreTask { await restoreTask.value }
-        if await client.handleEnrolmentCallback(url) {
-            rebuild()
+        if let back = consentReturn(url) {
+            consentResult = try? await client.cloud?.consentResult(back.requestId)
             return true
         }
         let raw = url.absoluteString
         let recognised =
-            options.isInvitation?(raw)
-            ?? Self.isInvitationLink(raw, packageName: client.config.packageName)
+            options.isInvitation?(raw) ?? Self.isInvitationLink(raw, packageName: client.config.packageName)
         guard recognised else { return false }
         pendingInvitation = raw
         return true
@@ -189,33 +207,76 @@ public final class MeroAppSession: ObservableObject {
         pendingInvitation = nil
     }
 
-    /// After redeeming an invitation (``MeroAppBackend/joinNamespace(namespaceId:invitation:)``):
-    /// a session that had no relay now has the admitting one, so reconnect to it.
+    /// ``pendingInvitation`` decoded, or `nil` (not one, another app's, or a 0.x payload).
+    public var pendingOrgInvitation: OrgInvitation? {
+        pendingInvitation.flatMap { OrgInvitation.parse($0, expectedSlug: client.config.packageName) }
+    }
+
+    /// A shareable invitation link to `namespaceId` (an org): an invite token
+    /// minted on the node, as ``OrgInvitation/link(slug:host:)`` spells it.
+    public func createInvitationLink(namespaceId: String, contextId: String? = nil) async throws -> String {
+        guard let backend else { throw SignedOutError(method: "createInvitationLink") }
+        let minted = try await backend.createInvitation(namespaceId: namespaceId)
+        return try OrgInvitation(
+            namespaceId: minted.namespaceId, token: minted.token, contextId: contextId ?? minted.contextId,
+            name: minted.name
+        ).link(slug: client.config.packageName ?? "")
+    }
+
+    /// Redeem ``pendingInvitation`` (`POST /invites/{token}/redeem`) and
+    /// forget it. Answers the organization joined, or `nil` when no invitation waits.
+    @discardableResult
+    public func redeemPendingInvitation() async throws -> String? {
+        guard let backend else { throw SignedOutError(method: "redeemPendingInvitation") }
+        guard let invitation = pendingOrgInvitation else { return nil }
+        let joined = try await backend.joinNamespace(namespaceId: invitation.namespaceId, invitation: invitation)
+        dismissPendingInvitation()
+        await didJoinNamespace()
+        return joined.namespaceId
+    }
+
+    /// After redeeming an invitation: re-read what the account sees.
     public func didJoinNamespace() async {
-        guard backend?.hasRelay != true else { return }
-        _ = await client.restoreCloudSession()
-        rebuild()
+        revision += 1
+    }
+
+    // MARK: - Approvals
+
+    /// What waits for the user's decision in `org` (or their own apps).
+    public func pendingApprovals(org: String? = nil) async throws -> PendingApprovals {
+        guard let cloud = client.cloud else { throw AccountError.notSignedIn("sign in first") }
+        return try await cloud.pendingApprovals(org: org)
+    }
+
+    /// Ask the account holder to approve `request` on the node's consent
+    /// page, opened in the system browser (``ConsentLauncher``) with
+    /// ``callback`` as its `returnTo`. When the page sends the person back,
+    /// ``consentResult`` holds the node's decision. Answers the request.
+    @discardableResult
+    public func requestConsent(
+        _ request: ConsentRequest, opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async throws -> ConsentStarted {
+        guard let cloud = client.cloud else { throw SignedOutError(method: "requestConsent") }
+        consentResult = nil
+        let (started, returned) = try await ConsentLauncher.request(
+            client: cloud, request: request, callback: callback, opener: opener)
+        if let returned { await handle(returned) }
+        return started
     }
 
     /// Rebuild ``backend`` from the client's current session. A no-op when
-    /// nothing about the session changed, so open screens are not reset. Runs
-    /// after every call here and whenever the client changes; call it after
-    /// driving the client directly.
+    /// nothing about the session changed, so open screens are not reset.
     public func rebuild() {
-        let connection = client.isAuthenticated && client.isDelegated ? client.connection : nil
         let key = [
-            "\(client.sessionRevision)", connection?.session.account ?? "-", connection?.session.relayUrl ?? "-",
-            connection?.mero == nil ? "0" : "1", client.admin == nil ? "0" : "1", client.applicationId ?? "-",
+            "\(client.sessionRevision)", client.account ?? "-", client.nodeURL ?? "-",
+            client.cloud == nil ? "0" : "1",
         ].joined(separator: "|")
         guard key != lastKey else { return }
         lastKey = key
-        if let connection, let admin = client.admin {
-            backend = DelegatedAppBackend(
-                connection: connection, admin: admin, signIn: client.cloudSignIn,
-                packageName: client.config.packageName ?? "",
-                registryURL: client.config.registryURL ?? ApplicationRegistry.defaultURL,
-                applicationId: client.applicationId, foundingApplication: options.foundingApplication,
-                joinNodeURL: options.joinNodeURL)
+        if let cloud = client.cloud, let account = client.account {
+            backend = CalimeroAppBackend(
+                client: cloud, account: account, packageName: client.config.packageName ?? "",
+                packageVersion: client.config.packageVersion)
         } else {
             backend = nil
         }
@@ -225,15 +286,16 @@ public final class MeroAppSession: ObservableObject {
     // MARK: - Links
 
     /// Whether `raw` is an invitation to the app with `packageName`: it
-    /// carries `invitation=…`, and its path names the package (another app's
-    /// invitation decodes just as well, and redeeming it would join that
-    /// app's namespace). Without a package any invitation link is.
-    /// (== Kotlin `MeroAppSession.isInvitationLink`.)
+    /// carries `invitation=…`, and its path names the package. Without a
+    /// package any invitation link is. (== Kotlin `MeroAppSession.isInvitationLink`.)
     public nonisolated static func isInvitationLink(_ raw: String, packageName: String?) -> Bool {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let query = trimmed.firstIndex(of: "?") else { return false }
-        let params = invitationFormQuery(String(trimmed[trimmed.index(after: query)...]))
-        guard let token = params[invitationParam], !token.isEmpty else { return false }
+        let hasToken = trimmed[trimmed.index(after: query)...].split(separator: "&").contains { pair in
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            return parts.count == 2 && parts[0] == Substring(InviteLink.invitationParam) && !parts[1].isEmpty
+        }
+        guard hasToken else { return false }
         guard let packageName, !packageName.isEmpty else { return true }
         let path = trimmed[..<query].split(separator: "/").map { $0.lowercased() }
         return path.contains(packageName.lowercased())

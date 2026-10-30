@@ -456,7 +456,7 @@ public actor SealedTransport {
     static func plain(_ carrier: URLSession, _ request: URLRequest) async throws -> SealedResponse {
         try await streamed { emitHead, continuation in
             let (bytes, response) = try await carrier.bytes(for: request)
-            guard let http = response as? HTTPURLResponse else { throw MeroError.network("Non-HTTP response") }
+            guard let http = response as? HTTPURLResponse else { throw TeeTrustError("Non-HTTP response") }
             var headers: [String: String] = [:]
             for (key, value) in http.allHeaderFields {
                 if let k = key as? String, let v = value as? String { headers[k.lowercased()] = v }

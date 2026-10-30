@@ -1,21 +1,24 @@
 import Foundation
 
-// A context's contract, as an app on a phone reaches it. There is no node on
-// the phone, so there is no JSON-RPC: a read is the relay's account-scoped
-// query, a write is a warrant the device key signs. Every app makes the same
-// two calls; only the method names differ, and those belong to the app (or to
-// the client mero-devtools-js generates for it, over ``ContextContractCalling``).
+// An app instance's contract, as an app on a phone reaches it. In Calimero
+// 1.0 a read is a view (`POST /apps/{app}/views`) and a write an intent
+// (`POST /apps/{app}/intents`), sealed to an attested node. Every app makes
+// the same two calls; only the method names differ, and those belong to the
+// app (or to the client mero-devtools-js generates for it, over
+// ``ContextContractCalling``). A "context" here is an app instance: its id is
+// the instance's app id (the node also takes its context id,
+// `SHA-256(app_id)` hex).
 
 /// The two ways an app reaches the contract in a context.
 /// (== Kotlin `com.calimero.mero.app.ContextContract`.)
 ///
-/// ``RelayContextContract`` is the real one; ``NoRelayContextContract`` stands
-/// in for an account no relay serves yet. ``bound(to:)`` fixes the context, for
+/// ``CloudContextContract`` is the real one; ``SignedOutContextContract``
+/// stands in while signed out. ``bound(to:)`` fixes the context, for
 /// a generated client.
 public protocol ContextContract: Sendable {
-    /// Run a view (`#[app::view]`) as the account, through the relay's query path.
+    /// Run a view (`#[app::view]`) as the account: `POST /apps/{app}/views`.
     func query(contextId: String, method: String, args: JSONValue) async throws -> JSONValue?
-    /// Run a mutation as the account: a warrant posted to the relay's intents route.
+    /// Run a mutation as the account: `POST /apps/{app}/intents`.
     func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue?
 
     /// ``query(contextId:method:args:)`` with JSON bytes in and out, every
@@ -34,7 +37,7 @@ extension ContextContract {
     }
 
     /// Through ``query(contextId:method:args:)``, so through ``JSONValue``:
-    /// an integer beyond 2^53 loses digits. ``RelayContextContract`` keeps
+    /// an integer beyond 2^53 loses digits. ``CloudContextContract`` keeps
     /// them; a contract of your own should implement this to keep them too.
     public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
         let result = try await query(contextId: contextId, method: method, args: try Self.jsonValue(argsJSON))
@@ -56,64 +59,90 @@ extension ContextContract {
     }
 }
 
-/// ``ContextContract`` over the account's ``RelayClient``.
-/// (== Kotlin `RelayContextContract`.)
+/// ``ContextContract`` over a ``CalimeroClient``. (== Kotlin `CloudContextContract`.)
 ///
-/// - `query` is `POST /admin-api/contexts/{id}/query` with the relay session's
-///   Bearer token (``RelayClient/query(contextId:method:argsJson:)``). Without a
-///   session, or when the relay says the method is a write, it falls back to a
-///   warrant, which reads too.
-/// - `execute` is `POST /admin-api/contexts/{id}/intents` carrying a warrant the
-///   device key signs (``RelayClient/execute(contextId:method:argsJson:)``); the
-///   method's return value is its `returns`.
-public struct RelayContextContract: ContextContract {
-    public let relay: RelayClient
+/// - `query` is ``CalimeroClient/view(_:_:_:stale:minIndex:)`` (strong);
+///   the method's return value is the view's `result`.
+/// - `execute` is ``CalimeroClient/call(_:_:_:idempotencyKey:)``: an intent,
+///   retried on a 503 with one idempotency key; the method's return value is
+///   the call's `result`. An app's refusal throws ``AppError``.
+///
+/// The byte-level calls keep every number exactly as written, both ways.
+public struct CloudContextContract: ContextContract {
+    public let client: CalimeroClient
 
-    public init(relay: RelayClient) {
-        self.relay = relay
+    public init(client: CalimeroClient) {
+        self.client = client
     }
 
     public func query(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        try await relay.query(contextId: contextId, method: method, argsJson: args)
+        let result = try await client.view(contextId, method, args).result
+        return result == .null ? nil : result
     }
 
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        try await relay.execute(contextId: contextId, method: method, argsJson: args).returns
+        let result = try await client.call(contextId, method, args).result
+        return result == .null ? nil : result
     }
 
-    /// ``RelayClient/queryJSON(contextId:method:argsJSON:)``: byte for byte.
     public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        try await relay.queryJSON(contextId: contextId, method: method, argsJSON: argsJSON)
+        try Self.result(try await client.viewJSON(contextId, method, argsJSON: argsJSON))
     }
 
-    /// ``RelayClient/executeJSON(contextId:method:argsJSON:)``: byte for byte.
     public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        try await relay.executeJSON(contextId: contextId, method: method, argsJSON: argsJSON)
+        try Self.result(try await client.callJSON(contextId, method, argsJSON: argsJSON))
+    }
+
+    /// The `result` of an answer, byte for byte (`null` when absent).
+    static func result(_ answer: Data) throws -> Data {
+        let node: LiteralJSON.Node
+        do {
+            node = try LiteralJSON.parse(answer)
+        } catch {
+            throw AccountError.protocolViolation("the node's answer is not JSON")
+        }
+        return Data(LiteralJSON.write(node["result"] ?? .null).utf8)
     }
 }
 
-/// The contract of an account no relay serves yet: every call throws
-/// ``AccountError/noRelay(method:)``, naming the method. Redeeming an
-/// invitation is how the account gets a relay. (== Kotlin `NoRelayContextContract`.)
-public struct NoRelayContextContract: ContextContract {
+/// No one is signed in: there is no account to call the contract as.
+/// (== Kotlin `SignedOutException`; 0.x: `AccountError.noRelay`.)
+public struct SignedOutError: Error, LocalizedError, Equatable, Sendable {
+    /// The method that was called.
+    public let method: String
+
+    public init(method: String) {
+        self.method = method
+    }
+
+    public var errorDescription: String? { "\(method) needs a signed-in account" }
+}
+
+/// The contract while no one is signed in: every call throws
+/// ``SignedOutError``, naming the method. (== Kotlin `SignedOutContextContract`.)
+public struct SignedOutContextContract: ContextContract {
     public init() {}
 
     public func query(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 }
+
+/// 0.x name of ``SignedOutContextContract``.
+@available(*, deprecated, renamed: "SignedOutContextContract", message: "No relays on Calimero 1.0")
+public typealias NoRelayContextContract = SignedOutContextContract
 
 /// One context's contract, in the shape a generated client calls: JSON in,
 /// JSON out, as UTF-8 bytes. (== Kotlin `ContextContractCalling`, which takes
@@ -124,7 +153,7 @@ public protocol ContextContractCalling: Sendable {
     /// Run a view: `argsJSON` is the argument object; the result is the
     /// method's return value as JSON (`null` when it returns nothing).
     func query(method: String, argsJSON: Data) async throws -> Data
-    /// Run a mutation: as ``query(method:argsJSON:)``, through a warrant.
+    /// Run a mutation: as ``query(method:argsJSON:)``, as an intent.
     func execute(method: String, argsJSON: Data) async throws -> Data
 }
 
