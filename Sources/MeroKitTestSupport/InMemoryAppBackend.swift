@@ -179,8 +179,8 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     // MARK: Scripted state
 
-    /// The contract: ``recording``, or ``NoRelayContextContract`` while ``hasRelay`` is false.
-    public var contract: any ContextContract { hasRelay ? recording : NoRelayContextContract() }
+    /// The contract: ``recording``, or ``SignedOutContextContract`` while ``hasRelay`` is false.
+    public var contract: any ContextContract { hasRelay ? recording : SignedOutContextContract() }
     public var hasRelay: Bool {
         get { read { $0.hasRelay } }
         set { write { $0.hasRelay = newValue } }
@@ -271,7 +271,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func foundNamespace(name: String) async throws -> AppFoundedNamespace {
         try step("foundNamespace \(name)") { state in
-            guard state.hasRelay else { throw AccountError.noRelay(method: "foundNamespace") }
+            guard state.hasRelay else { throw SignedOutError(method: "foundNamespace") }
             let id = Self.mint("aa", &state.next)
             state.namespaces.append(
                 AppNamespace(id: id, name: name, applicationId: state.applicationId, memberCount: 1))
@@ -291,20 +291,12 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         }
     }
 
+    /// A service's instance (``MeroAppBackend/createServiceContext(groupId:applicationId:service:name:initArgs:)``)
+    /// is logged with `applicationId` `package#service`.
     public func createContext(
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws -> String {
-        try await createContext(
-            groupId: groupId, applicationId: applicationId, name: name, initArgs: initArgs, service: nil)
-    }
-
-    /// As ``createContext(groupId:applicationId:name:initArgs:)``; `service`
-    /// is logged (`createContext … service=<name>`) and otherwise ignored.
-    public func createContext(
-        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
-    ) async throws -> String {
-        let entry = "createContext \(groupId) \(applicationId) \(name)" + (service.map { " service=\($0)" } ?? "")
-        return try step(entry) { state in
+        try step("createContext \(groupId) \(applicationId) \(name)") { state in
             let id = Self.mint("cc", &state.next)
             var placed = false
             for (namespace, list) in state.subgroups {
@@ -391,7 +383,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
         try step("uploadBlob \(contextId) \(data.count)") { state in
-            guard state.hasRelay else { throw AccountError.noRelay(method: "uploadBlob") }
+            guard state.hasRelay else { throw SignedOutError(method: "uploadBlob") }
             let id = Self.mint("dd", &state.next)
             state.blobs[id] = (contextId, data)
             return AppBlob(blobId: id, size: data.count)
@@ -516,7 +508,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     /// An invitation to `namespaceId` shaped like a real one (`inv_…`).
     public static func invitation(namespaceId: String) -> OrgInvitation {
-        OrgInvitation(orgId: namespaceId, token: "inv_" + String(namespaceId.prefix(16)))
+        OrgInvitation(namespaceId: namespaceId, token: "inv_" + String(namespaceId.prefix(16)))
     }
 
     // MARK: Plumbing

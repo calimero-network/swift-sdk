@@ -19,7 +19,7 @@ the same methods, the same typed errors, the same retry and failover rules.
 | Product | What it is |
 | --- | --- |
 | `MeroKit` | `CalimeroClient`, the sealed channel, TEE trust, passkeys (`SoftPasskey`), the app layer protocols (`MeroAppBackend`, `ContextContract`). |
-| `MeroKitUI` | `MeroAppSession`, `MeroClient`, `CloudAppBackend`, `PlatformPasskey`, the consent page in the system browser. |
+| `MeroKitUI` | `MeroAppSession`, `MeroClient`, `CalimeroAppBackend`, `PlatformPasskey`, the consent page in the system browser. |
 | `MeroKitTestSupport` | `InMemoryAppBackend`, `RecordingContextContract`, `FakeCloudNode` + `FakeCloud` (a node that runs the real sealed channel, and a cluster in memory), `MockURLProtocol`. |
 
 ## The client
@@ -76,8 +76,9 @@ import MeroKitUI
 ```
 
 `session.backend` is a `MeroAppBackend`. Its names predate 1.0 and map one to
-one: namespace → organization, subgroup → team, context → app instance,
-application → package, invitation → invite token (`OrgInvitation`). See
+one: namespace → organization, subgroup → team (`"{orgId}/{teamId}"`),
+context → app instance, application → package, invitation → invite token
+(`OrgInvitation`). See
 [the app layer guide](docs/src/content/docs/guides/app-session.mdx).
 
 ## The sample app

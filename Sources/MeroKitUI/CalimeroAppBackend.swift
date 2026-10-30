@@ -3,7 +3,7 @@ import MeroKit
 
 /// ``MeroAppBackend`` over a signed-in ``CalimeroClient``: Calimero 1.0's
 /// orgs, teams and app instances under the app layer's names.
-/// (== Kotlin `com.calimero.mero.compose.CloudAppBackend`.)
+/// (== Kotlin `com.calimero.mero.compose.CalimeroAppBackend`.)
 ///
 /// | Backend call | Node route |
 /// | --- | --- |
@@ -13,7 +13,7 @@ import MeroKit
 /// | ``isMember(contextId:)`` / ``joinContext(contextId:)`` | `GET /apps/{app}` (reachable or `NotFound`) |
 /// | ``foundNamespace(name:)`` | `POST /orgs`, `POST /orgs/{org}/metadata {package, name}` |
 /// | ``createSubgroup(namespaceId:name:isPublic:)`` | `POST /orgs/{org}/teams {join: everyone \| invite}` |
-/// | ``createContext(groupId:applicationId:name:initArgs:)`` | `POST /apps {package \| bundle, org, access: team \| org, initArgs}` |
+/// | ``createContext(groupId:applicationId:name:initArgs:)`` / ``createServiceContext(groupId:applicationId:service:name:initArgs:)`` | `POST /apps {package (+ service) \| bundle, org, access: team \| org, initArgs}` |
 /// | ``createInvitation(namespaceId:)`` / ``joinNamespace(namespaceId:invitation:)`` | `POST /orgs/{org}/invites`, `POST /invites/{token}/redeem` |
 /// | ``events(contextId:)`` | `GET /apps/{app}/events` (sealed SSE) |
 /// | contract `query` / `execute` | `POST /apps/{app}/views` / `POST /apps/{app}/intents` |
@@ -21,9 +21,9 @@ import MeroKit
 /// | names | org: metadata `name`; team: its name; app: metadata `name` (else its name) |
 /// | members | `GET /orgs/{org}` / team; `POST …/members`, `DELETE …/members/{account}` |
 ///
-/// A `groupId` is a team id or an org id (the org itself, as a namespace's
-/// root group was); the backend finds which, and the team's org, itself.
-public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
+/// A `groupId` is `"{orgId}/{teamId}"` for a team (``teamGroupId(org:team:)``)
+/// or an org id for the org itself, as a namespace's root group was.
+public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     public let account: String
     public let client: CalimeroClient
     public let contract: any ContextContract
@@ -31,10 +31,6 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     public let packageName: String
     /// The package version new app instances run; the latest when `nil`.
     public let packageVersion: String?
-
-    private let lock = NSLock()
-    /// Team id → its org, learned as teams are listed or created.
-    private var teamOrgs: [String: String] = [:]
 
     public init(client: CalimeroClient, account: String, packageName: String, packageVersion: String? = nil) {
         self.client = client
@@ -49,23 +45,10 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
 
     // MARK: Groups
 
-    /// Where `groupId` lives: an org (`team` nil), or a team of `org`.
-    func locate(_ groupId: String) async throws -> (org: String, team: String?) {
-        if let org = lock.locked({ teamOrgs[groupId] }) { return (org, groupId) }
-        let orgs = try await client.me().orgs
-        if orgs.contains(where: { $0.orgId == groupId }) { return (groupId, nil) }
-        for membership in orgs {
-            let org = try await client.getOrg(membership.orgId)
-            remember(org)
-            if org.teams[groupId] != nil { return (membership.orgId, groupId) }
-        }
-        throw NotFound("no organization or team \(groupId)")
-    }
-
-    private func remember(_ org: OrgInfo) {
-        lock.locked {
-            for team in org.teams.keys { teamOrgs[team] = org.orgId }
-        }
+    /// Where `groupId` lives: an org (`team` nil), or a team of an org (`org/team`).
+    func locate(_ groupId: String) -> (org: String, team: String?) {
+        let ref = GroupRef.parse(groupId)
+        return (ref.org, ref.team)
     }
 
     public func listNamespaces() async throws -> [AppNamespace] {
@@ -74,7 +57,6 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
         var out: [AppNamespace] = []
         for membership in orgs {
             let org = try await client.getOrg(membership.orgId)
-            remember(org)
             let mine = org.metadata["package"]?.stringValue == packageName || running.contains(org.orgId)
             guard packageName.isEmpty || mine else { continue }
             out.append(
@@ -87,11 +69,12 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func listSubgroups(namespaceId: String) async throws -> [AppSubgroup] {
         let org = try await client.getOrg(namespaceId)
-        remember(org)
         var out: [AppSubgroup] = []
         for team in org.teams.values.sorted(by: { $0.name < $1.name }) {
             let apps = (try? await client.getTeam(namespaceId, team.teamId).apps.map(\.appId)) ?? []
-            out.append(AppSubgroup(groupId: team.teamId, name: team.name, contextIds: apps))
+            out.append(
+                AppSubgroup(
+                    groupId: teamGroupId(org: namespaceId, team: team.teamId), name: team.name, contextIds: apps))
         }
         return out
     }
@@ -101,13 +84,12 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         if let team = place.team {
             return try await client.getTeam(place.org, team).apps.map { AppContextEntry(id: $0.appId, name: $0.name) }
         }
         // The org's own: its apps that no team holds.
         let org = try await client.getOrg(place.org)
-        remember(org)
         var inTeams = Set<String>()
         for team in org.teams.keys {
             for app in (try? await client.getTeam(place.org, team).apps) ?? [] { inTeams.insert(app.appId) }
@@ -139,22 +121,21 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String {
         let team = try await client.createTeam(namespaceId, name: name, join: isPublic ? .everyone : .invite)
-        lock.locked { teamOrgs[team] = namespaceId }
-        return team
+        return teamGroupId(org: namespaceId, team: team)
     }
 
+    /// `applicationId` is a package (`package#service` for one service of a
+    /// multi-service package), a bundle hash (dev clusters), or empty for the app's own package.
     public func createContext(
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws -> String {
-        try await createContext(
-            groupId: groupId, applicationId: applicationId, name: name, initArgs: initArgs, service: nil)
-    }
-
-    public func createContext(
-        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
-    ) async throws -> String {
-        let place = try await locate(groupId)
-        let package = applicationId.isEmpty ? packageName : applicationId
+        let place = locate(groupId)
+        var package = applicationId.isEmpty ? packageName : applicationId
+        var service: String?
+        if let hash = package.firstIndex(of: "#") {
+            service = String(package[package.index(after: hash)...])
+            package = String(package[..<hash])
+        }
         let source: AppSource =
             Hex.is32(package) && service == nil
             ? .bundle(package)
@@ -163,13 +144,24 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
             name, bundle: source, org: place.org, access: place.team.map { .team($0) } ?? .org, initArgs: initArgs)
     }
 
+    public func createServiceContext(
+        groupId: String, applicationId: String, service: String, name: String, initArgs: JSONValue
+    ) async throws -> String {
+        try await createContext(
+            groupId: groupId, applicationId: "\(applicationId.isEmpty ? packageName : applicationId)#\(service)",
+            name: name, initArgs: initArgs)
+    }
+
     public func createInvitation(namespaceId: String) async throws -> OrgInvitation {
-        OrgInvitation(orgId: namespaceId, token: try await client.invite(namespaceId))
+        let name = try? await client.getOrg(namespaceId)
+        return OrgInvitation(
+            namespaceId: namespaceId, token: try await client.invite(namespaceId),
+            name: name.map { $0.metadata["name"]?.stringValue ?? $0.name })
     }
 
     public func joinNamespace(namespaceId: String, invitation: OrgInvitation) async throws -> AppJoinedNamespace {
         let answer = try await client.redeemInvite(invitation.token)
-        let org = answer["orgId"]?.stringValue ?? answer["org"]?.stringValue ?? invitation.orgId
+        let org = answer["orgId"]?.stringValue ?? answer["org"]?.stringValue ?? invitation.namespaceId
         return AppJoinedNamespace(
             namespaceId: org.isEmpty ? namespaceId : org, published: true, nodeURL: await client.nodeUrl)
     }
@@ -195,7 +187,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     // MARK: Names
 
     public func groupMetadata(groupId: String) async throws -> AppMetadata? {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         if let team = place.team {
             let info = try await client.getTeam(place.org, team)
             return Self.metadata(info.metadata, name: info.name)
@@ -210,7 +202,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func setGroupName(groupId: String, name: String) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         if let team = place.team {
             try await client.updateTeam(place.org, team, name: name)
             return
@@ -254,7 +246,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func leaveSubgroup(groupId: String) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         guard let team = place.team else {
             try await client.removeMember(place.org, account: account)
             return
@@ -263,7 +255,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func deleteSubgroup(groupId: String) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         guard let team = place.team else {
             throw AccountError.invalidInput("\(groupId) is an organization, not a team")
         }
@@ -277,7 +269,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     // MARK: Members
 
     public func listMembers(groupId: String) async throws -> [AppMember] {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         let org = try await client.getOrg(place.org)
         func name(_ account: String) -> String? { org.memberMetadata[account]?["name"]?.stringValue }
         if let team = place.team {
@@ -292,7 +284,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         if let team = place.team {
             try await client.setTeamMember(place.org, team, account: identity, role: role.teamRole)
         } else {
@@ -301,7 +293,7 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func removeMember(groupId: String, identity: String) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         if let team = place.team {
             try await client.removeTeamMember(place.org, team, account: identity)
         } else {
@@ -310,18 +302,10 @@ public final class CloudAppBackend: MeroAppBackend, @unchecked Sendable {
     }
 
     public func setMemberName(groupId: String, name: String) async throws {
-        let place = try await locate(groupId)
+        let place = locate(groupId)
         let org = try await client.getOrg(place.org)
         var metadata = org.memberMetadata[account]?.objectValue ?? [:]
         metadata["name"] = .string(name)
         try await client.setMemberMetadata(place.org, account: account, .object(metadata))
-    }
-}
-
-extension NSLock {
-    fileprivate func locked<T>(_ body: () throws -> T) rethrows -> T {
-        lock()
-        defer { unlock() }
-        return try body()
     }
 }

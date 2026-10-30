@@ -48,13 +48,13 @@ final class InviteCodecTests: XCTestCase {
 
     func testRoundTripsACodableInvitation() throws {
         let invitation = OrgInvitation(
-            orgId: "org_" + String(repeating: "a", count: 22), token: "inv_" + String(repeating: "b", count: 32))
+            namespaceId: "org_" + String(repeating: "a", count: 22), token: "inv_" + String(repeating: "b", count: 32))
         let token = try InviteCodec.encode(invitation)
-        XCTAssertEqual(try InviteCodec.decode(OrgInvitation.self, from: token), invitation)
+        XCTAssertEqual(OrgInvitation.decode(token), invitation)
     }
 
     func testCompressionIsWorthIt() throws {
-        let payload = Array(repeating: OrgInvitation(orgId: "org_aaaaaaaa", token: "inv_bbbbbbbbbbbb"), count: 8)
+        let payload = Array(repeating: OrgInvitation(namespaceId: "org_aaaaaaaa", token: "inv_bbbbbbbbbbbb"), count: 8)
         let compressed = try InviteCodec.encode(payload)
         let uncompressed = try JSONEncoder().encode(payload).base64EncodedString()
         XCTAssertLessThan(compressed.count, Int(Double(uncompressed.count) * 0.7))

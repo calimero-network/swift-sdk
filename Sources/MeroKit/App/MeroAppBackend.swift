@@ -9,20 +9,20 @@ import Foundation
 /// | This protocol | Calimero 1.0 |
 /// | --- | --- |
 /// | namespace (`namespaceId`) | organization (`orgId`) |
-/// | subgroup (`groupId`) | team (`teamId`); a namespace id is also a group id: the org itself |
+/// | subgroup (`groupId`) | team: `"{orgId}/{teamId}"` (``teamGroupId(org:team:)``); an org id alone is the org itself |
 /// | context (`contextId`) | app instance (`appId`) |
-/// | application (`applicationId`) | package (`com.example.app`), or a bundle hash on a dev cluster |
+/// | application (`applicationId`) | package (`com.example.app`; `package#service` for one service), or a bundle hash on a dev cluster |
 /// | invitation | an org invite token (`inv_…`), ``OrgInvitation`` |
 /// | relay | the cluster's node; there is no relay |
 ///
-/// `MeroKitUI`'s `CloudAppBackend` is the real one, and `MeroAppSession`
+/// `MeroKitUI`'s `CalimeroAppBackend` is the real one, and `MeroAppSession`
 /// builds it from the signed-in client. View models take this protocol, so a
 /// test hands them `MeroKitTestSupport`'s `InMemoryAppBackend` instead.
 public protocol MeroAppBackend: Sendable {
     /// The account, 64 hex.
     var account: String { get }
     /// The contract in any app instance: views for reads, intents for writes.
-    /// ``NoRelayContextContract`` while signed out.
+    /// ``SignedOutContextContract`` while signed out.
     var contract: any ContextContract { get }
     /// Whether a node serves this account. Always true once signed in on 1.0
     /// (there are no relays); kept so apps that check it still build.
@@ -36,8 +36,8 @@ public protocol MeroAppBackend: Sendable {
     func listNamespaces() async throws -> [AppNamespace]
     /// The teams of an organization the account sees, and the app instances in each.
     func listSubgroups(namespaceId: String) async throws -> [AppSubgroup]
-    /// The app instances directly in `groupId`: a team's, or, for an org id,
-    /// the org-wide ones (in no team).
+    /// The app instances directly in `groupId`: a team's (`org/team`), or,
+    /// for an org id, the org-wide ones (in no team).
     func listContexts(groupId: String) async throws -> [String]
     /// Whether the account reaches the app instance, so its contract calls work.
     func isMember(contextId: String) async throws -> Bool
@@ -58,10 +58,12 @@ public protocol MeroAppBackend: Sendable {
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws
         -> String
-    /// ``createContext(groupId:applicationId:name:initArgs:)`` for one service
-    /// of a multi-service package (`service`, `nil` for the default).
-    func createContext(
-        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
+    /// Create an app instance of one `service` of a multi-service package
+    /// (battleships' lobby and match). The default joins them as
+    /// `package#service` for ``createContext(groupId:applicationId:name:initArgs:)``.
+    /// (== Kotlin `createServiceContext`.)
+    func createServiceContext(
+        groupId: String, applicationId: String, service: String, name: String, initArgs: JSONValue
     ) async throws -> String
 
     /// Mint an invitation to an organization: an invite token (`POST /orgs/{org}/invites`, role member).
@@ -121,7 +123,7 @@ public protocol MeroAppBackend: Sendable {
 }
 
 /// What a ``MeroAppBackend`` that predates a call throws for it, naming the
-/// call. `CloudAppBackend` and ``InMemoryAppBackend`` implement every
+/// call. `CalimeroAppBackend` and `InMemoryAppBackend` implement every
 /// call. (== Kotlin `UnsupportedOperationException`.)
 public struct MeroAppBackendUnsupported: Error, Equatable, Sendable {
     public let method: String
@@ -134,11 +136,11 @@ public struct MeroAppBackendUnsupported: Error, Equatable, Sendable {
 // Defaults, so a backend of an app's own (written before these calls) still
 // conforms. Each throws ``MeroAppBackendUnsupported``.
 extension MeroAppBackend {
-    public func createContext(
-        groupId: String, applicationId: String, name: String, initArgs: JSONValue, service: String?
+    public func createServiceContext(
+        groupId: String, applicationId: String, service: String, name: String, initArgs: JSONValue
     ) async throws -> String {
-        guard service == nil else { throw MeroAppBackendUnsupported(method: "createContext(service:)") }
-        return try await createContext(groupId: groupId, applicationId: applicationId, name: name, initArgs: initArgs)
+        try await createContext(
+            groupId: groupId, applicationId: "\(applicationId)#\(service)", name: name, initArgs: initArgs)
     }
 
     public func listContextEntries(groupId: String) async throws -> [AppContextEntry] {
@@ -346,24 +348,114 @@ public struct AppContextEvent: Hashable, Sendable {
     }
 }
 
-/// An invitation to an organization: an invite token (`inv_…`) the
-/// organization's node minted, and the organization it admits to. A bearer
-/// secret: whoever holds it may join (until it expires or its uses run out).
-/// Apps carry it in their links as JSON, `{"orgId":"…","token":"inv_…"}`.
-/// (== Kotlin `OrgInvitation`.)
-public struct OrgInvitation: Codable, Hashable, Sendable {
-    public let orgId: String
+/// An invitation to an organization, as an app passes it around: the node's
+/// invite ``token`` (`inv_…`, from `POST /orgs/{org}/invites`) with the
+/// organization it opens. (== Kotlin `OrgInvitation`.)
+///
+/// In a link it travels as `base58(deflate(json))` in the `invitation` query
+/// parameter, the shape 0.x links had, with the same keys:
+///
+/// ```json
+/// {"invitation": "inv_…", "namespaceId": "<orgId>", "contextId": "<appId, optional>", "name": "<org name, optional>"}
+/// ```
+///
+/// `invitation` was a signed group-open invitation object in 0.x; it is now
+/// the token string, which is all `POST /invites/{token}/redeem` needs.
+/// Decoding refuses a 0.x payload (an object there). As `Codable` it is this
+/// same JSON, so an app that embeds one in a payload of its own keeps working.
+public struct OrgInvitation: Codable, Hashable, Sendable, CustomStringConvertible {
+    /// The organization it opens (0.x: `namespaceId`).
+    public let namespaceId: String
+    /// The node's invite token, `inv_…`. Secret: whoever holds it may redeem it while it has uses left.
     public let token: String
+    /// The app instance to open after joining, when there is one.
+    public let contextId: String?
+    /// The organization's name, for the confirmation dialog. Unsigned: a hint only.
+    public let name: String?
 
-    public init(orgId: String, token: String) {
-        self.orgId = orgId
+    public init(namespaceId: String, token: String, contextId: String? = nil, name: String? = nil) {
+        self.namespaceId = namespaceId
         self.token = token
+        self.contextId = contextId
+        self.name = name
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case token = "invitation"
+        case namespaceId, contextId, name
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let token = try c.decode(String.self, forKey: .token)
+        let org = try c.decode(String.self, forKey: .namespaceId)
+        guard !token.isEmpty, !org.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .token, in: c, debugDescription: "empty invitation")
+        }
+        self.init(
+            namespaceId: org, token: token, contextId: try c.decodeIfPresent(String.self, forKey: .contextId),
+            name: try c.decodeIfPresent(String.self, forKey: .name))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(token, forKey: .token)
+        try c.encode(namespaceId, forKey: .namespaceId)
+        try c.encodeIfPresent(contextId, forKey: .contextId)
+        try c.encodeIfPresent(name, forKey: .name)
+    }
+
+    /// `base58(deflate(json))`: what goes in a link's `invitation` parameter.
+    public func encoded() throws -> String {
+        try InviteCodec.encode(self)
+    }
+
+    /// The shareable link for the app with package `slug`.
+    public func link(slug: String, host: String = InviteLink.defaultHost) throws -> String {
+        InviteLink.invitation(token: try encoded(), slug: slug, host: host)
+    }
+
+    /// An invitation from a pasted link or code, or `nil` (another app's
+    /// link when `expectedSlug` is given, or a 0.x payload).
+    public static func parse(_ input: String, expectedSlug: String? = nil) -> OrgInvitation? {
+        InviteLink.token(fromPasted: input, expectedSlug: expectedSlug).flatMap(decode)
+    }
+
+    /// An invitation from its encoded form (``encoded()``), or `nil`.
+    public static func decode(_ code: String) -> OrgInvitation? {
+        try? InviteCodec.decode(OrgInvitation.self, from: code)
+    }
+
+    /// Without the token, which is a secret.
+    public var description: String {
+        "OrgInvitation(namespaceId: \(namespaceId), contextId: \(contextId ?? "nil"), name: \(name ?? "nil"))"
     }
 }
 
 /// The pre-1.0 name of ``OrgInvitation``, kept so apps that name it build.
 /// Its shape changed: a signed group invitation became an invite token.
 public typealias SignedGroupOpenInvitation = OrgInvitation
+
+/// The group id of `team` in `org`: what ``AppSubgroup/groupId`` and the
+/// team calls take. (== Kotlin `teamGroupId`.)
+public func teamGroupId(org: String, team: String) -> String { "\(org)/\(team)" }
+
+/// A group id read back: the organization, and the team when it names one. (== Kotlin `GroupRef`.)
+public struct GroupRef: Hashable, Sendable {
+    public let org: String
+    public let team: String?
+
+    public init(org: String, team: String?) {
+        self.org = org
+        self.team = team
+    }
+
+    /// `org` or `org/team`.
+    public static func parse(_ groupId: String) -> GroupRef {
+        guard let cut = groupId.firstIndex(of: "/") else { return GroupRef(org: groupId, team: nil) }
+        return GroupRef(org: String(groupId[..<cut]), team: String(groupId[groupId.index(after: cut)...]))
+    }
+}
 
 /// A member's role, in the words the app layer uses. On 1.0 an organization
 /// member's `owner`/`admin` reads as `Admin`, `member` as `Member` and

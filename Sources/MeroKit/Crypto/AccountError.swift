@@ -1,7 +1,8 @@
 import Foundation
 
 /// Errors the app layer raises itself, before or instead of asking a node.
-/// Refusals a node answered are ``CalimeroError``s.
+/// Refusals a node answered are ``CalimeroError``s; a call while signed out
+/// is ``SignedOutError`` (0.x: `AccountError.noRelay`).
 public enum AccountError: Error, Equatable, Sendable {
     /// An input was malformed before anything was sent (wrong hex width, JSON
     /// that does not parse, …). Nothing was spent.
@@ -12,11 +13,6 @@ public enum AccountError: Error, Equatable, Sendable {
 
     /// The operation needs a signed-in session that is absent.
     case notSignedIn(String)
-
-    /// Nothing serves `method`: the app is signed out, so there is no node
-    /// session to run it on. Sign in first. (The name predates Calimero 1.0,
-    /// when a hosted relay ran an account's calls.)
-    case noRelay(method: String)
 }
 
 extension AccountError: LocalizedError {
@@ -25,7 +21,6 @@ extension AccountError: LocalizedError {
         case .invalidInput(let m): return m
         case .protocolViolation(let m): return m
         case .notSignedIn(let m): return m
-        case .noRelay(let method): return "\(method) needs a signed-in session: sign in first"
         }
     }
 }

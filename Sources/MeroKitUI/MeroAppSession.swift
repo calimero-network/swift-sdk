@@ -17,44 +17,41 @@ public struct MeroAppSessionOptions: Sendable {
     }
 }
 
-/// What an invitation link carries: `base58(deflate(json))` of this, in the
-/// `invitation` query parameter of `https://links.calimero.network/<package>/join`.
-/// (== Kotlin `InvitationLinkPayload`.)
-///
-/// ```json
-/// {"invitation":{"orgId":"…","token":"inv_…"},"namespaceId":"…","contextId":"…"}
-/// ```
-///
-/// `namespaceId` is the organization (the same as `invitation.orgId`);
-/// `contextId` optionally names the app instance to open after joining. An
-/// app may add fields of its own (a name to show): decoding ignores them.
-public struct InvitationLinkPayload: Codable, Sendable, Equatable {
-    public var invitation: OrgInvitation
-    public var namespaceId: String
-    public var contextId: String?
-
-    public init(invitation: OrgInvitation, namespaceId: String? = nil, contextId: String? = nil) {
-        self.invitation = invitation
-        self.namespaceId = namespaceId ?? invitation.orgId
-        self.contextId = contextId
+/// Opens the node's consent page in the system browser
+/// (`ASWebAuthenticationSession`), where the account holder approves a
+/// release, an upgrade or outbound hosts with their passkey. Approvals happen
+/// only there, never in the app: the app asks
+/// (``CalimeroClient/requestConsent(_:)``), the page decides, and sends the
+/// person back to the request's `returnTo` with `?request_id=…&result=…`,
+/// which the app hands to ``MeroAppSession/handle(_:)`` (or reads with
+/// `consentReturn`) and confirms with ``CalimeroClient/consentResult(_:)``.
+/// (== Kotlin `ConsentLauncher`, which opens a Custom Tab.)
+public enum ConsentLauncher {
+    /// Open `url` in the system browser; returns the URL the page sent the
+    /// person back to, or `nil` when they dismissed it.
+    @MainActor
+    public static func open(
+        _ url: URL, callback: CloudCallback, opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async -> URL? {
+        try? await opener.authenticate(url: url, callback: callback)
     }
 
-    /// The shareable link for this payload, for the app with `packageName`.
-    public func link(packageName: String) throws -> String {
-        InviteLink.invitation(token: try InviteCodec.encode(self), slug: packageName)
-    }
-
-    /// The payload a link (or a pasted token) carries, or `nil` when it carries
-    /// none or names another app's package.
-    public static func from(link: String, packageName: String?) -> InvitationLinkPayload? {
-        guard let token = InviteLink.token(fromPasted: link, expectedSlug: packageName) else { return nil }
-        return try? InviteCodec.decode(InvitationLinkPayload.self, from: token)
+    /// ``CalimeroClient/openConsentPage(_:navigate:)`` in the system browser.
+    /// Answers the request once the page sent the person back (or was dismissed).
+    @MainActor
+    public static func request(
+        client: CalimeroClient, request: ConsentRequest, callback: CloudCallback,
+        opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async throws -> (started: ConsentStarted, returned: URL?) {
+        let started = try await client.requestConsent(request)
+        guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
+        return (started, await open(url, callback: callback, opener: opener))
     }
 }
 
 /// A Calimero app's signed-in account on a Calimero 1.0 cluster: passkey
 /// sign-in (``MeroClient``), and the ``MeroAppBackend`` built over it
-/// (``CloudAppBackend``). Keep one for the app's life (a `@StateObject` at
+/// (``CalimeroAppBackend``). Keep one for the app's life (a `@StateObject` at
 /// the root). (== Kotlin `com.calimero.mero.compose.MeroAppSession`.)
 ///
 /// ```swift
@@ -86,6 +83,9 @@ public final class MeroAppSession: ObservableObject {
     /// An invitation link that arrived (``handle(_:)``) and waits to be
     /// redeemed (``redeemPendingInvitation()``). Clear it with ``dismissPendingInvitation()``.
     @Published public private(set) var pendingInvitation: String?
+    /// The decision on the last consent request, once the page sent the
+    /// person back (``handle(_:)``) and the node confirmed it.
+    @Published public private(set) var consentResult: ConsentResult?
 
     private var lastKey = ""
     private var restoreTask: Task<Void, Never>?
@@ -139,8 +139,8 @@ public final class MeroAppSession: ObservableObject {
     public var hasRelay: Bool { backend?.hasRelay ?? false }
     /// Whether ``MeroAppBackend/events(contextId:)`` streams.
     public var canSubscribe: Bool { backend?.canSubscribe ?? false }
-    /// The contract in any app instance: ``NoRelayContextContract`` while signed out.
-    public var contract: any ContextContract { backend?.contract ?? NoRelayContextContract() }
+    /// The contract in any app instance: ``SignedOutContextContract`` while signed out.
+    public var contract: any ContextContract { backend?.contract ?? SignedOutContextContract() }
 
     // MARK: - Sign-in
 
@@ -183,13 +183,17 @@ public final class MeroAppSession: ObservableObject {
         rebuild()
     }
 
-    /// A URL the system handed the app: one of this app's invitation links
-    /// (held in ``pendingInvitation`` for the person to confirm) or a consent
-    /// page's return. Returns whether it was either.
+    /// A URL the system handed the app: the consent page sending the person
+    /// back (`returnTo?request_id=…&result=…`, confirmed with the node into
+    /// ``consentResult``), or one of this app's invitation links (held in
+    /// ``pendingInvitation`` for the person to confirm). Returns whether it was either.
     @discardableResult
     public func handle(_ url: URL) async -> Bool {
         if let restoreTask { await restoreTask.value }
-        if consentReturn(url) != nil { return true }
+        if let back = consentReturn(url) {
+            consentResult = try? await client.cloud?.consentResult(back.requestId)
+            return true
+        }
         let raw = url.absoluteString
         let recognised =
             options.isInvitation?(raw) ?? Self.isInvitationLink(raw, packageName: client.config.packageName)
@@ -203,27 +207,32 @@ public final class MeroAppSession: ObservableObject {
         pendingInvitation = nil
     }
 
-    /// A shareable invitation link to `namespaceId` (an org): an invite token
-    /// minted on the node, in ``InvitationLinkPayload``'s shape.
-    public func createInvitationLink(namespaceId: String, contextId: String? = nil) async throws -> String {
-        guard let backend else { throw AccountError.notSignedIn("sign in to invite") }
-        let invitation = try await backend.createInvitation(namespaceId: namespaceId)
-        return try InvitationLinkPayload(invitation: invitation, namespaceId: namespaceId, contextId: contextId)
-            .link(packageName: client.config.packageName ?? "")
+    /// ``pendingInvitation`` decoded, or `nil` (not one, another app's, or a 0.x payload).
+    public var pendingOrgInvitation: OrgInvitation? {
+        pendingInvitation.flatMap { OrgInvitation.parse($0, expectedSlug: client.config.packageName) }
     }
 
-    /// Redeem ``pendingInvitation`` (an ``InvitationLinkPayload`` link):
-    /// `POST /invites/{token}/redeem`, then clear it.
+    /// A shareable invitation link to `namespaceId` (an org): an invite token
+    /// minted on the node, as ``OrgInvitation/link(slug:host:)`` spells it.
+    public func createInvitationLink(namespaceId: String, contextId: String? = nil) async throws -> String {
+        guard let backend else { throw SignedOutError(method: "createInvitationLink") }
+        let minted = try await backend.createInvitation(namespaceId: namespaceId)
+        return try OrgInvitation(
+            namespaceId: minted.namespaceId, token: minted.token, contextId: contextId ?? minted.contextId,
+            name: minted.name
+        ).link(slug: client.config.packageName ?? "")
+    }
+
+    /// Redeem ``pendingInvitation`` (`POST /invites/{token}/redeem`) and
+    /// forget it. Answers the organization joined, or `nil` when no invitation waits.
     @discardableResult
-    public func redeemPendingInvitation() async throws -> AppJoinedNamespace {
-        guard let backend else { throw AccountError.notSignedIn("sign in to join") }
-        guard let link = pendingInvitation,
-            let payload = InvitationLinkPayload.from(link: link, packageName: client.config.packageName)
-        else { throw AccountError.invalidInput("no invitation to redeem") }
-        let joined = try await backend.joinNamespace(namespaceId: payload.namespaceId, invitation: payload.invitation)
-        pendingInvitation = nil
+    public func redeemPendingInvitation() async throws -> String? {
+        guard let backend else { throw SignedOutError(method: "redeemPendingInvitation") }
+        guard let invitation = pendingOrgInvitation else { return nil }
+        let joined = try await backend.joinNamespace(namespaceId: invitation.namespaceId, invitation: invitation)
+        dismissPendingInvitation()
         await didJoinNamespace()
-        return joined
+        return joined.namespaceId
     }
 
     /// After redeeming an invitation: re-read what the account sees.
@@ -239,10 +248,20 @@ public final class MeroAppSession: ObservableObject {
         return try await cloud.pendingApprovals(org: org)
     }
 
-    /// Ask the user to approve on the node's consent page, in the system
-    /// browser; answers the decision.
-    public func requestConsent(_ request: @escaping (_ returnTo: String) -> ConsentRequest) async -> ConsentResult? {
-        await client.requestConsent(request, callback: callback)
+    /// Ask the account holder to approve `request` on the node's consent
+    /// page, opened in the system browser (``ConsentLauncher``) with
+    /// ``callback`` as its `returnTo`. When the page sends the person back,
+    /// ``consentResult`` holds the node's decision. Answers the request.
+    @discardableResult
+    public func requestConsent(
+        _ request: ConsentRequest, opener: any WebAuthenticating = MeroClient.defaultOpener()
+    ) async throws -> ConsentStarted {
+        guard let cloud = client.cloud else { throw SignedOutError(method: "requestConsent") }
+        consentResult = nil
+        let (started, returned) = try await ConsentLauncher.request(
+            client: cloud, request: request, callback: callback, opener: opener)
+        if let returned { await handle(returned) }
+        return started
     }
 
     /// Rebuild ``backend`` from the client's current session. A no-op when
@@ -255,7 +274,7 @@ public final class MeroAppSession: ObservableObject {
         guard key != lastKey else { return }
         lastKey = key
         if let cloud = client.cloud, let account = client.account {
-            backend = CloudAppBackend(
+            backend = CalimeroAppBackend(
                 client: cloud, account: account, packageName: client.config.packageName ?? "",
                 packageVersion: client.config.packageVersion)
         } else {

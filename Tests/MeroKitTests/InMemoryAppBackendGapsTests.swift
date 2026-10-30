@@ -66,7 +66,7 @@ final class InMemoryAppBackendGapsTests: XCTestCase {
         do {
             _ = try await backend.uploadBlob(contextId: context, data: Data())
             XCTFail("no relay, no upload")
-        } catch AccountError.noRelay {}
+        } catch is SignedOutError {}
     }
 
     func testMembersRolesAndNames() async throws {
@@ -154,7 +154,7 @@ final class InMemoryAppBackendGapsTests: XCTestCase {
 /// A backend written before the names, blobs and members calls: the defaults keep it conforming.
 private struct MinimalBackend: MeroAppBackend {
     let account = ""
-    var contract: any ContextContract { NoRelayContextContract() }
+    var contract: any ContextContract { SignedOutContextContract() }
     let hasRelay = false
     let canSubscribe = false
     func listNamespaces() async throws -> [AppNamespace] { [] }

@@ -42,7 +42,7 @@ final class InMemoryAppBackendTests: XCTestCase {
         do {
             _ = try await backend.contract.query(contextId: "c", method: "get", args: [:])
             XCTFail("a relayless contract refuses")
-        } catch AccountError.noRelay {}
+        } catch is SignedOutError {}
 
         let invitation = InMemoryAppBackend.invitation(namespaceId: namespace)
         let joined = try await backend.joinNamespace(namespaceId: namespace, invitation: invitation)
@@ -52,7 +52,7 @@ final class InMemoryAppBackendTests: XCTestCase {
         XCTAssertTrue(backend.hasRelay)
         let ids = try await backend.listNamespaces().map(\.id)
         XCTAssertEqual(ids, [namespace])
-        XCTAssertEqual(invitation.orgId, namespace)
+        XCTAssertEqual(invitation.namespaceId, namespace)
     }
 
     func testJoiningAContextMakesTheAccountAMember() async throws {

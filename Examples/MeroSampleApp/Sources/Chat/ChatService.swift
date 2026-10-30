@@ -85,37 +85,6 @@ struct ChatChannel: Identifiable, Equatable {
     let kind: String
 }
 
-/// Shareable invitation payload: an org invite token, the org it admits
-/// to, and the space's name to show before joining. The shape MeroKit's
-/// `InvitationLinkPayload` reads (`invitation`, `namespaceId`), plus a name.
-struct ChatInvite: Codable {
-    let namespaceId: String
-    let spaceName: String
-    let invitation: OrgInvitation
-
-    /// A compact, single-line invite code: `base58(deflate(JSON))` via
-    /// `InviteCodec`, the format the rest of the fleet uses.
-    func encoded() throws -> String {
-        try InviteCodec.encode(self)
-    }
-
-    /// The shareable link for this invite.
-    func shareableLink() throws -> String {
-        InviteLink.invitation(token: try encoded(), slug: ChatService.packageName)
-    }
-
-    /// Decode an invite code, or a link containing one.
-    static func decode(_ code: String) -> ChatInvite? {
-        guard let token = InviteLink.token(fromPasted: code) else { return nil }
-        if let json = InviteCodec.decode(token: token),
-            let invite = try? JSONDecoder().decode(ChatInvite.self, from: Data(json.utf8))
-        {
-            return invite
-        }
-        return try? JSONDecoder().decode(ChatInvite.self, from: Data(token.utf8))
-    }
-}
-
 /// Where ``ChatService/spaces`` stands. Mirrors the Kotlin sample's `SpacesLoad`.
 enum SpacesLoad {
     /// Not listed yet.
@@ -285,8 +254,8 @@ final class ChatService: ObservableObject {
 
     func makeInvite(_ space: ChatSpace) async -> String? {
         do {
-            let invitation = try await backend.createInvitation(namespaceId: space.id)
-            let code = try ChatInvite(namespaceId: space.id, spaceName: space.name, invitation: invitation).encoded()
+            let minted = try await backend.createInvitation(namespaceId: space.id)
+            let code = try OrgInvitation(namespaceId: space.id, token: minted.token, name: space.name).encoded()
             say("Invite ready. Copy or share it.")
             return code
         } catch {
@@ -301,13 +270,14 @@ final class ChatService: ObservableObject {
         busy = true
         defer { busy = false }
         say("Reading invite…")
-        guard let invite = ChatInvite.decode(inviteCode) else {
+        guard let invite = OrgInvitation.parse(inviteCode) else {
             say("That isn't a valid invite code.", error: true)
             return false
         }
         do {
-            say("Joining \(invite.spaceName)…")
-            let joined = try await backend.joinNamespace(namespaceId: invite.namespaceId, invitation: invite.invitation)
+            let spaceName = invite.name ?? "the space"
+            say("Joining \(spaceName)…")
+            let joined = try await backend.joinNamespace(namespaceId: invite.namespaceId, invitation: invite)
             try? await backend.setMemberName(groupId: joined.namespaceId, name: username)
             await loadSpaces()
             if let space = spaces.first(where: { $0.id == joined.namespaceId }) {
@@ -317,7 +287,7 @@ final class ChatService: ObservableObject {
                         channel.contextId, "set_profile", args: ["username": .string(username), "avatar": .null])
                 }
             }
-            say("Joined \(invite.spaceName)")
+            say("Joined \(spaceName)")
             return true
         } catch {
             say("Couldn't join: \(short(error))", error: true)

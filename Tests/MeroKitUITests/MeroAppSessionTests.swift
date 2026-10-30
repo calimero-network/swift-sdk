@@ -55,14 +55,14 @@ final class MeroAppSessionTests: XCTestCase {
         let session = makeSession(store: store)
         XCTAssertFalse(session.isSignedIn)
         XCTAssertNil(session.backend)
-        XCTAssertTrue(session.contract is NoRelayContextContract)
+        XCTAssertTrue(session.contract is SignedOutContextContract)
 
         await session.signIn()
         XCTAssertNil(session.client.errorMessage)
         XCTAssertTrue(session.isSignedIn)
         XCTAssertEqual(session.account, FakeCloud.me)
         XCTAssertEqual(session.applicationId, Self.package)
-        XCTAssertTrue(session.backend is CloudAppBackend)
+        XCTAssertTrue(session.backend is CalimeroAppBackend)
         XCTAssertTrue(session.hasRelay)
         XCTAssertTrue(session.contract is CloudContextContract)
         // The observer persists the session asynchronously.
@@ -96,10 +96,14 @@ final class MeroAppSessionTests: XCTestCase {
         let org = try await backend.foundNamespace(name: "Team").namespaceId
         let link = try await session.createInvitationLink(namespaceId: org, contextId: "app9")
         XCTAssertTrue(link.hasPrefix("https://links.calimero.network/\(Self.package)/join?invitation="))
-        let payload = try XCTUnwrap(InvitationLinkPayload.from(link: link, packageName: Self.package))
-        XCTAssertEqual(payload.invitation, OrgInvitation(orgId: org, token: "inv_\(org)"))
-        XCTAssertEqual(payload.contextId, "app9")
-        XCTAssertNil(InvitationLinkPayload.from(link: link, packageName: "com.other.app"))
+        let payload = try XCTUnwrap(OrgInvitation.parse(link, expectedSlug: Self.package))
+        XCTAssertEqual(payload, OrgInvitation(namespaceId: org, token: "inv_\(org)", contextId: "app9", name: "Team"))
+        XCTAssertNil(OrgInvitation.parse(link, expectedSlug: "com.other.app"))
+        let json = try XCTUnwrap(InviteCodec.decode(token: try payload.encoded()))
+        XCTAssertTrue(json.contains(#""invitation":"inv_"#), json)
+        XCTAssertNil(
+            OrgInvitation.decode(
+                try InviteCodec.encode(["invitation": ["groupId": "x"], "namespaceId": "o"] as JSONValue)))
 
         let handled = await session.handle(URL(string: link)!)
         XCTAssertTrue(handled)
@@ -107,8 +111,9 @@ final class MeroAppSessionTests: XCTestCase {
         let foreign = await session.handle(URL(string: "https://links.calimero.network/com.other/join?invitation=x")!)
         XCTAssertFalse(foreign)
 
+        XCTAssertEqual(session.pendingOrgInvitation?.namespaceId, org)
         let joined = try await session.redeemPendingInvitation()
-        XCTAssertEqual(joined.namespaceId, org)
+        XCTAssertEqual(joined, org)
         XCTAssertNil(session.pendingInvitation)
         XCTAssertEqual(node.requests.last?.path, "/invites/inv_\(org)/redeem")
     }

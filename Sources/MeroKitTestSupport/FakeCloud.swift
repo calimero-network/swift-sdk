@@ -5,7 +5,7 @@ import MeroKit
 
 /// A small Calimero 1.0 cluster in memory, to put behind a ``FakeCloudNode``:
 /// one signed-in account (``me``), its orgs, teams, app instances and
-/// invites, with the routes `CloudAppBackend` and `MeroAppSession` use. An
+/// invites, with the routes `CalimeroAppBackend` and `MeroAppSession` use. An
 /// app's views and intents are answered by ``contract``.
 ///
 /// ```swift

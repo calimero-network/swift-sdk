@@ -39,7 +39,7 @@ struct MeroExample {
         }
 
         section("Invitation link payload")
-        let invitation = OrgInvitation(orgId: "org_example", token: "inv_example")
+        let invitation = OrgInvitation(namespaceId: "org_example", token: "inv_example")
         if let token = try? InviteCodec.encode(invitation) {
             print("link:", InviteLink.invitation(token: token, slug: "com.calimero.chat"))
         }

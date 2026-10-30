@@ -12,8 +12,8 @@ import Foundation
 /// The two ways an app reaches the contract in a context.
 /// (== Kotlin `com.calimero.mero.app.ContextContract`.)
 ///
-/// ``CloudContextContract`` is the real one; ``NoRelayContextContract`` stands
-/// in while signed out. ``bound(to:)`` fixes the context, for
+/// ``CloudContextContract`` is the real one; ``SignedOutContextContract``
+/// stands in while signed out. ``bound(to:)`` fixes the context, for
 /// a generated client.
 public protocol ContextContract: Sendable {
     /// Run a view (`#[app::view]`) as the account: `POST /apps/{app}/views`.
@@ -105,29 +105,44 @@ public struct CloudContextContract: ContextContract {
     }
 }
 
-/// The contract while signed out: every call throws
-/// ``AccountError/noRelay(method:)``, naming the method. (The name predates
-/// Calimero 1.0; kept so apps that name it still build.)
-/// (== Kotlin `NoRelayContextContract`.)
-public struct NoRelayContextContract: ContextContract {
+/// No one is signed in: there is no account to call the contract as.
+/// (== Kotlin `SignedOutException`; 0.x: `AccountError.noRelay`.)
+public struct SignedOutError: Error, LocalizedError, Equatable, Sendable {
+    /// The method that was called.
+    public let method: String
+
+    public init(method: String) {
+        self.method = method
+    }
+
+    public var errorDescription: String? { "\(method) needs a signed-in account" }
+}
+
+/// The contract while no one is signed in: every call throws
+/// ``SignedOutError``, naming the method. (== Kotlin `SignedOutContextContract`.)
+public struct SignedOutContextContract: ContextContract {
     public init() {}
 
     public func query(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func execute(contextId: String, method: String, args: JSONValue) async throws -> JSONValue? {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func query(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 
     public func execute(contextId: String, method: String, argsJSON: Data) async throws -> Data {
-        throw AccountError.noRelay(method: method)
+        throw SignedOutError(method: method)
     }
 }
+
+/// 0.x name of ``SignedOutContextContract``.
+@available(*, deprecated, renamed: "SignedOutContextContract", message: "No relays on Calimero 1.0")
+public typealias NoRelayContextContract = SignedOutContextContract
 
 /// One context's contract, in the shape a generated client calls: JSON in,
 /// JSON out, as UTF-8 bytes. (== Kotlin `ContextContractCalling`, which takes

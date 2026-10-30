@@ -64,16 +64,17 @@ final class ContextContractTests: XCTestCase {
         }
     }
 
-    func testNoRelayContractNamesTheMethod() async {
+    func testSignedOutContractNamesTheMethod() async {
         for call in [RecordedContractCall.Path.query, .execute] {
             do {
                 if call == .query {
-                    _ = try await NoRelayContextContract().query(contextId: context, method: "get_feed", args: [:])
+                    _ = try await SignedOutContextContract().query(contextId: context, method: "get_feed", args: [:])
                 } else {
-                    _ = try await NoRelayContextContract().execute(contextId: context, method: "get_feed", args: [:])
+                    _ = try await SignedOutContextContract().execute(contextId: context, method: "get_feed", args: [:])
                 }
-                XCTFail("expected noRelay")
-            } catch AccountError.noRelay(let method) {
+                XCTFail("expected SignedOutError")
+            } catch let error as SignedOutError {
+                let method = error.method
                 XCTAssertEqual(method, "get_feed")
             } catch {
                 XCTFail("unexpected \(error)")

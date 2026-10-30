@@ -5,7 +5,7 @@ import XCTest
 
 @testable import MeroKitUI
 
-final class CloudAppBackendTests: XCTestCase {
+final class CalimeroAppBackendTests: XCTestCase {
     private var cluster: FakeCloud!
     private var node: FakeCloudNode!
 
@@ -22,12 +22,12 @@ final class CloudAppBackendTests: XCTestCase {
         super.tearDown()
     }
 
-    private func backend(package: String = "com.calimero.chat") async throws -> CloudAppBackend {
+    private func backend(package: String = "com.calimero.chat") async throws -> CalimeroAppBackend {
         let client = CalimeroClient(
             CalimeroClientOptions(
                 baseUrl: "https://node.test", policy: .development, session: MockURLProtocol.makeSession()))
         try await client.signIn(SoftPasskey())
-        return CloudAppBackend(client: client, account: FakeCloud.me, packageName: package)
+        return CalimeroAppBackend(client: client, account: FakeCloud.me, packageName: package)
     }
 
     func testFoundsAnOrgForTheAppAndListsOnlyThisAppsOrgs() async throws {
@@ -46,12 +46,14 @@ final class CloudAppBackendTests: XCTestCase {
         let backend = try await backend()
         let org = try await backend.foundNamespace(name: "Acme").namespaceId
         let team = try await backend.createSubgroup(namespaceId: org, name: "general", isPublic: true)
-        XCTAssertEqual(cluster.teams[team]?.join, "everyone")
+        XCTAssertEqual(team, teamGroupId(org: org, team: GroupRef.parse(team).team ?? ""))
+        let teamId = try XCTUnwrap(GroupRef.parse(team).team)
+        XCTAssertEqual(cluster.teams[teamId]?.join, "everyone")
         let app = try await backend.createContext(
             groupId: team, applicationId: "com.calimero.chat", name: "general", initArgs: [:])
         let created = try XCTUnwrap(node.requests.last { $0.path == "/apps" }?.json)
         XCTAssertEqual(created["org"]?.stringValue, org)
-        XCTAssertEqual(created["access"], ["kind": "team", "team": .string(team)])
+        XCTAssertEqual(created["access"], ["kind": "team", "team": .string(teamId)])
         XCTAssertEqual(created["package"], "com.calimero.chat")
 
         let rootApp = try await backend.createContext(groupId: org, applicationId: "", name: "lobby", initArgs: [:])
@@ -72,16 +74,18 @@ final class CloudAppBackendTests: XCTestCase {
     func testAPerServiceAppInstanceNamesItsService() async throws {
         let backend = try await backend()
         let org = try await backend.foundNamespace(name: "Fleet").namespaceId
-        _ = try await backend.createContext(
-            groupId: org, applicationId: "com.calimero.battleships", name: "lobby", initArgs: [:], service: "lobby")
-        XCTAssertEqual(node.requests.last { $0.path == "/apps" }?.json?["service"], "lobby")
+        _ = try await backend.createServiceContext(
+            groupId: org, applicationId: "com.calimero.battleships", service: "lobby", name: "lobby", initArgs: [:])
+        let created = node.requests.last { $0.path == "/apps" }?.json
+        XCTAssertEqual(created?["service"], "lobby")
+        XCTAssertEqual(created?["package"], "com.calimero.battleships")
     }
 
     func testInvitesWithATokenAndJoinsByRedeemingIt() async throws {
         let backend = try await backend()
         let org = try await backend.foundNamespace(name: "Acme").namespaceId
         let invitation = try await backend.createInvitation(namespaceId: org)
-        XCTAssertEqual(invitation, OrgInvitation(orgId: org, token: "inv_\(org)"))
+        XCTAssertEqual(invitation, OrgInvitation(namespaceId: org, token: "inv_\(org)", name: "Acme"))
         cluster.orgs[org]?.members[FakeCloud.me] = nil
         let joined = try await backend.joinNamespace(namespaceId: org, invitation: invitation)
         XCTAssertEqual(joined.namespaceId, org)
