@@ -18,12 +18,12 @@ private struct ApprovingBrowser: WebAuthenticating {
 @MainActor
 final class MeroAppSessionTests: XCTestCase {
     private static let package = "com.calimero.chat"
-    nonisolated(unsafe) private var cluster: FakeCluster!
+    nonisolated(unsafe) private var cluster: FakeCloud!
     nonisolated(unsafe) private var node: FakeCloudNode!
 
     override func setUp() {
         super.setUp()
-        cluster = FakeCluster()
+        cluster = FakeCloud()
         let cluster = self.cluster!
         node = FakeCloudNode { request in
             switch request.path {
@@ -60,7 +60,7 @@ final class MeroAppSessionTests: XCTestCase {
         await session.signIn()
         XCTAssertNil(session.client.errorMessage)
         XCTAssertTrue(session.isSignedIn)
-        XCTAssertEqual(session.account, FakeCluster.me)
+        XCTAssertEqual(session.account, FakeCloud.me)
         XCTAssertEqual(session.applicationId, Self.package)
         XCTAssertTrue(session.backend is CloudAppBackend)
         XCTAssertTrue(session.hasRelay)
@@ -80,7 +80,7 @@ final class MeroAppSessionTests: XCTestCase {
         let stored = StoredCloudSession(
             nodeURL: "https://node.test", allowMock: true,
             session: CalimeroSession(
-                accountId: FakeCluster.me, sessionToken: "v2.old", expiresAt: 0, refreshToken: "rt_old"))
+                accountId: FakeCloud.me, sessionToken: "v2.old", expiresAt: 0, refreshToken: "rt_old"))
         let session = makeSession(store: MemoryCloudSessionStore(stored))
         await session.restore()
         XCTAssertTrue(session.isSignedIn)

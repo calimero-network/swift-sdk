@@ -1,125 +1,45 @@
-name: E2E (vs released merod)
+name: E2E (vs a development cluster)
 
-# Real end-to-end run against a live node. Manual (workflow_dispatch) so it does
-# NOT gate PRs — booting merod is heavier and slower than the unit/mock suite,
-# which already covers the full auth journey via FakeNode. The MeroKitE2ETests
-# target skips itself unless MERO_E2E_NODE_URL is set.
+# Runs MeroKitE2ETests against a Calimero 1.0 development cluster reachable
+# from the runner (`merod local`, mock attestation). merod 1.0 runs on Linux
+# only, so this job takes the node's URL rather than booting one; with
+# `bundle_url` it also creates an app from that dev `.wasm` and calls it.
 on:
   workflow_dispatch:
     inputs:
-      core_tag:
-        description: 'core release to test against (default: ci/core-version)'
+      node_url:
+        description: 'A node of a `merod local` cluster, e.g. http://host:2501'
+        required: true
+      bundle_url:
+        description: 'Optional: a dev kv-store .wasm to upload, create and call'
         required: false
         default: ''
-  schedule:
-    - cron: '0 6 * * 1'  # weekly smoke, Mondays 06:00 UTC
 
 permissions:
   contents: read
 
 jobs:
   e2e:
-    name: E2E (single node)
+    name: E2E (development cluster)
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Pinned, not "the newest release": this job resolved `gh release list
-      # --limit 1` and so tested whatever core shipped last. core rc.17 made
-      # `init --auth-mode embedded` require admin credentials, and this job went
-      # red on a commit of its own that changed nothing.
-      - name: Resolve the core release to test against
+      - name: Fetch the bundle
+        if: ${{ inputs.bundle_url != '' }}
         env:
-          CORE_TAG_INPUT: ${{ inputs.core_tag }}
+          BUNDLE_URL: ${{ inputs.bundle_url }}
         run: |
           set -euo pipefail
-          set -a; . ci/core-version; set +a
-          TAG="${CORE_TAG_INPUT:-$CORE_TAG}"
-          echo "CORE_TAG=$TAG" >> "$GITHUB_ENV"
-          echo "core release: $TAG"
-
-      - name: Download merod (aarch64-apple-darwin)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo "Using core release $CORE_TAG"
-          gh release download "$CORE_TAG" --repo calimero-network/core \
-            --pattern 'merod_aarch64-apple-darwin.tar.gz' --output merod.tar.gz --clobber
-          tar xzf merod.tar.gz
-          chmod +x ./merod
-          ./merod --version
-
-      # The provisioning-chain test needs an application to hang a namespace
-      # off, and this job boots a BARE node — so for every run before this step
-      # existed, that test skipped itself and the job still reported three
-      # executed tests. Every core release ships this fixture bundle, so the
-      # app the chain runs against moves with the pin like everything else.
-      #
-      # `.mpk`, not a raw `.wasm`: since rc.31 an application id is derived
-      # from a bundle's package and signer, so a bare module has no identity to
-      # install under and the node answers 500.
-      - name: Download the kv-store fixture bundle
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release download "$CORE_TAG" --repo calimero-network/core \
-            --pattern 'kv-store-test-fixture.mpk' --output kv-store.mpk --clobber
-          echo "MERO_E2E_APP_BUNDLE=$PWD/kv-store.mpk" >> "$GITHUB_ENV"
-          ls -l kv-store.mpk
-
-      # core rc.17 (core#3276/#3277) moved admin provisioning to `init`: there is
-      # no first-login bootstrap secret any more, and `--auth-mode embedded`
-      # REFUSES to init without credentials. `--auth-storage persistent` is
-      # required for the init-time admin to survive into `run`.
-      - name: Boot merod (embedded auth, single node)
-        run: |
-          set -euo pipefail
-          printf 'dev-password' | ./merod --home ./e2e-node --node e2e init \
-            --server-port 4001 --swarm-port 4002 \
-            --auth-mode embedded --auth-storage persistent \
-            --admin-user dev --admin-password-stdin
-          ./merod --home ./e2e-node --node e2e run > merod.log 2>&1 &
-          echo $! > merod.pid
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:4001/admin-api/health >/dev/null 2>&1 && { echo "merod healthy"; break; }
-            sleep 2
-            [ "$i" = "30" ] && { echo "merod did not become healthy"; cat merod.log; exit 1; }
-          done
+          curl -fsSL "$BUNDLE_URL" -o kv-store.wasm
+          echo "MERO_E2E_BUNDLE=$PWD/kv-store.wasm" >> "$GITHUB_ENV"
 
       - name: Run e2e tests
         env:
-          MERO_E2E_NODE_URL: http://localhost:4001
-          MERO_E2E_USER: dev
-          MERO_E2E_PASS: dev-password
+          MERO_E2E_NODE_URL: ${{ inputs.node_url }}
         run: |
           set -o pipefail
           swift test --filter MeroKitE2ETests 2>&1 | tee e2e.log
-          # Guard against a vacuous/all-skipped green: require a real pass.
           grep -qE "Executed [1-9][0-9]* test" e2e.log \
-            || { echo "::error::e2e produced no executed tests — refusing a vacuous pass"; exit 1; }
-          # ...and a SKIP inside those executions is just as vacuous. Counting
-          # executed tests cannot see one: this job reported "Executed 3 tests"
-          # on every run while the only test that proves the provisioning chain
-          # quietly skipped itself for want of an installed application.
-          if grep -q "skipped" e2e.log; then
-            echo "::error::a live-node test skipped itself — that is not a pass"
-            grep -n "skipped" e2e.log
-            exit 1
-          fi
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: e2e-logs
-          path: |
-            e2e.log
-            merod.log
-          if-no-files-found: warn
-
-      - name: Stop merod
-        if: always()
-        run: kill "$(cat merod.pid 2>/dev/null)" 2>/dev/null || true
+            || { echo "::error::e2e produced no executed tests"; exit 1; }

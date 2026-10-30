@@ -21,26 +21,26 @@ struct ExplorerRootView: View {
         .animation(.easeInOut(duration: 0.25), value: session.isAuthenticated)
         .tint(Cal.accentInk)
         .task { await session.start() }
-        .onOpenURL { url in Task { await session.handleCallback(url) } }
+        .onOpenURL { url in Task { await session.handle(url) } }
     }
 }
 
 // MARK: - Sign in
 
-/// Calimero Cloud first: one button opens the wallet in the system sheet, the
-/// person approves this device with their passkey, and the app connects to the
-/// relay serving their account. Under it, "Manually enter node URL" signs in
-/// to a node directly (a local `merod`) with its admin username and password.
+/// Calimero Cloud first: the cluster's URL, then a passkey on this device (the
+/// node is attested before anything is sent). Under it, "Manually enter node
+/// URL" connects to a development cluster (`merod local`) with mock
+/// attestation and a software passkey kept for that node.
 struct CalimeroLoginView: View {
     @EnvironmentObject private var session: MeroSession
     @State private var showLogs = false
     @State private var manual = false
+    @State private var clusterURL = ""
     @State private var nodeURL = ""
-    @State private var username = ""
-    @State private var password = ""
+    @State private var name = ""
     @FocusState private var focus: Field?
 
-    private enum Field { case url, user, pass }
+    private enum Field { case cluster, url, name }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -89,8 +89,9 @@ struct CalimeroLoginView: View {
         }
         .sheet(isPresented: $showLogs) { LogsView() }
         .onAppear {
+            if clusterURL.isEmpty { clusterURL = session.lastClusterURL }
             if nodeURL.isEmpty { nodeURL = session.lastNodeURL }
-            if username.isEmpty { username = session.lastNodeUser }
+            if name.isEmpty { name = session.lastName }
         }
     }
 
@@ -113,8 +114,8 @@ struct CalimeroLoginView: View {
                     .accessibilityIdentifier("loginTitle")
                 Text(
                     manual
-                        ? "Sign in to a node you run, like a local merod, with its admin username and password."
-                        : "Private, peer-to-peer apps on Calimero. Sign in with your passkey; your account key never leaves the wallet."
+                        ? "Connect to a development cluster, like merod local. Its mock attestation is trusted only here."
+                        : "Confidential apps on attested Calimero nodes. Sign in with a passkey on this device."
                 )
                 .font(.callout)
                 .foregroundColor(Cal.textDim)
@@ -125,50 +126,67 @@ struct CalimeroLoginView: View {
     }
 
     private var cloudButton: some View {
-        VStack(spacing: 10) {
-            Button {
-                Task { await session.signInWithCloud() }
-            } label: {
-                HStack(spacing: 10) {
-                    if session.isLoading {
-                        ProgressView().tint(Cal.text)
-                    } else {
-                        Image(systemName: "cloud.fill").font(.callout)
+        CalCard(padding: 18) {
+            VStack(spacing: 14) {
+                CalField(title: "Cluster URL", text: $clusterURL, placeholder: "https://node.your-cluster.example")
+                    .keyboardType(.URL)
+                    .submitLabel(.go)
+                    .focused($focus, equals: .cluster)
+                    .onSubmit { signIn(createAccount: false) }
+                    .accessibilityIdentifier("clusterURLField")
+                Button {
+                    signIn(createAccount: false)
+                } label: {
+                    HStack(spacing: 10) {
+                        if session.isLoading {
+                            ProgressView().tint(Cal.text)
+                        } else {
+                            Image(systemName: "person.badge.key.fill").font(.callout)
+                        }
+                        Text("Sign in with passkey")
                     }
-                    Text("Continue with Calimero Cloud")
                 }
+                .buttonStyle(CalPrimaryButtonStyle(enabled: canSignIn))
+                .disabled(!canSignIn)
+                .accessibilityIdentifier("cloudSignInButton")
+                Button("Create an account") { signIn(createAccount: true) }
+                    .buttonStyle(CalTextButtonStyle())
+                    .disabled(!canSignIn)
+                    .accessibilityIdentifier("cloudSignUpButton")
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.shield").font(.caption)
+                    Text("The node's TEE attestation is verified first")
+                }
+                .font(.caption)
+                .foregroundColor(Cal.textFaint)
             }
-            .buttonStyle(CalPrimaryButtonStyle(enabled: !session.isLoading))
-            .disabled(session.isLoading)
-            .accessibilityIdentifier("cloudSignInButton")
-            HStack(spacing: 6) {
-                Image(systemName: "person.badge.key").font(.caption)
-                Text("Opens the Calimero wallet to approve this device")
-            }
-            .font(.caption)
-            .foregroundColor(Cal.textFaint)
         }
+    }
+
+    private var canSignIn: Bool {
+        !session.isLoading && !clusterURL.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private func signIn(createAccount: Bool) {
+        guard canSignIn else { return }
+        focus = nil
+        Task { await session.signInWithCloud(clusterURL, createAccount: createAccount) }
     }
 
     private var nodeForm: some View {
         CalCard(padding: 18) {
             VStack(spacing: 14) {
-                CalField(title: "Node URL", text: $nodeURL, placeholder: "http://localhost:4001")
+                CalField(title: "Node URL", text: $nodeURL, placeholder: "http://localhost:2501")
                     .keyboardType(.URL)
                     .submitLabel(.next)
                     .focused($focus, equals: .url)
-                    .onSubmit { focus = .user }
+                    .onSubmit { focus = .name }
                     .accessibilityIdentifier("nodeURLField")
-                CalField(title: "Username", text: $username, placeholder: "dev")
-                    .submitLabel(.next)
-                    .focused($focus, equals: .user)
-                    .onSubmit { focus = .pass }
-                    .accessibilityIdentifier("nodeUserField")
-                CalField(title: "Password", text: $password, placeholder: "Admin password", secure: true)
+                CalField(title: "Your name", text: $name, placeholder: "dev")
                     .submitLabel(.go)
-                    .focused($focus, equals: .pass)
+                    .focused($focus, equals: .name)
                     .onSubmit(connect)
-                    .accessibilityIdentifier("nodePassField")
+                    .accessibilityIdentifier("nodeUserField")
                 Button(action: connect) {
                     HStack(spacing: 10) {
                         if session.isLoading {
@@ -192,14 +210,13 @@ struct CalimeroLoginView: View {
     }
 
     private var canConnect: Bool {
-        !session.isLoading && !nodeURL.trimmingCharacters(in: .whitespaces).isEmpty && !username.isEmpty
-            && !password.isEmpty
+        !session.isLoading && !nodeURL.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     private func connect() {
         guard canConnect else { return }
         focus = nil
-        Task { await session.connectNode(nodeURL, username: username, password: password) }
+        Task { await session.connectNode(nodeURL, name: name) }
     }
 
     private var footer: some View {
@@ -255,9 +272,12 @@ struct HomeView: View {
                     VStack(alignment: .leading, spacing: 22) {
                         greeting
                         connectionCard
-                        if let note = session.note {
-                            Callout(tone: session.relayURL == nil ? .info : .warning, text: note)
-                                .accessibilityIdentifier("sessionNote")
+                        if session.isDevelopment {
+                            Callout(
+                                tone: .info,
+                                text: "Development cluster: mock attestation is trusted for this node only."
+                            )
+                            .accessibilityIdentifier("sessionNote")
                         }
                         CalSection(title: "Try it") {
                             Button {
@@ -265,7 +285,7 @@ struct HomeView: View {
                             } label: {
                                 CalRow(
                                     icon: "bubble.left.and.bubble.right.fill", title: "Chat",
-                                    subtitle: "Spaces, channels and live messages", accent: true)
+                                    subtitle: "Orgs, teams and live messages", accent: true)
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("openChat")
@@ -343,9 +363,9 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
                     IconTile(
-                        systemName: session.devNodeURL != nil ? "server.rack" : "cloud.fill", accent: true, size: 40)
+                        systemName: session.isDevelopment ? "server.rack" : "cloud.fill", accent: true, size: 40)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(session.devNodeURL != nil ? "Your node" : "Calimero Cloud")
+                        Text(session.isDevelopment ? "Development cluster" : "Calimero Cloud")
                             .font(.subheadline.weight(.semibold))
                             .foregroundColor(Cal.text)
                         Text(statusText).font(.footnote).foregroundColor(Cal.textFaint).lineLimit(1)
@@ -367,12 +387,11 @@ struct HomeView: View {
         .accessibilityIdentifier("accountCard")
     }
 
-    private var isLive: Bool { session.relayURL != nil || session.devNodeURL != nil }
+    private var isLive: Bool { session.isAuthenticated }
 
     private var statusText: String {
-        if let node = session.devNodeURL { return URL(string: node).flatMap { hostPort($0) } ?? node }
-        guard let relay = session.relayURL else { return "Signed in, no relay yet" }
-        return URL(string: relay)?.host ?? relay
+        guard let node = session.nodeURL else { return "Not connected" }
+        return URL(string: node).flatMap { hostPort($0) } ?? node
     }
 
     private func hostPort(_ url: URL) -> String? {
@@ -383,10 +402,9 @@ struct HomeView: View {
     private var technicalRows: [(String, String)] {
         var rows: [(String, String)] = []
         if let account = session.account { rows.append(("Account", account)) }
-        if let device = session.connection?.session.device { rows.append(("Device", device)) }
-        if let relay = session.relayURL { rows.append(("Relay", relay)) }
-        if let key = session.connection?.nodeKey { rows.append(("Node key", key)) }
-        if let node = session.devNodeURL { rows.append(("Node", node)) }
+        if let node = session.nodeURL { rows.append(("Node", node)) }
+        rows.append(("Attestation", session.isDevelopment ? "mock (development)" : "TDX, signed mero-tee release"))
+        rows.append(("Channel", "calimero/sealed-http/v2"))
         return rows
     }
 }
@@ -412,10 +430,6 @@ struct SDKListView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
-                if search.isEmpty {
-                    RunAllEntry()
-                    ComponentsEntry().padding(.bottom, 8)
-                }
                 searchField
                 sectionLabel(search.isEmpty ? "SDK Options" : "\(matchCount) results")
                 ForEach(filtered, id: \.category) { section in
@@ -596,26 +610,21 @@ struct OperationRunnerView: View {
     private func run() {
         running = true
         let captured = inputs
-        let mero = session.mero
-        let context = CloudOpContext(
-            signIn: session.signIn, relay: session.relay, session: session.connection?.session,
-            connection: session.connection)
+        let cloud = session.cloud
         Task {
             do {
                 let result: String
-                if let cloudRun = op.cloudRun {
-                    result = try await cloudRun(context, captured)
-                } else if let mero {
-                    result = try await op.run(mero, captured)
+                if let cloud {
+                    result = try await op.run(cloud, captured)
                 } else {
-                    result = "Admin reads need the relay session, which is not established yet."
+                    result = "Sign in first."
                 }
                 await MainActor.run {
                     output = result; failed = false; running = false
                 }
             } catch {
                 await MainActor.run {
-                    output = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    output = MeroClient.describe(error)
                     failed = true; running = false
                 }
             }

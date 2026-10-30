@@ -22,25 +22,22 @@ targets:
       path: Sources/Generated-Info.plist
       properties:
         UILaunchScreen: {}
-        # The scheme the Calimero wallet returns to after Cloud sign-in
-        # (`mero-sample://enrol#credential=…`). ASWebAuthenticationSession
-        # intercepts it itself; registering it also lets `onOpenURL` finish a
-        # sign-in that arrives outside the sheet.
+        # The scheme the node's consent page returns to
+        # (`mero-sample://consent?request_id=…&result=…`).
+        # ASWebAuthenticationSession intercepts it itself; registering it also
+        # lets `onOpenURL` read a return that arrives outside the sheet.
         CFBundleURLTypes:
-          - CFBundleURLName: network.calimero.merokit.sample.enrol
+          - CFBundleURLName: network.calimero.merokit.sample.consent
             CFBundleURLSchemes: [mero-sample]
-        # Development tooling only: the app signs in with Calimero Cloud and no
-        # longer reads this. generate-ios.sh still patches it for --duo setups,
-        # and the real-node e2e harnesses pass E2E_NODE instead.
-        # The node a fresh launch points at. It MUST stay a loopback URL: the
-        # simulator shares the host's network, so this is the node the e2e
-        # harnesses boot, and `ExplorerUI` adopts this value over the field's
-        # own default on every launch. generate-ios.sh rewrites it to the Mac's
-        # LAN IP for a physical-device install (a phone's "localhost" is the
-        # phone) and restores this file afterwards — a committed LAN IP points
-        # every simulator run at an address that does not exist, which is how
-        # both iOS E2E jobs failed for five weeks with "did not reach explorer".
-        DefaultNodeURL: "http://localhost:4001"
+        # The Calimero Cloud cluster the sign-in screen prefills (a node URL
+        # from the console). Empty: the person enters one.
+        CalimeroClusterURL: ""
+        # The development cluster a fresh launch prefills ("Manually enter node
+        # URL"): `merod local`'s first node. It MUST stay a loopback URL (the
+        # simulator shares the host's network; ui.yml checks it).
+        # generate-ios.sh rewrites it to the Mac's LAN IP for a physical-device
+        # install and restores this file afterwards.
+        DefaultNodeURL: "http://localhost:2501"
         NSLocalNetworkUsageDescription: "Connect to a Calimero node running on your Mac over the local network for development."
         # http only to a node on the local network (localhost, *.local, an
         # IP literal such as the Mac's LAN IP generate-ios.sh bakes in for a
@@ -51,6 +48,11 @@ targets:
     sources:
       - Sources
       - Resources
+    # A passkey on a real cluster belongs to its relying party (the node's
+    # --rp-id): to sign in with the device's passkey, add an entitlements file
+    # with `com.apple.developer.associated-domains: [webcredentials:<rp-id>]`
+    # (and serve apple-app-site-association there). A development cluster
+    # (`merod local`) uses a software passkey and needs neither.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: network.calimero.merokit.sample
@@ -61,6 +63,9 @@ targets:
         product: MeroKit
       - package: MeroKit
         product: MeroKitUI
+      # `-uitest-mock` runs the UI against an in-app cluster (FakeCloud).
+      - package: MeroKit
+        product: MeroKitTestSupport
 
   MeroSampleAppUITests:
     type: bundle.ui-testing

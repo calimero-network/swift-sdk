@@ -1,189 +1,56 @@
 ---
-title: Mobile App Session
-description: MeroAppSession — sign-in, relay, namespaces and contract calls for a Calimero mobile app, delegated end to end, with an in-memory fake for view-model tests.
+title: The app layer
+description: MeroAppSession, MeroAppBackend and ContextContract on Calimero 1.0 — the layer native apps build on, and how its names map to orgs, teams and app instances.
 sidebar:
-  order: 7
+  order: 2
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-A Calimero app on a phone holds no node. The person signs in with their
-Calimero account (the wallet certifies this device's key), the Cloud manager
-names the relay that serves the account, and everything goes through that
-relay: reads are its account-scoped query, writes are warrants the device key
-signs, namespaces and subgroups are governance ops it posts. `MeroAppSession`
-is that whole session, the same for every app; only the contract's methods are
-the app's own. It is the Swift twin of the Kotlin SDK's `MeroAppSession`
-(`mero-compose`), with the same names.
-
-| Type | Module | What it is |
-| --- | --- | --- |
-| `MeroAppSession` | MeroKitUI | The signed-in account: sign-in/out, restore, deep links, and the backend. |
-| `MeroAppBackend` | MeroKit | What screens need from the account: namespaces, subgroups, contexts, invitations, live events, the contract. |
-| `DelegatedAppBackend` | MeroKitUI | The real backend, over the account's relay. |
-| `ContextContract` | MeroKit | `query` / `execute` in any context: `RelayContextContract`, or `NoRelayContextContract`. |
-| `ContextContractCalling` | MeroKit | One context's contract as a generated client calls it (`contract.bound(to:)`). |
-| `InMemoryAppBackend`, `RecordingContextContract` | MeroKitTestSupport | Fakes for view-model tests. |
-
-## Set up
+`MeroAppSession` (MeroKitUI) is an app's signed-in account. Its `backend`
+(`any MeroAppBackend`, a `CloudAppBackend` when signed in) is what screens
+use; tests hand view models `InMemoryAppBackend` instead.
 
 ```swift
-import MeroKitUI
-
-@main
-struct BoardApp: App {
-  @StateObject private var session = MeroAppSession(
-    packageName: "com.example.board",
-    callback: .https(host: "board.example.com", path: "/enrol"))
-
-  var body: some Scene {
-    WindowGroup {
-      RootView()
-        .environmentObject(session)
-        .task { await session.restore() }
-        .onOpenURL { url in Task { await session.handle(url) } }
-    }
-  }
-}
+@StateObject var session = MeroAppSession(
+    packageName: "com.calimero.chat", callback: .scheme("merochat", path: "consent"),
+    config: MeroProviderConfig(nodeURL: "https://node.example"))
 ```
 
-The convenience initializer keeps the device key, session and tokens in the
-Keychain. Pass `config:` for another registry or Cloud manager, `walletURL:`
-for another wallet, or build the `MeroClient` yourself and use
-`MeroAppSession(client:callback:options:)`.
-
-- `restore()` reconnects a stored session and asks the Cloud manager again
-  which relay serves the account: a relayless account may have earned one.
-- `signIn()` opens the wallet; `signOut(forgetDevice:)` signs out.
-- `handle(_:)` takes any URL the system hands the app. A wallet callback
-  finishes a sign-in (one that arrives during `restore()` waits for it). One
-  of this app's invitation links lands in `pendingInvitation` for the person
-  to confirm; `dismissPendingInvitation()` clears it. Another app's
-  invitation is not taken.
-- `isSignedIn`, `account`, `applicationId`, `hasRelay`, `canSubscribe` and
-  `contract` describe the session.
-
-## Screens and view models
-
-`session.backend` is an `any MeroAppBackend`, or `nil` when signed out. It is
-rebuilt only when the session changes (the account, its relay, its relay
-session, the application id); `session.revision` moves when it is, so a screen
-can `.task(id: session.revision)` to re-read without resetting on unrelated
-updates.
-
-```swift
-@MainActor
-final class BoardsModel: ObservableObject {
-  @Published var boards: [AppNamespace] = []
-  let backend: any MeroAppBackend
-  let applicationId: String
-
-  init(backend: any MeroAppBackend, applicationId: String) {
-    self.backend = backend
-    self.applicationId = applicationId
-  }
-
-  func load() async throws { boards = try await backend.listNamespaces() }
-
-  func create(_ name: String) async throws {
-    let founded = try await backend.foundNamespace(name: name)
-    let group = try await backend.createSubgroup(namespaceId: founded.namespaceId, name: "main", isPublic: true)
-    _ = try await backend.createContext(
-      groupId: group, applicationId: applicationId, name: "main", initArgs: ["title": .string(name)])
-  }
-}
-
-// BoardsModel(backend: backend, applicationId: session.applicationId ?? "")
-```
-
-The words are the protocol's: a **namespace** is what an app calls a
-workspace, team or space; a **subgroup** is a group under it (a channel, a
-board); a **context** runs the contract in a group.
-
-| `MeroAppBackend` | Through the relay |
+| Member | |
 | --- | --- |
-| `listNamespaces()` | The account's namespaces, only this app's once its application id is known |
-| `listSubgroups(namespaceId:)` | Subgroups, each with its context ids |
-| `listContexts(groupId:)` | The contexts directly in a group (a namespace's root) |
-| `isMember(contextId:)` / `joinContext(contextId:)` | Membership of an open subgroup's context |
-| `foundNamespace(name:)` | Found and name a namespace running this app; ask the cloud to host it |
-| `createSubgroup(namespaceId:name:isPublic:)` | An open or restricted subgroup |
-| `createContext(groupId:applicationId:name:initArgs:)` | A context, with the contract's `init` arguments |
-| `createInvitation(namespaceId:)` | An invitation signed with the device key |
-| `joinNamespace(namespaceId:invitation:)` | Direct admission through an admitting relay |
-| `events(contextId:)` | Live events (finishes at once when `canSubscribe` is false: poll) |
-| `listContextEntries(groupId:)` | The contexts in a group, with their names |
-| `groupMetadata(groupId:)` / `contextMetadata(groupId:contextId:)` | A namespace's, subgroup's or context's name and data |
-| `setGroupName(groupId:name:)` / `setContextName(groupId:contextId:name:)` | Rename (`GroupMetadataSet` / `ContextMetadataSet`), keeping the data |
-| `uploadBlob(contextId:data:)` / `getBlob(blobId:contextId:)` | Attachments, through a context the account is a member of |
-| `leaveNamespace(namespaceId:)` / `leaveSubgroup(groupId:)` | `MemberLeft`: leaving a subgroup leaves its contexts |
-| `deleteSubgroup(groupId:)` / `removeContext(groupId:contextId:)` | `GroupDeleted` / `ContextDetached`, where the account may |
-| `listMembers(groupId:)` | Members with roles and names: a namespace's are the app's display names |
-| `setMemberRole(groupId:identity:role:)` / `removeMember(groupId:identity:)` | `MemberRoleSet` / `MemberRemoved` (admins) |
-| `setMemberName(groupId:name:)` | The account's own name there (`MemberMetadataSet`) |
+| `restore()`, `signIn()`, `signUp(name:)`, `signOut()`, `connect(nodeURL:allowMock:)` | sign-in |
+| `backend`, `revision`, `isSignedIn`, `account`, `applicationId`, `contract` | state |
+| `handle(url)`, `pendingInvitation`, `redeemPendingInvitation()`, `createInvitationLink(namespaceId:)` | invitations |
+| `pendingApprovals(org:)`, `requestConsent(_:)` | approvals |
 
-After `joinNamespace`, call `session.didJoinNamespace()`: a session that had
-no relay now has the admitting one, and reconnects to it.
+## Names
 
-### Invitations the web apps share
+The backend keeps the names it had before 1.0; each is one 1.0 concept:
 
-`AppInvitation` reads and writes the web apps' invitation tokens
-(`base58(deflate(JSON))`, the signed invitation wrapped with the namespace's
-name), so a link minted on the web is redeemed on the phone and the other way
-round:
+| App layer | Calimero 1.0 |
+| --- | --- |
+| namespace | organization (founded with metadata `{name, package}`) |
+| subgroup | team (`isPublic` → `join: everyone`) |
+| context | app instance (its app id) |
+| application | package |
+| `query` / `execute` | `POST /apps/{app}/views` / `intents` |
+| invitation (`OrgInvitation`, alias `SignedGroupOpenInvitation`) | invite token `inv_…` |
+| `hasRelay`, `canSubscribe` | always `true` once signed in |
 
-```swift
-guard let invite = AppInvitation.parse(pastedOrOpened, expectedSlug: "com.example.board") else { return }
-_ = try await backend.joinNamespace(namespaceId: invite.namespaceId, invitation: invite.invitation)
+`createContext(groupId:applicationId:name:initArgs:service:)` names one service
+of a multi-service package. `CloudAppBackend.client` is the full `CalimeroClient`.
 
-let link = try AppInvitation(invitation: try await backend.createInvitation(namespaceId: id), name: "Team")
-  .link(slug: "com.example.board", nameKey: "__teamName")   // the key your web build reads
+## Invitation links
+
+`https://links.calimero.network/<package>/join?invitation=<base58(deflate(json))>`,
+the JSON being `InvitationLinkPayload`:
+
+```json
+{"invitation":{"orgId":"…","token":"inv_…"},"namespaceId":"…","contextId":"…"}
 ```
 
-## Calling the contract
+## Tests
 
-```swift
-let posts = try await session.contract.query(contextId: id, method: "get_posts", args: ["limit": 20])
-_ = try await session.contract.execute(contextId: id, method: "post", args: ["text": "hi"])
-```
-
-`query` is `POST /admin-api/contexts/{id}/query` with the relay session's
-Bearer token (a warrant when there is no session yet, or when the method turns
-out to be a write); `execute` posts a warrant to `/admin-api/contexts/{id}/intents`.
-With no relay, both throw `AccountError.noRelay(method:)`.
-
-A client generated by `mero-devtools-js` takes one context's contract as a
-`ContextContractCalling` (JSON bytes in and out):
-
-```swift
-let board = BoardClient(session.contract.bound(to: contextId))
-```
-
-<Aside>
-The bound contract passes JSON through as text (`RelayClient.queryJSON` /
-`executeJSON`), never as a `JSONValue`, so a `u64` beyond 2^53 (a nanosecond
-timestamp, `u64::MAX`) arrives and comes back digit for digit. The
-`JSONValue` calls (`query(contextId:method:args:)`) hold numbers as `Double`;
-use the `argsJSON:` overloads, or `bound(to:)`, for such values.
-</Aside>
-
-## Testing view models
-
-`MeroKitTestSupport` ships `InMemoryAppBackend`: founding adds a namespace,
-creating a subgroup or context adds it (the creator is a member), joining makes
-the account a member, redeeming an invitation adds the namespace and gives a
-relayless account its relay. Its contract is a `RecordingContextContract` you
-script per method.
-
-```swift
-let backend = InMemoryAppBackend()
-backend.recording.setHandler { call in
-  call.method == "get_posts" ? .array([]) : nil
-}
-let model = BoardsModel(backend: backend, applicationId: backend.applicationId)
-try await model.create("Roadmap")
-XCTAssertEqual(backend.log.first, "foundNamespace Roadmap")
-
-backend.failure = URLError(.notConnectedToInternet)   // every admin call fails
-backend.emit(AppContextEvent(contextId: id, kind: "StateMutation"))
-```
+`MeroKitTestSupport` has `InMemoryAppBackend` and `RecordingContextContract`
+for view models, and `FakeCloudNode` + `FakeCloud` for the whole stack: a node
+that runs the real sealed channel and mock attestation, and an in-memory
+cluster behind it.
