@@ -611,11 +611,12 @@ struct OperationRunnerView: View {
         running = true
         let captured = inputs
         let cloud = session.cloud
+        let passkey = session.client.passkeyForNode()
         Task {
             do {
                 let result: String
                 if let cloud {
-                    result = try await op.run(cloud, captured)
+                    result = try await op.run(cloud, captured, passkey)
                 } else {
                     result = "Sign in first."
                 }

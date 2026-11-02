@@ -107,8 +107,11 @@ private let orgOps: [SDKOperation] = [
         fields: [.line("org", "Org id"), .line("team", "Team id")]
     ) { c, i in Fmt.json(try await c.getTeam(try field(i, "org"), try field(i, "team")).raw) },
     SDKOperation(
-        "invite", "Organizations", "invite", "Mint an invite token", fields: [.line("org", "Org id")]
-    ) { c, i in "Invite token: \(try await c.invite(try field(i, "org")))" },
+        "invite", "Organizations", "invite", "Mint an invite token (approved with your passkey)",
+        fields: [.line("org", "Org id")],
+        stepUp: { c, i, passkey in
+            "Invite token: \(try await c.invite(try field(i, "org"), passkey: try approver(passkey)))"
+        }),
     SDKOperation(
         "redeem", "Organizations", "redeemInvite", "Join an organization with an invite token",
         fields: [.line("token", "Token", "inv_…")]

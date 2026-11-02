@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 // Release and upgrade approvals as core's node reports them, and the consent
@@ -22,6 +23,10 @@ public struct Governance: Codable, Sendable, Equatable {
     public var releases: Authority
     public var appUpgrades: Authority
     public var outbound: Authority
+    /// Who may install apps: any account (`open`, left out) or granted deployers only.
+    public var deployments: DeploymentsRule?
+    /// Who grants deployers: the operator (left out) or the cluster's owner.
+    public var deployers: DeployersRule?
 }
 
 /// Whose approvals a report covers: an organization's, or the account's own apps.
@@ -245,6 +250,43 @@ public struct ConsentStarted: Codable, Sendable, Equatable {
     /// the person can check the page is the one the app asked for. `nil`
     /// from a node that predates it.
     public var code: String?
+}
+
+/// How ``CalimeroClient/openConsentPage(_:options:)`` sends the person to
+/// the page. (== mero-js `OpenConsentOptions`.)
+public struct OpenConsentOptions: Sendable {
+    /// Sends the person to the page's `url` (the system browser, say).
+    public var navigate: @Sendable (URL) async throws -> Void
+    /// Runs after the node answers and before navigating, with the answer:
+    /// show the person `started.code` here so they can check the page shows
+    /// the same. Answer `false` and the page is not opened (the request stays
+    /// on the node until it expires).
+    public var confirm: (@Sendable (ConsentStarted) async -> Bool)?
+
+    public init(
+        navigate: @escaping @Sendable (URL) async throws -> Void,
+        confirm: (@Sendable (ConsentStarted) async -> Bool)? = nil
+    ) {
+        self.navigate = navigate
+        self.confirm = confirm
+    }
+}
+
+private let crockford = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+
+/// The confirmation code the node's consent page shows for `requestId`: the
+/// first 30 bits of SHA-256 of its UTF-8 bytes, big-endian, as six Crockford
+/// base32 characters written `XXX-XXX` (core's consent page). Compare it with
+/// ``ConsentStarted/code`` to check the node's answer. (== mero-js `confirmationCode`.)
+public func confirmationCode(_ requestId: String) -> String {
+    let h = Array(SHA256.hash(data: Data(requestId.utf8)))
+    let word = UInt32(h[0]) << 24 | UInt32(h[1]) << 16 | UInt32(h[2]) << 8 | UInt32(h[3])
+    var code = ""
+    for i in 0..<6 {
+        if i == 3 { code += "-" }
+        code.append(crockford[Int((word >> UInt32(27 - 5 * i)) & 31)])
+    }
+    return code
 }
 
 /// `pending`, `approved` or `declined`. (== mero-js `ConsentStatus`.)

@@ -4,44 +4,72 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Intel's collateral for a quote, fetched from Intel's Provisioning
-/// Certification Service. A Calimero 1.0 node sends no collateral with its
-/// quote (it could not forge Intel's signatures anyway), so the client fetches
-/// it. Port of `getCollateralFromPcs` from `@phala/dcap-qvl`, which mero-js
-/// uses by default. (== mero-js `CloudReleasePolicy.fetchCollateral`'s default.)
+/// Intel's collateral for a quote, fetched from a PCCS: the cloud's mirror
+/// (``TeeTrust/defaultCollateralMirror``) or Intel's Provisioning
+/// Certification Service itself. A Calimero 1.0 node sends no collateral with
+/// its quote (it could not forge Intel's signatures anyway), so the client
+/// fetches it. Port of `getCollateral` / `getCollateralFromPcs` from
+/// `@phala/dcap-qvl`, which mero-js uses by default. (== mero-js
+/// `CloudReleasePolicy.fetchCollateral`'s default.)
 public enum IntelPcs {
     /// Intel's PCS.
     public static let defaultBaseURL = "https://api.trustedservices.intel.com"
     /// Where Intel publishes its SGX root CA's CRL.
     public static let rootCaCrlURL = "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der"
 
-    /// The collateral for `quote`: the PCK CRL for the CA that issued its PCK
-    /// certificate, the TCB info for its platform's FMSPC, the TD QE identity
-    /// and the root CA's CRL, each with the issuer chain Intel sent. Nothing
-    /// here is trusted: ``Dcap/verify(_:collateral:nowSecs:)`` checks every
-    /// signature up to Intel's root.
+    /// The collateral for `quote` from the PCCS at `baseURL` (Intel's PCS by
+    /// default): the PCK CRL for the CA that issued its PCK certificate, the
+    /// TCB info for its platform's FMSPC, the TD QE identity and the root CA's
+    /// CRL (from the PCCS's `rootcacrl` when it serves one, else Intel's),
+    /// each with the issuer chain sent. Nothing here is trusted:
+    /// ``Dcap/verify(_:collateral:nowSecs:)`` checks every signature up to
+    /// Intel's root.
     public static func collateral(
         for quote: Data, baseURL: String = defaultBaseURL, session: URLSession = .shared
     ) async throws -> DcapCollateral {
         let platform = try platform(of: quote)
         let (fmspc, ca, tdx) = (platform.fmspc, platform.ca, platform.tdx)
-        var base = baseURL
-        while base.hasSuffix("/") { base.removeLast() }
+        let base = normalized(baseURL)
         let kind = tdx ? "tdx" : "sgx"
         async let pck = get("\(base)/sgx/certification/v4/pckcrl?ca=\(ca)&encoding=der", session: session)
         async let tcb = get("\(base)/\(kind)/certification/v4/tcb?fmspc=\(fmspc)", session: session)
-        async let qe = get("\(base)/\(kind)/certification/v4/qe/identity", session: session)
-        async let root = get(rootCaCrlURL, session: session)
+        async let qe = get("\(base)/\(kind)/certification/v4/qe/identity?update=standard", session: session)
+        async let root = rootCrl(base, session: session)
         let (pckCrl, tcbInfo, qeIdentity, rootCrl) = try await (pck, tcb, qe, root)
         let tcbSignature = try signatureOf(tcbInfo.body)
         let qeSignature = try signatureOf(qeIdentity.body)
         return DcapCollateral(
-            pckCrlIssuerChain: try chain(pckCrl, "SGX-PCK-CRL-Issuer-Chain"), rootCaCrl: rootCrl.body,
+            pckCrlIssuerChain: try chain(pckCrl, "SGX-PCK-CRL-Issuer-Chain"), rootCaCrl: rootCrl,
             pckCrl: pckCrl.body,
             tcbInfoIssuerChain: try chain(tcbInfo, "SGX-TCB-Info-Issuer-Chain", "TCB-Info-Issuer-Chain"),
             tcbInfo: try rawField(tcbInfo.body, "tcbInfo"), tcbInfoSignature: tcbSignature,
             qeIdentityIssuerChain: try chain(qeIdentity, "SGX-Enclave-Identity-Issuer-Chain"),
             qeIdentity: try rawField(qeIdentity.body, "enclaveIdentity"), qeIdentitySignature: qeSignature)
+    }
+
+    /// `baseURL` without a trailing slash or a `/{sgx,tdx}/certification/v4` suffix.
+    static func normalized(_ baseURL: String) -> String {
+        var base = baseURL
+        while base.hasSuffix("/") { base.removeLast() }
+        for suffix in ["/sgx/certification/v4", "/tdx/certification/v4"] where base.hasSuffix(suffix) {
+            base.removeLast(suffix.count)
+        }
+        return base
+    }
+
+    /// The root CA's CRL: a PCCS serves it hex-encoded at `rootcacrl`; Intel's
+    /// PCS does not, and a PCCS that fails to falls back to Intel's.
+    static func rootCrl(_ base: String, session: URLSession) async throws -> Data {
+        if !base.hasPrefix(defaultBaseURL),
+            let fetched = try? await get("\(base)/sgx/certification/v4/rootcacrl", session: session),
+            let crl = try? Hex.decodeUnsized(
+                String(decoding: fetched.body, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines),
+                label: "rootcacrl"),
+            !crl.isEmpty
+        {
+            return crl
+        }
+        return try await get(rootCaCrlURL, session: session).body
     }
 
     /// The quote's platform: its PCK certificate's FMSPC (hex), the CA that

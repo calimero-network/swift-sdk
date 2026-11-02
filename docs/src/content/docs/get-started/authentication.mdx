@@ -42,7 +42,17 @@ in the Keychain (`KeychainCloudSessionStore`); `MeroClient` does this for you.
 `412 CONFIRM_REQUIRED` asks for a passkey assertion over the exact request:
 the `*Confirmed` methods (`callConfirmed`, `postConfirmed`, `deleteOrg`,
 `upgradeApp(passkey:)`, `approveRelease`, …) answer it with the passkey you
-give them and send the request once more with `confirm`.
+give them and send the request once more with `confirm`. On core rc.7+ these
+are step-ups too, so they take a `passkey:`: adding (`addPasskey(_:approver:)`,
+approved by a passkey the account already has) and removing passkeys, creating
+API keys, setting and removing members and team members, capabilities, and
+creating invites. Redeeming an invite is not. `CalimeroAppBackend` takes the
+signed-in passkey (`MeroAppSession` passes it) for its member and invite calls.
+
+The consent page shows a confirmation code (`XXX-XXX`): `ConsentStarted.code`.
+`openConsentPage(_:options:)` and `MeroAppSession.requestConsent(_:confirm:)`
+check it is `confirmationCode(requestId)` (else `CONSENT_CODE_MISMATCH`) and
+let the app show it before the page opens.
 
 ## Approvals happen on the node's consent page
 

@@ -117,7 +117,32 @@ public final class MeroClient: ObservableObject {
         policy.allowMock = allowMock
         let client = CalimeroClient(
             CalimeroClientOptions(baseUrl: trimmed, nodes: nodes, policy: policy, session: urlSession))
-        self.nodeURL = trimmed
+        adopt(client, nodeURL: trimmed, nodes: nodes, allowMock: allowMock)
+    }
+
+    /// Talk to the Calimero Cloud cluster named `cluster`, its nodes read from
+    /// the node directory (``CalimeroClient/connect(_:)``), those in `zone`
+    /// first; the client fails over between them. Every node is verified as
+    /// ``MeroProviderConfig/policy`` says. Returns whether the directory
+    /// named a node; the failure is in ``errorMessage``.
+    @discardableResult
+    public func connect(cluster: String, zone: String? = nil, directory: String = defaultDirectory) async -> Bool {
+        do {
+            let client = try await CalimeroClient.connect(
+                CalimeroConnectOptions(
+                    cluster: cluster, policy: config.policy, directory: directory, zone: zone, session: urlSession))
+            let nodes = await client.nodes
+            adopt(client, nodeURL: nodes[0], nodes: Array(nodes.dropFirst()), allowMock: config.policy.allowMock)
+            errorMessage = nil
+            return true
+        } catch {
+            errorMessage = Self.describe(error)
+            return false
+        }
+    }
+
+    private func adopt(_ client: CalimeroClient, nodeURL: String, nodes: [String], allowMock: Bool) {
+        self.nodeURL = nodeURL
         self.nodes = nodes
         self.allowMock = allowMock
         cloud = client
@@ -229,16 +254,16 @@ public final class MeroClient: ObservableObject {
     /// (or the sheet is dismissed). `nil` on a failure, in ``errorMessage``.
     public func requestConsent(
         _ request: (_ returnTo: String) -> ConsentRequest, callback: CloudCallback,
-        opener: any WebAuthenticating = MeroClient.defaultOpener()
+        opener: any WebAuthenticating = MeroClient.defaultOpener(),
+        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async -> ConsentResult? {
         guard let cloud else {
             errorMessage = "Not connected to a node."
             return nil
         }
         do {
-            let started = try await cloud.requestConsent(request(callback.url))
-            guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
-            _ = try? await opener.authenticate(url: url, callback: callback)
+            let (started, _) = try await ConsentLauncher.request(
+                client: cloud, request: request(callback.url), callback: callback, opener: opener, confirm: confirm)
             return try await cloud.consentResult(started.requestId)
         } catch {
             errorMessage = Self.describe(error)

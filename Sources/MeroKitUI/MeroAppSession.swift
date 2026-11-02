@@ -36,14 +36,21 @@ public enum ConsentLauncher {
         try? await opener.authenticate(url: url, callback: callback)
     }
 
-    /// ``CalimeroClient/openConsentPage(_:navigate:)`` in the system browser.
-    /// Answers the request once the page sent the person back (or was dismissed).
+    /// ``CalimeroClient/openConsentPage(_:options:)`` in the system browser.
+    /// A `code` the node answers that is not the page's
+    /// (``confirmationCode(_:)``) throws `CONSENT_CODE_MISMATCH`. `confirm`
+    /// runs before the page opens, with the node's answer: show the person
+    /// its `code` there; answer `false` and the page is not opened. Answers
+    /// the request once the page sent the person back (or was dismissed).
     @MainActor
     public static func request(
         client: CalimeroClient, request: ConsentRequest, callback: CloudCallback,
-        opener: any WebAuthenticating = MeroClient.defaultOpener()
+        opener: any WebAuthenticating = MeroClient.defaultOpener(),
+        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async throws -> (started: ConsentStarted, returned: URL?) {
         let started = try await client.requestConsent(request)
+        try CalimeroClient.checkConsentCode(started)
+        if let confirm, !(await confirm(started)) { return (started, nil) }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
         return (started, await open(url, callback: callback, opener: opener))
     }
@@ -254,12 +261,13 @@ public final class MeroAppSession: ObservableObject {
     /// ``consentResult`` holds the node's decision. Answers the request.
     @discardableResult
     public func requestConsent(
-        _ request: ConsentRequest, opener: any WebAuthenticating = MeroClient.defaultOpener()
+        _ request: ConsentRequest, opener: any WebAuthenticating = MeroClient.defaultOpener(),
+        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async throws -> ConsentStarted {
         guard let cloud = client.cloud else { throw SignedOutError(method: "requestConsent") }
         consentResult = nil
         let (started, returned) = try await ConsentLauncher.request(
-            client: cloud, request: request, callback: callback, opener: opener)
+            client: cloud, request: request, callback: callback, opener: opener, confirm: confirm)
         if let returned { await handle(returned) }
         return started
     }
@@ -276,7 +284,7 @@ public final class MeroAppSession: ObservableObject {
         if let cloud = client.cloud, let account = client.account {
             backend = CalimeroAppBackend(
                 client: cloud, account: account, packageName: client.config.packageName ?? "",
-                packageVersion: client.config.packageVersion)
+                packageVersion: client.config.packageVersion, passkey: client.passkeyForNode())
         } else {
             backend = nil
         }

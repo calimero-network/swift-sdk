@@ -27,7 +27,8 @@ final class CalimeroAppBackendTests: XCTestCase {
             CalimeroClientOptions(
                 baseUrl: "https://node.test", policy: .development, session: MockURLProtocol.makeSession()))
         try await client.signIn(SoftPasskey())
-        return CalimeroAppBackend(client: client, account: FakeCloud.me, packageName: package)
+        return CalimeroAppBackend(
+            client: client, account: FakeCloud.me, packageName: package, passkey: SoftPasskey())
     }
 
     func testFoundsAnOrgForTheAppAndListsOnlyThisAppsOrgs() async throws {
@@ -109,9 +110,25 @@ final class CalimeroAppBackendTests: XCTestCase {
         XCTAssertEqual(cluster.orgs[org]?.members["acc_guest"], "member")
         try await backend.removeMember(groupId: org, identity: "acc_guest")
         XCTAssertNil(cluster.orgs[org]?.members["acc_guest"])
+        XCTAssertEqual(cluster.stepUps, 2, "a role change and a removal are passkey step-ups")
         try await backend.setGroupName(groupId: org, name: "Acme Inc")
         let renamed = try await backend.groupMetadata(groupId: org)
         XCTAssertEqual(renamed?.name, "Acme Inc")
         XCTAssertEqual(renamed?.data["package"], "com.calimero.chat")
+    }
+
+    func testStepUpsWithoutAPasskeyThrowPasskeyRequired() async throws {
+        let client = CalimeroClient(
+            CalimeroClientOptions(
+                baseUrl: "https://node.test", policy: .development, session: MockURLProtocol.makeSession()))
+        try await client.signIn(SoftPasskey())
+        let bare = CalimeroAppBackend(client: client, account: FakeCloud.me, packageName: "com.calimero.chat")
+        let org = try await bare.foundNamespace(name: "Acme").namespaceId
+        do {
+            _ = try await bare.createInvitation(namespaceId: org)
+            XCTFail("expected PasskeyRequired")
+        } catch let error as PasskeyRequired {
+            XCTAssertEqual(error.method, "createInvitation")
+        }
     }
 }

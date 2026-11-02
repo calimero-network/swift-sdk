@@ -26,11 +26,23 @@ struct SDKOperation: Identifiable, Sendable {
     let name: String
     let summary: String
     let fields: [OpField]
-    let run: @Sendable (CalimeroClient, [String: String]) async throws -> String
+    /// Runs over the client, the form's inputs and the signed-in passkey,
+    /// which approves step-ups (`412 CONFIRM_REQUIRED`).
+    let run: @Sendable (CalimeroClient, [String: String], (any PasskeyProvider)?) async throws -> String
 
     init(
         _ id: String, _ category: String, _ name: String, _ summary: String, fields: [OpField] = [],
         run: @escaping @Sendable (CalimeroClient, [String: String]) async throws -> String
+    ) {
+        self.init(id, category, name, summary, fields: fields, stepUp: { c, i, _ in try await run(c, i) })
+    }
+
+    /// An operation the node approves with the account's passkey.
+    init(
+        _ id: String, _ category: String, _ name: String, _ summary: String, fields: [OpField] = [],
+        stepUp run:
+            @escaping @Sendable (CalimeroClient, [String: String], (any PasskeyProvider)?) async throws
+            -> String
     ) {
         self.id = id
         self.category = category
@@ -39,6 +51,12 @@ struct SDKOperation: Identifiable, Sendable {
         self.fields = fields
         self.run = run
     }
+}
+
+/// The passkey a step-up needs, or a refusal to run without one.
+func approver(_ passkey: (any PasskeyProvider)?) throws -> any PasskeyProvider {
+    guard let passkey else { throw AccountError.notSignedIn("this needs your passkey's approval") }
+    return passkey
 }
 
 // MARK: - Rendering / decoding helpers

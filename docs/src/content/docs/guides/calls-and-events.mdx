@@ -37,8 +37,8 @@ iterating) to close the stream.
 | --- | --- |
 | `createOrg(name)`, `getOrg(org)`, `setOrgMetadata` | `/orgs`, `/orgs/{org}` |
 | `createTeam(org, name:, join: .everyone/.invite)`, `getTeam`, `updateTeam`, `deleteTeam` | `/orgs/{org}/teams/…` |
-| `setMember`, `removeMember`, `setTeamMember`, `setCapabilities` | `/orgs/{org}/members`, `…/capabilities` |
-| `invite(org, role:, teams:)` → `inv_…` | `POST /orgs/{org}/invites` |
+| `setMember`, `removeMember`, `setTeamMember`, `removeTeamMember`, `setCapabilities` (each with `passkey:`) | `/orgs/{org}/members`, `…/capabilities` |
+| `invite(org, role:, passkey:, teams:)` → `inv_…` | `POST /orgs/{org}/invites` |
 | `redeemInvite(token)` | `POST /invites/{token}/redeem` |
 | `createApp(name, bundle: .package(…), org:, access: .team(id))` | `POST /apps` |
 
@@ -46,6 +46,10 @@ iterating) to close the stream.
 
 ## Blobs and presence
 
-`uploadBlob(app, data)`, `downloadBlob(app, id)`, `listBlobs`, `blobInfo`,
-`deleteBlob` on `/apps/{app}/blobs`; `publishPresence`, `presence`,
+`uploadBlob(app, data, contentType:)`, `downloadBlob(app, id)`,
+`blobContent(app, id, grant:)` (bytes and content type),
+`downloadBlobGranted(app, id, grant:)` (no session: a grant one of the app's
+runs handed out), `listBlobs`, `blobInfo`, `deleteBlob` on
+`/apps/{app}/blobs`; `appXcalls(app)` for a component app's outbox and dead
+letters; `publishPresence`, `presence`,
 `presenceStream` on `/apps/{app}/presence`.

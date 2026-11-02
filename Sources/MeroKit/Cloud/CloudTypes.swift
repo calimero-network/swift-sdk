@@ -118,12 +118,14 @@ public struct AppInfo: Codable, Sendable, Equatable, Identifiable {
     public var bundle: String
     public var package: String?
     public var version: String?
+    /// The deployment it was created from, if any.
+    public var deployment: String?
 
     public var id: String { appId }
 
     public init(
         appId: String, name: String, owner: String, org: String? = nil, bundle: String = "", package: String? = nil,
-        version: String? = nil
+        version: String? = nil, deployment: String? = nil
     ) {
         self.appId = appId
         self.name = name
@@ -132,6 +134,7 @@ public struct AppInfo: Codable, Sendable, Equatable, Identifiable {
         self.bundle = bundle
         self.package = package
         self.version = version
+        self.deployment = deployment
     }
 }
 

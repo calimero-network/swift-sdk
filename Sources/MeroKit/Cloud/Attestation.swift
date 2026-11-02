@@ -18,7 +18,7 @@ import FoundationNetworking
 // `minReleaseVersion`; its `published-mrtds.json` is fetched and its Sigstore
 // signature checked against the node release workflow; the quote's signature
 // chain and TCB status are checked against Intel's collateral (fetched here
-// from Intel's PCS: the node sends none); the TD must not be a debug TD; and
+// from the cloud's PCCS mirror, or Intel's PCS: the node sends none); the TD must not be a debug TD; and
 // its registers must be the release's image for the trusted profile,
 // `locked-read-only` unless a debug profile is explicitly allowed. Nothing
 // here reads the environment: mock quotes pass only with `allowMock`.
@@ -52,8 +52,19 @@ public struct CloudReleasePolicy: Sendable {
     public var releaseSource: ReleaseSource
     /// DCAP verification; ``Dcap/verify(_:collateral:nowSecs:)`` by default.
     public var dcapVerify: DcapVerify
-    /// Intel's collateral for a quote; ``IntelPcs/collateral(for:baseURL:session:)`` by default.
+    /// Intel's collateral for a quote; ``IntelPcs/collateral(for:baseURL:session:)``
+    /// from ``collateralSource`` by default.
     public var fetchCollateral: (@Sendable (Data) async throws -> DcapCollateral)?
+    /// Where the default ``fetchCollateral`` gets Intel's collateral: a PCCS
+    /// base URL (default ``TeeTrust/defaultCollateralMirror``, the cloud's
+    /// mirror), or `"intel"` for Intel's PCS itself. Untrusted either way:
+    /// every item is signed by Intel and verified up to Intel's root CA.
+    public var collateralSource: String
+    /// Refuse collateral whose TCB info Intel issued more than this many days
+    /// ago. `nil`: only Intel's own `nextUpdate` (about 30 days out) bounds
+    /// how old it may be. A mirror cannot forge collateral, but it can replay
+    /// an older, still valid copy; this shortens that window.
+    public var maxCollateralAgeDays: Double?
     /// Override the release signer (defaults to the mero-tee node release workflow).
     public var identity: String?
     public var issuer: String?
@@ -64,7 +75,9 @@ public struct CloudReleasePolicy: Sendable {
         minReleaseVersion: String, profile: String = TeeTrust.productionProfile, allowDebugProfile: Bool = false,
         releaseSource: ReleaseSource = .mirror(TeeTrust.defaultReleaseMirror),
         dcapVerify: @escaping DcapVerify = { try Dcap.verify($0, collateral: $1, nowSecs: $2) },
-        fetchCollateral: (@Sendable (Data) async throws -> DcapCollateral)? = nil, identity: String? = nil,
+        fetchCollateral: (@Sendable (Data) async throws -> DcapCollateral)? = nil,
+        collateralSource: String = TeeTrust.defaultCollateralMirror, maxCollateralAgeDays: Double? = nil,
+        identity: String? = nil,
         issuer: String? = nil, now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.minReleaseVersion = minReleaseVersion
@@ -73,6 +86,8 @@ public struct CloudReleasePolicy: Sendable {
         self.releaseSource = releaseSource
         self.dcapVerify = dcapVerify
         self.fetchCollateral = fetchCollateral
+        self.collateralSource = collateralSource
+        self.maxCollateralAgeDays = maxCollateralAgeDays
         self.identity = identity
         self.issuer = issuer
         self.now = now
@@ -221,12 +236,46 @@ private func verifyRelease(
         TrustSignedReleaseOptions(
             release: release, profile: policy.profile, minReleaseVersion: policy.minReleaseVersion,
             allowDebugProfile: policy.allowDebugProfile, identity: policy.identity, issuer: policy.issuer))
-    let fetchCollateral =
-        policy.fetchCollateral ?? { @Sendable quote in try await IntelPcs.collateral(for: quote, session: session) }
+    let source = policy.collateralSource == "intel" ? IntelPcs.defaultBaseURL : policy.collateralSource
+    let fetchCollateral = freshCollateral(
+        policy.fetchCollateral ?? { @Sendable quote in
+            try await IntelPcs.collateral(for: quote, baseURL: source, session: session)
+        }, maxCollateralAgeDays: policy.maxCollateralAgeDays, now: policy.now)
     let verifier = try createQuoteVerifier(
         QuoteVerifierOptions(
             trusting: trusted, dcapVerify: policy.dcapVerify, fetchCollateral: fetchCollateral, now: policy.now))
     return try await verifier.verify(args)
+}
+
+/// `fetch`, refusing collateral older than `maxCollateralAgeDays` (by its TCB
+/// info's `issueDate`). (== mero-js `freshCollateral`.)
+public func freshCollateral(
+    _ fetch: @escaping @Sendable (Data) async throws -> DcapCollateral, maxCollateralAgeDays: Double?,
+    now: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+) -> @Sendable (Data) async throws -> DcapCollateral {
+    guard let maxDays = maxCollateralAgeDays else { return fetch }
+    return { quote in
+        let collateral = try await fetch(quote)
+        let tcb = try? MeroJSON.decode(JSONValue.self, from: Data(collateral.tcbInfo.utf8))
+        guard let raw = tcb?["issueDate"]?.stringValue, let issued = parseRfc3339(raw) else {
+            throw TeeTrustError("The quote's collateral names no TCB info issue date")
+        }
+        let ageDays = (Double(now()) - issued.timeIntervalSince1970 * 1000) / 86_400_000
+        if ageDays > maxDays {
+            throw TeeTrustError(
+                "The quote's collateral was issued \(Int(ageDays.rounded(.down))) days ago, more than the "
+                    + "\(String(format: "%g", maxDays)) this client accepts")
+        }
+        return collateral
+    }
+}
+
+private func parseRfc3339(_ raw: String) -> Date? {
+    let plain = ISO8601DateFormatter()
+    if let date = plain.date(from: raw) { return date }
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: raw)
 }
 
 /// The oldest mero-tee release a production client trusts by default (core's

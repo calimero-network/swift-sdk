@@ -26,6 +26,8 @@ public final class FakeCloud: @unchecked Sendable {
     public var teams: [String: (org: String, name: String, join: String, members: [String: String])] = [:]
     public var apps: [String: (name: String, org: String?, team: String?, package: String)] = [:]
     private var next = 0
+    /// How many `412 CONFIRM_REQUIRED` step-ups the cluster asked for.
+    public private(set) var stepUps = 0
 
     public init() {}
 
@@ -48,6 +50,18 @@ public final class FakeCloud: @unchecked Sendable {
                 if w == "*" { wild.append(p) } else if w != p { return nil }
             }
             return wild
+        }
+        // Core's passkey step-ups (412 CONFIRM_REQUIRED, then the same body
+        // with `confirm`): memberships and invite creation.
+        let stepUp =
+            on("POST", "orgs/*/members") != nil || on("DELETE", "orgs/*/members/*") != nil
+            || on("POST", "orgs/*/invites") != nil || on("POST", "orgs/*/teams/*/members") != nil
+            || on("DELETE", "orgs/*/teams/*/members/*") != nil || on("POST", "orgs/*/capabilities") != nil
+        if stepUp, body["confirm"] == nil {
+            stepUps += 1
+            return .error(
+                412, "CONFIRM_REQUIRED",
+                details: ["challengeId": "su", "challenge": "AAAA", "rpId": "localhost"])
         }
         let w: [String]
         switch true {

@@ -37,6 +37,10 @@ extension TeeTrust {
     /// is given. Only a transport: what it serves is verified, so it can fail
     /// to answer but cannot make a release trusted. (== mero-js `DEFAULT_RELEASE_MIRROR`.)
     public static let defaultReleaseMirror = "https://cloud.calimero.network"
+    /// Where clients get Intel's collateral for a quote: the cloud's mirror of
+    /// the PCCS paths ``IntelPcs`` reads. It only carries Intel-signed items.
+    /// (== mero-js `DEFAULT_COLLATERAL_MIRROR`.)
+    public static let defaultCollateralMirror = "\(defaultReleaseMirror)/api/tee/pcs"
 }
 
 /// A node release as the servers hand it out, wrapped as `{"data": ...}`: the

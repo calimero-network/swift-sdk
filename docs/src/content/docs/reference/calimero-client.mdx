@@ -6,18 +6,25 @@ sidebar:
 ---
 
 `CalimeroClient(CalimeroClientOptions(baseUrl:nodes:policy:session:retry:))`,
-an actor. Method names follow mero-js's `CalimeroClient`.
+or `CalimeroClient.connect(CalimeroConnectOptions(cluster:policy:zone:))` to
+read a Calimero Cloud cluster's nodes from the node directory. An actor.
+Method names follow mero-js's `CalimeroClient`.
+
+Methods marked with a passkey (`passkey:`) are step-ups: the node answers
+`412 CONFIRM_REQUIRED` and the client answers with that passkey's assertion.
 
 | Group | Methods |
 | --- | --- |
-| Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `nodeUrl`, `nodeUrls` |
-| Identity | `signUp`, `signIn`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey`, `removePasskey`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey`, `revokeApiKey` |
+| Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `nodeUrl`, `nodes`, `connect` |
+| Identity | `signUp`, `signIn`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey(_:approver:)`, `removePasskey(_:passkey:)`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey(…, passkey:)`, `revokeApiKey` |
 | Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed` |
-| Bundles, blobs | `uploadBundle`, `uploadBlob`, `downloadBlob`, `listBlobs`, `blobInfo`, `deleteBlob` |
+| Bundles, blobs | `uploadBundle`, `uploadBlob(_:_:contentType:)`, `downloadBlob`, `downloadBlobGranted`, `blobContent`, `listBlobs`, `blobInfo`, `deleteBlob` |
 | Packages | `uploadPackage`, `installPackage`, `packages`, `package`, `uninstallPackage` |
-| App instances | `listApps`, `getApp`, `createApp`, `deleteApp`, `setAccess`, `setAppMetadata`, `appStorage`, `appAbi`, `transferApp`, `upgradeApp` |
+| App instances | `listApps`, `getApp`, `createApp`, `deleteApp`, `setAccess`, `setAppMetadata`, `appStorage`, `appAbi`, `appXcalls`, `transferApp`, `upgradeApp` |
 | Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events` |
 | Presence, aliases | `publishPresence`, `presence`, `presenceStream`, `setAlias`, `aliases`, `alias`, `deleteAlias` |
-| Organizations | `createOrg`, `getOrg`, `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember`, `removeMember`, `setCapabilities`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember`, `removeTeamMember`, `invite`, `redeemInvite` |
+| Organizations | `createOrg`, `getOrg`, `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember(…, passkey:)`, `removeMember(…, passkey:)`, `setCapabilities(…, passkey:)`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember(…, passkey:)`, `removeTeamMember(…, passkey:)`, `invite(…, passkey:)`, `redeemInvite` |
 | Approvals | `approveRelease`, `approveOutbound`, `appsReport`, `appsReportAll`, `releaseRules`, `pendingApprovals`, `requestConsent`, `openConsentPage`, `consentResult`, `waitForConsent`, `publisherBinding`, `bindPublisher`, `upgradePublished` |
+| Deployments | `createDeployment`, `deployments`, `deployment`, `deleteDeployment`, `offerApp`, `withdrawApp`, `deploymentOrgs`; `createApp(bundle: .package(…, deployment:))`; `pageDeployment(_:)`, `frontendManifest(_:)` |
+| Deployers | `grantDeployer`, `deployers`, `revokeDeployer` |
 | Operator | `opsApps`, `opsOrgs`, `setReleaseDeadline`, `liftReleaseDeadline` |

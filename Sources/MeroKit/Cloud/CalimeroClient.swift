@@ -9,9 +9,10 @@ public struct CalimeroClientOptions: Sendable {
     /// One node of the cluster: the one the client talks to first.
     public var baseUrl: String
     /// Other nodes of the same cluster, in the order to move to them when a
-    /// node answers `421 WRONG_NODE`. Each is attested under the same
-    /// ``policy`` before anything is sent to it. Without them a `421` reaches
-    /// the caller as ``WrongNode``.
+    /// node answers `421 WRONG_NODE` (its release may not serve this
+    /// account), or stays unavailable to a call or a view through all its
+    /// retries. Each is attested under the same ``policy`` before anything is
+    /// sent to it. Without them a `421` reaches the caller as ``WrongNode``.
     public var nodes: [String]
     public var policy: CloudPolicy
     /// Carries the attestation and the sealed envelopes. (mero-js's `fetch`.)
@@ -31,6 +32,51 @@ public struct CalimeroClientOptions: Sendable {
     }
 }
 
+/// How ``CalimeroClient/connect(_:)`` reaches a Calimero Cloud cluster by
+/// name. (== mero-js `CalimeroConnectOptions`.)
+public struct CalimeroConnectOptions: Sendable {
+    /// The cluster's name, e.g. `eu-shared-1`.
+    public var cluster: String
+    /// What every node must attest to before anything is sent to it.
+    public var policy: CloudPolicy
+    /// The node directory to ask; ``defaultDirectory`` by default.
+    public var directory: String
+    /// Try the nodes in this zone (e.g. `europe-west4-a`) first.
+    public var zone: String?
+    /// Carries the directory, the attestation and the sealed envelopes.
+    public var session: URLSession
+    /// How calls and views retry a 503 or a failed connection.
+    public var retry: CloudRetryOptions
+    /// Randomness for the weighted node order, in [0, 1).
+    public var random: @Sendable () -> Double
+
+    public init(
+        cluster: String, policy: CloudPolicy, directory: String = defaultDirectory, zone: String? = nil,
+        session: URLSession = .shared, retry: CloudRetryOptions = CloudRetryOptions(),
+        random: @escaping @Sendable () -> Double = { Double.random(in: 0..<1) }
+    ) {
+        self.cluster = cluster
+        self.policy = policy
+        self.directory = directory
+        self.zone = zone
+        self.session = session
+        self.retry = retry
+        self.random = random
+    }
+}
+
+/// Where a client made by ``CalimeroClient/connect(_:)`` re-reads its node list.
+private struct DirectorySource {
+    let directory: String
+    let cluster: String
+    let zone: String?
+    let random: @Sendable () -> Double
+    /// When the listing is due to be read again.
+    var due: Date
+    /// The re-read under way, if any.
+    var reading: Task<Void, Never>?
+}
+
 /// The client for Calimero 1.0, the confidential cloud: one app = one
 /// replicated log on attested nodes. It verifies the node (``CloudPolicy``),
 /// seals every request to it (``SealedTransport``), signs people in with
@@ -48,16 +94,21 @@ public struct CalimeroClientOptions: Sendable {
 ///   shared by every request that needs it at the same time (a refresh token
 ///   is used once), and the request is repeated once. A refused refresh
 ///   surfaces as ``LoginRequired``.
+/// - ``connect(_:)`` reads a cluster's nodes from the node directory, and
+///   reads them again after a failover or once the listing is due.
 /// - `421 WRONG_NODE` moves the client to the next node it knows and repeats
 ///   the request once (not a sign-in or a refresh's ceremony: those are the
 ///   caller's, or ``refresh()``'s, to repeat). `421 NOT_LEADER` repeats it
 ///   once at `details.leaderUrl` when that is one of its nodes.
 /// - Calls and views retry a `503` or a failed connection with the same
-///   idempotency key (``CloudRetryOptions``).
+///   idempotency key (``CloudRetryOptions``); when a node's retries run out
+///   they fail over to the next node, with the same key.
 public actor CalimeroClient {
-    /// Every node this client may use, `baseUrl` first.
-    public nonisolated let nodeUrls: [String]
+    /// Every node this client may use, `baseUrl` first (or as the directory last ordered them).
+    private var nodeUrls: [String]
     private var at = 0
+    /// The directory the node list came from, for a client made by ``connect(_:)``.
+    private var source: DirectorySource?
     private var channels: [String: SealedTransport] = [:]
     private let policy: CloudPolicy
     private let urlSession: URLSession
@@ -82,6 +133,33 @@ public actor CalimeroClient {
         self.sleep = sleep
     }
 
+    /// A client for the Calimero Cloud cluster named `cluster`: its node list
+    /// read from the public node directory, those in `zone` first, each group
+    /// in weighted-random order. The directory only picks which nodes to try:
+    /// each is attested under `policy` before anything is sent to it. Throws
+    /// ``DirectoryError`` when the directory names no usable node.
+    ///
+    /// The list is read again in the background after a failover, and at the
+    /// first request once the directory's `refreshAfterSeconds` has passed.
+    /// (== mero-js `CalimeroClient.connect`.)
+    public static func connect(_ options: CalimeroConnectOptions) async throws -> CalimeroClient {
+        let listing = try await readDirectory(options.directory, cluster: options.cluster, session: options.session)
+        let ordered = orderNodes(listing.nodes, zone: options.zone, random: options.random)
+        let client = CalimeroClient(
+            CalimeroClientOptions(
+                baseUrl: ordered[0], nodes: Array(ordered.dropFirst()), policy: options.policy,
+                session: options.session, retry: options.retry))
+        await client.setSource(
+            DirectorySource(
+                directory: options.directory, cluster: options.cluster, zone: options.zone, random: options.random,
+                due: Date().addingTimeInterval(listing.refreshAfterSeconds)))
+        return client
+    }
+
+    private func setSource(_ source: DirectorySource) {
+        self.source = source
+    }
+
     /// `baseUrl` with no trailing slash.
     static func trim(_ url: String) -> String {
         var out = url
@@ -89,8 +167,11 @@ public actor CalimeroClient {
         return out
     }
 
-    /// The node requests go to now: `baseUrl`, until a `421 WRONG_NODE` moved the client on.
+    /// The node requests go to now: `baseUrl`, until a `421 WRONG_NODE` or a failover moved the client on.
     public var nodeUrl: String { nodeUrls[at] }
+
+    /// Every node this client may use, in the order it moves through them.
+    public var nodes: [String] { nodeUrls }
 
     /// Call `observer` whenever the session changes: signed in, refreshed (a
     /// new refresh token, which replaces the stored one), or signed out
@@ -114,11 +195,56 @@ public actor CalimeroClient {
     }
 
     /// Move on from node `from` (the one that answered `421 WRONG_NODE`) to
-    /// the next one. False when there is no other.
-    private func moveOn(from: Int) -> Bool {
+    /// the next one. False when there is no other. A request that saw the
+    /// same node refuse after another request moved on already does not move again.
+    private func moveOn(from: String) -> Bool {
         guard nodeUrls.count > 1 else { return false }
-        if at == from { at = (from + 1) % nodeUrls.count }
+        if nodeUrl == from { at = (at + 1) % nodeUrls.count }
         return true
+    }
+
+    /// Fail over from node `from`, where a request's retries ran out, to the
+    /// next node it has not `tried`. False when it has tried them all. A
+    /// request whose node another request moved away from already goes to
+    /// that node, if untried.
+    private func failOver(from: String, tried: Set<String>) -> Bool {
+        if nodeUrl != from && !tried.contains(nodeUrl) { return true }
+        let count = nodeUrls.count
+        for step in 1..<max(count, 1) {
+            let next = (at + step) % count
+            if !tried.contains(nodeUrls[next]) {
+                at = next
+                reread()
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Read the node list again from the directory, in the background, for a
+    /// client made by ``connect(_:)``: the node in use stays first, then the
+    /// directory's order; a node no longer listed is dropped. A failed read is
+    /// ignored. One read at a time.
+    private func reread() {
+        guard let source, source.reading == nil else { return }
+        let session = urlSession
+        self.source?.reading = Task {
+            let listing = try? await readDirectory(source.directory, cluster: source.cluster, session: session)
+            self.reread(finished: listing)
+        }
+    }
+
+    private func reread(finished listing: DirectoryListing?) {
+        guard var source else { return }
+        source.reading = nil
+        if let listing {
+            let current = nodeUrl
+            let listed = orderNodes(listing.nodes, zone: source.zone, random: source.random)
+            nodeUrls = [current] + listed.filter { $0 != current }
+            at = 0
+            source.due = Date().addingTimeInterval(listing.refreshAfterSeconds)
+        }
+        self.source = source
     }
 
     // MARK: - Credentials
@@ -150,6 +276,7 @@ public actor CalimeroClient {
     private func request(
         _ method: String, _ path: String, body: Data?, contentType: String
     ) async throws -> SealedResponse {
+        if let source, Date() >= source.due { reread() }
         let url = nodeUrl
         guard let target = URL(string: "\(url)/\(path)") else { throw AccountError.invalidInput("bad path \(path)") }
         var request = URLRequest(url: target)
@@ -191,7 +318,7 @@ public actor CalimeroClient {
         var redirected = false
         while true {
             let token = auth
-            let from = at
+            let from = nodeUrl
             let response = try await request(method, path, body: body, contentType: contentType)
             if (200..<300).contains(response.status) { return response }
             let error = errorFrom(
@@ -240,24 +367,41 @@ public actor CalimeroClient {
     /// ``json`` for a call or a view: while the node answers 503 or cannot be
     /// reached, the same request, with the same idempotency key, is sent again
     /// after a backoff (or the pause the node asked for, if longer), at most
-    /// `retries` times. The last failure surfaces as ``UnavailableError``.
-    private func retried(_ path: String, body: Data, retries: Int? = nil) async throws -> Data {
-        let limit = retries ?? retry.retries
-        var attempt = 0
+    /// `retries` times.
+    ///
+    /// When a node's retries run out, the request fails over to the next node
+    /// the client knows and its retries start again there, with the same key:
+    /// the key is kept in the app's replicated log, so the cluster answers it
+    /// once whichever node it reaches. Each node is tried once per request.
+    /// The last failure surfaces as ``UnavailableError``.
+    ///
+    /// `once` sends the request exactly once, to the node in use (the
+    /// confirmed attempt of ``callConfirmed(_:_:_:passkey:idempotencyKey:)``,
+    /// whose challenge is single-use).
+    private func retried(_ path: String, body: Data, once: Bool = false) async throws -> Data {
+        let limit = once ? 0 : retry.retries
+        var tried = Set<String>()
         while true {
-            let unavailable: UnavailableError
-            do {
-                return try await json("POST", path, body: body)
-            } catch let error as UnavailableError {
-                unavailable = error
-            } catch let error as URLError {
-                unavailable = UnavailableError(
-                    code: "NETWORK", message: "the node could not be reached: \(error.localizedDescription)",
-                    cause: error)
+            var unavailable: UnavailableError?
+            var node = nodeUrl
+            var attempt = 0
+            while true {
+                node = nodeUrl
+                tried.insert(node)
+                do {
+                    return try await json("POST", path, body: body)
+                } catch let error as UnavailableError {
+                    unavailable = error
+                } catch let error as URLError {
+                    unavailable = UnavailableError(
+                        code: "NETWORK", message: "the node could not be reached: \(error.localizedDescription)",
+                        cause: error)
+                }
+                if attempt >= limit { break }
+                await sleep(max(retry.delay(attempt), unavailable?.retryAfter ?? 0))
+                attempt += 1
             }
-            if attempt >= limit { throw unavailable }
-            await sleep(max(retry.delay(attempt), unavailable.retryAfter ?? 0))
-            attempt += 1
+            if once || !failOver(from: node, tried: tried), let unavailable { throw unavailable }
         }
     }
 
@@ -381,22 +525,25 @@ public actor CalimeroClient {
         AccountInfo(json: try await get("auth/me"))
     }
 
-    /// Add another passkey (another device) to the signed-in account; answers its credential id.
-    public func addPasskey(_ passkey: any PasskeyProvider) async throws -> String {
+    /// Add another passkey (another device, `passkey`) to the signed-in
+    /// account; answers its credential id. The node asks for the approval of
+    /// a passkey the account already has (`412 CONFIRM_REQUIRED`, never the
+    /// new one), which `approver` gives.
+    public func addPasskey(_ passkey: any PasskeyProvider, approver: any PasskeyProvider) async throws -> String {
         let begin = try await post("auth/passkeys/add/begin")
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("adding a passkey did not begin")
         }
         let registration = try await passkey.create(options: options)
-        let finished = try await post(
+        let finished = try await postConfirmed(
             "auth/passkeys/add/finish",
-            ["challengeId": .string(challengeId), "registration": try Self.json(registration)])
+            ["challengeId": .string(challengeId), "registration": try Self.json(registration)], passkey: approver)
         return finished["credentialId"]?.stringValue ?? ""
     }
 
-    /// Remove one of the account's passkeys (not the last).
-    public func removePasskey(_ credentialId: String) async throws {
-        try await delete("auth/passkeys/\(Self.seg(credentialId))")
+    /// Remove one of the account's passkeys (not the last), approved with `passkey` (one it has).
+    public func removePasskey(_ credentialId: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed("auth/passkeys/\(Self.seg(credentialId))", passkey: passkey)
     }
 
     /// Name one of the account's passkeys; `""` clears the name.
@@ -430,10 +577,12 @@ public actor CalimeroClient {
         try await delete("auth/apikeys/\(Self.seg(keyId))")
     }
 
-    /// Create an API key for an agent or server. The key is returned once.
+    /// Create an API key for an agent or server, approved with the account's
+    /// `passkey` (`412 CONFIRM_REQUIRED`); needs a passkey session (an API
+    /// key is refused `403`). The key is returned once.
     public func createApiKey(
         label: String? = nil, apps: [String]? = nil, methods: [String]? = nil, readOnly: Bool? = nil,
-        allowConfirm: Bool? = nil, ttlSecs: Int? = nil
+        allowConfirm: Bool? = nil, ttlSecs: Int? = nil, passkey: any PasskeyProvider
     ) async throws -> (keyId: String, key: String) {
         var body: [String: JSONValue] = [:]
         if let label { body["label"] = .string(label) }
@@ -442,7 +591,7 @@ public actor CalimeroClient {
         if let readOnly { body["readOnly"] = .bool(readOnly) }
         if let allowConfirm { body["allowConfirm"] = .bool(allowConfirm) }
         if let ttlSecs { body["ttlSecs"] = .number(Double(ttlSecs)) }
-        let answer = try await post("auth/apikeys", .object(body))
+        let answer = try await postConfirmed("auth/apikeys", .object(body), passkey: passkey)
         return (answer["keyId"]?.stringValue ?? "", answer["key"]?.stringValue ?? "")
     }
 
@@ -454,16 +603,44 @@ public actor CalimeroClient {
         return answer["hash"]?.stringValue ?? ""
     }
 
-    /// Upload a blob for `app`: `blobId` is base58 (what apps print), `id` hex.
-    public func uploadBlob(_ app: String, _ data: Data) async throws -> BlobInfo {
+    /// Upload a blob for `app`: `blobId` is base58 (what apps print), `id`
+    /// hex. `contentType` (printable ASCII; the node refuses another with
+    /// `400`) is sent as the upload's `Content-Type`: a component app records
+    /// it and serves downloads with it. A component app holding as many blobs
+    /// as it may answers `429 QUOTA_EXCEEDED`.
+    public func uploadBlob(
+        _ app: String, _ data: Data, contentType: String = "application/octet-stream"
+    ) async throws -> BlobInfo {
         try decode(
-            BlobInfo.self,
-            try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: "application/octet-stream"))
+            BlobInfo.self, try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
     }
 
     /// One of `app`'s blobs, by id (base58 or hex).
     public func downloadBlob(_ app: String, _ id: String) async throws -> Data {
-        try await json("GET", "apps/\(Self.seg(app))/blobs/\(Self.seg(id))")
+        try await blobContent(app, id).data
+    }
+
+    /// Download a component app's blob with a grant one of its runs handed
+    /// out (`BlobRef::grant`, up to 24 h). No session needed: the grant is
+    /// the permission. A bad or expired grant answers ``NotFound``, as a
+    /// missing blob.
+    public func downloadBlobGranted(_ app: String, _ id: String, grant: String) async throws -> Data {
+        try await blobContent(app, id, grant: grant).data
+    }
+
+    /// ``downloadBlob(_:_:)`` (or, with `grant`,
+    /// ``downloadBlobGranted(_:_:grant:)``) with the content type the node
+    /// serves it as: the uploader's, for a component app;
+    /// `application/octet-stream` otherwise.
+    public func blobContent(_ app: String, _ id: String, grant: String? = nil) async throws -> BlobContent {
+        // As `encodeURIComponent` spells it: a grant is base64, whose `+`, `/` and `=` must not pass raw.
+        let unreserved = CharacterSet(
+            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")
+        let query = grant.map { "?grant=\($0.addingPercentEncoding(withAllowedCharacters: unreserved) ?? $0)" } ?? ""
+        let response = try await send("GET", "apps/\(Self.seg(app))/blobs/\(Self.seg(id))\(query)")
+        return BlobContent(
+            data: try await response.data(),
+            contentType: response.headers["content-type"] ?? "application/octet-stream")
     }
 
     /// `app`'s blobs.
@@ -545,6 +722,14 @@ public actor CalimeroClient {
         try await post("apps/\(Self.seg(app))/metadata", ["metadata": metadata])
     }
 
+    /// A component app's xcalls: how many messages wait in its outbox, and
+    /// the dead letters (never delivered), newest last. Its owner's or an org
+    /// admin's (`403` to anyone else); `409 NOT_SUPPORTED` for an app on the
+    /// wasmer runtime, whose xcalls are follow-ups.
+    public func appXcalls(_ app: String) async throws -> AppXcalls {
+        try decode(AppXcalls.self, try await json("GET", "apps/\(Self.seg(app))/xcalls"))
+    }
+
     /// What the app's storage holds: `{ keys, bytes, blobs, blobBytes }`.
     public func appStorage(_ app: String) async throws -> JSONValue {
         try await get("apps/\(Self.seg(app))/storage")
@@ -580,7 +765,9 @@ public actor CalimeroClient {
     }
 
     /// POST `body` to `path`, answering a `412 CONFIRM_REQUIRED` with
-    /// `passkey`'s assertion over the node's challenge.
+    /// `passkey`'s assertion over the node's challenge (deleting an org,
+    /// approving a release, adding a member, ...): the same body again, with
+    /// `confirm`.
     @discardableResult
     public func postConfirmed(_ path: String, _ body: JSONValue, passkey: any PasskeyProvider) async throws -> JSONValue
     {
@@ -590,7 +777,9 @@ public actor CalimeroClient {
             })
     }
 
-    /// ``postConfirmed(_:_:passkey:)`` for a DELETE (deleting an organization).
+    /// ``postConfirmed(_:_:passkey:)`` for a DELETE (deleting an organization,
+    /// removing a member or a passkey): `body` goes as JSON, and the
+    /// confirmed retry carries `confirm` beside it.
     @discardableResult
     public func deleteConfirmed(
         _ path: String, passkey: any PasskeyProvider, body: JSONValue = [:]
@@ -628,7 +817,14 @@ public actor CalimeroClient {
     }
 
     /// Create an app instance from a bundle hash, or from a package release
-    /// (installed from the registry first if the cluster lacks it). Answers its app id.
+    /// (installed from the registry first if the cluster lacks it). With a
+    /// `deployment`, the instance runs the release that deployment offers for
+    /// the package (`version`, if given, must be it) and records the
+    /// deployment; no install, no deployer grant. A package or version it does
+    /// not offer answers `400 NOT_OFFERED`, several offered releases with no
+    /// `version` `400 VERSION_REQUIRED`, and an unknown `service` `400
+    /// NO_SUCH_SERVICE`. A page opened through `/d/{deployment}/` finds its
+    /// deployment with ``pageDeployment(_:)``. Answers its app id.
     public func createApp(
         _ name: String, bundle: AppSource, org: String? = nil, access: AppAccess? = nil,
         confirmMethods: [String]? = nil, initArgs: JSONValue? = nil
@@ -636,10 +832,11 @@ public actor CalimeroClient {
         var body: [String: JSONValue] = ["name": .string(name)]
         switch bundle {
         case .bundle(let hash): body["bundle"] = .string(hash)
-        case .package(let package, let version, let service):
+        case .package(let package, let version, let service, let deployment):
             body["package"] = .string(package)
             if let version { body["version"] = .string(version) }
             if let service { body["service"] = .string(service) }
+            if let deployment { body["deployment"] = .string(deployment) }
         }
         if let org { body["org"] = .string(org) }
         if let access { body["access"] = access.json }
@@ -687,7 +884,7 @@ public actor CalimeroClient {
         let body: JSONValue = ["method": .string(method), "args": args, "idempotencyKey": .string(key)]
         // The confirmed attempt goes out exactly once: its challenge is single-use.
         let data = try await confirmed(body, passkey: passkey) { body in
-            try await self.retried(path, body: CanonicalJSON.data(body), retries: body["confirm"] == nil ? nil : 0)
+            try await self.retried(path, body: CanonicalJSON.data(body), once: body["confirm"] != nil)
         }
         return try decode(CallResult.self, data)
     }
@@ -908,14 +1105,41 @@ public actor CalimeroClient {
     /// ``requestConsent(_:)``, then hand the page's URL to `navigate`.
     /// (== mero-js `openConsentPage`, whose default navigates the window.)
     public func openConsentPage(
-        _ request: ConsentRequest, navigate: @Sendable (URL) async throws -> Void
+        _ request: ConsentRequest, navigate: @escaping @Sendable (URL) async throws -> Void
     ) async throws
         -> ConsentStarted
     {
+        try await openConsentPage(request, options: OpenConsentOptions(navigate: navigate))
+    }
+
+    /// ``requestConsent(_:)``, then send the person to the consent page with
+    /// `options.navigate`. `options.confirm` runs first with the node's
+    /// answer so the app can show the person its `code`; when it answers
+    /// `false` the page is not opened. When the node sends a `code` that is
+    /// not ``confirmationCode(_:)`` of `requestId`, this throws a
+    /// ``CalimeroError`` (`CONSENT_CODE_MISMATCH`) and does not navigate.
+    /// (== mero-js `openConsentPage(request, options)`.)
+    public func openConsentPage(_ request: ConsentRequest, options: OpenConsentOptions) async throws -> ConsentStarted {
         let started = try await requestConsent(request)
+        try Self.checkConsentCode(started)
+        if let confirm = options.confirm, !(await confirm(started)) { return started }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
-        try await navigate(url)
+        try await options.navigate(url)
         return started
+    }
+
+    /// Throws `CONSENT_CODE_MISMATCH` when the node's `code` is not the one
+    /// its consent page shows for `requestId`.
+    public static func checkConsentCode(_ started: ConsentStarted) throws {
+        guard let code = started.code else { return }
+        let expected = confirmationCode(started.requestId)
+        guard code == expected else {
+            throw CalimeroError(
+                status: 200, code: "CONSENT_CODE_MISMATCH", message: "the consent page code does not match the request",
+                details: [
+                    "requestId": .string(started.requestId), "code": .string(code), "expected": .string(expected),
+                ])
+        }
     }
 
     /// The decision on a consent request.
@@ -991,24 +1215,31 @@ public actor CalimeroClient {
 
     // MARK: - Members, teams and invites
 
-    /// Add a member, or change their role.
-    public func setMember(_ org: String, account: String, role: OrgRole) async throws {
-        try await post("orgs/\(Self.seg(org))/members", ["account": .string(account), "role": .string(role.rawValue)])
+    /// Add a member, or change their role, approved with the caller's `passkey`.
+    public func setMember(
+        _ org: String, account: String, role: OrgRole, passkey: any PasskeyProvider
+    ) async throws {
+        try await postConfirmed(
+            "orgs/\(Self.seg(org))/members", ["account": .string(account), "role": .string(role.rawValue)],
+            passkey: passkey)
     }
 
+    /// Remove a member, or leave (`account` the caller's own), approved with the caller's `passkey`.
     @discardableResult
-    public func removeMember(_ org: String, account: String) async throws -> JSONValue {
-        try await delete("orgs/\(Self.seg(org))/members/\(Self.seg(account))")
+    public func removeMember(_ org: String, account: String, passkey: any PasskeyProvider) async throws -> JSONValue {
+        try await deleteConfirmed("orgs/\(Self.seg(org))/members/\(Self.seg(account))", passkey: passkey)
     }
 
-    /// Set capability bits: for a member, a member of one team, or the organization's default (neither).
+    /// Set capability bits: for a member, a member of one team, or the
+    /// organization's default (neither). Approved with the caller's `passkey`.
     public func setCapabilities(
-        _ org: String, _ capabilities: OrgCapabilities, account: String? = nil, team: String? = nil
+        _ org: String, _ capabilities: OrgCapabilities, passkey: any PasskeyProvider, account: String? = nil,
+        team: String? = nil
     ) async throws {
         var body: [String: JSONValue] = ["capabilities": .number(Double(capabilities.rawValue))]
         if let account { body["account"] = .string(account) }
         if let team { body["team"] = .string(team) }
-        try await post("orgs/\(Self.seg(org))/capabilities", .object(body))
+        try await postConfirmed("orgs/\(Self.seg(org))/capabilities", .object(body), passkey: passkey)
     }
 
     /// Create a team; answers its id.
@@ -1041,32 +1272,40 @@ public actor CalimeroClient {
         try await delete("orgs/\(Self.seg(org))/teams/\(Self.seg(team))")
     }
 
-    /// Add a member to a team, or change their row.
+    /// Add a member to a team, or change their row, approved with the caller's `passkey`.
     public func setTeamMember(
-        _ org: String, _ team: String, account: String, role: TeamRole? = nil, lead: Bool? = nil,
-        capabilities: OrgCapabilities? = nil
+        _ org: String, _ team: String, account: String, passkey: any PasskeyProvider, role: TeamRole? = nil,
+        lead: Bool? = nil, capabilities: OrgCapabilities? = nil
     ) async throws {
         var body: [String: JSONValue] = ["account": .string(account)]
         if let role { body["role"] = .string(role.rawValue) }
         if let lead { body["lead"] = .bool(lead) }
         if let capabilities { body["capabilities"] = .number(Double(capabilities.rawValue)) }
-        try await post("orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members", .object(body))
+        try await postConfirmed(
+            "orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members", .object(body), passkey: passkey)
     }
 
-    public func removeTeamMember(_ org: String, _ team: String, account: String) async throws {
-        try await delete("orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members/\(Self.seg(account))")
+    /// Remove a member from a team, approved with the caller's `passkey`.
+    public func removeTeamMember(
+        _ org: String, _ team: String, account: String, passkey: any PasskeyProvider
+    ) async throws {
+        try await deleteConfirmed(
+            "orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members/\(Self.seg(account))", passkey: passkey)
     }
 
-    /// Mint an invite token (`inv_…`) to `org` with `role`, into `teams`.
+    /// Mint an invite token (`inv_…`) to `org` with `role`, into `teams`,
+    /// approved with the caller's `passkey`. ``redeemInvite(_:)`` takes it
+    /// (no approval there).
     public func invite(
-        _ org: String, role: OrgRole = .member, teams: [String] = [], ttlSecs: Int? = nil, uses: Int? = nil
+        _ org: String, role: OrgRole = .member, passkey: any PasskeyProvider, teams: [String] = [],
+        ttlSecs: Int? = nil, uses: Int? = nil
     ) async throws -> String {
         var body: [String: JSONValue] = [
             "role": .string(role.rawValue), "teams": .array(teams.map { .string($0) }),
         ]
         if let ttlSecs { body["ttlSecs"] = .number(Double(ttlSecs)) }
         if let uses { body["uses"] = .number(Double(uses)) }
-        let answer = try await post("orgs/\(Self.seg(org))/invites", .object(body))
+        let answer = try await postConfirmed("orgs/\(Self.seg(org))/invites", .object(body), passkey: passkey)
         guard let token = answer["token"]?.stringValue else { throw AccountError.protocolViolation("no invite token") }
         return token
     }
@@ -1075,6 +1314,96 @@ public actor CalimeroClient {
     @discardableResult
     public func redeemInvite(_ token: String) async throws -> JSONValue {
         try await post("invites/\(Self.seg(token))/redeem")
+    }
+
+    // MARK: - Deployers
+
+    /// Let an account or organization install apps where the cluster's
+    /// deployments are `granted`, until `until` (absent: the grant does not
+    /// end). The cluster's owner grants it, approved with `passkey`, where
+    /// governance says `deployers: owner`; elsewhere the operator grants with
+    /// its key, and this is refused `403`.
+    @discardableResult
+    public func grantDeployer(
+        _ deployer: Deployer, passkey: any PasskeyProvider, until: Date? = nil
+    ) async throws -> JSONValue {
+        var body: [String: JSONValue] = ["deployer": deployer.json]
+        if let until { body["until"] = .string(ISO8601DateFormatter().string(from: until)) }
+        return try await postConfirmed("deployers", .object(body), passkey: passkey)
+    }
+
+    /// Who may install apps on the cluster: its deployments rule, who grants
+    /// deployers, its owner and every grant. For the cluster's owner, or the
+    /// operator (its token, ``useApiKey(_:)``).
+    public func deployers() async throws -> DeployersInfo {
+        try decode(DeployersInfo.self, try await json("GET", "deployers"))
+    }
+
+    /// End a deployer's grant, as the cluster's owner, approved with
+    /// `passkey`. Apps it installed, and the apps running them, stay.
+    public func revokeDeployer(_ deployer: Deployer, passkey: any PasskeyProvider) async throws {
+        try await revokeDeployer(key: deployer.key, passkey: passkey)
+    }
+
+    /// ``revokeDeployer(_:passkey:)`` by its key, `account:{id}` or `org:{id}`.
+    public func revokeDeployer(key: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed("deployers/\(Self.seg(key))", passkey: passkey)
+    }
+
+    // MARK: - Deployments
+
+    /// Create a deployment: `owner`'s (the caller's own account, or an
+    /// organization where it holds `MANAGE_APPLICATION` org-wide) list of the
+    /// apps it offers, named `name` (1 to 64 characters, one line) for
+    /// customers. Approved with `passkey`; where deployments are `granted`
+    /// the caller needs a deployer grant. Answers the deployment's id.
+    public func createDeployment(_ name: String, owner: Deployer, passkey: any PasskeyProvider) async throws -> String {
+        let answer = try await postConfirmed(
+            "deployments", ["name": .string(name), "owner": owner.json], passkey: passkey)
+        guard let id = answer["id"]?.stringValue else { throw AccountError.protocolViolation("no deployment id") }
+        return id
+    }
+
+    /// The deployments the caller manages: its account's, and its
+    /// organizations' where it holds `MANAGE_APPLICATION`.
+    public func deployments() async throws -> [DeploymentInfo] {
+        try decode(DeploymentList.self, try await json("GET", "deployments")).deployments
+    }
+
+    /// A deployment as anyone may read it: its name, its owner's kind and
+    /// name, and the apps it offers. Public.
+    public func deployment(_ id: String) async throws -> PublicDeployment {
+        try decode(PublicDeployment.self, try await json("GET", "deployments/\(Self.seg(id))"))
+    }
+
+    /// Delete a deployment that offers nothing and has no instances, approved with `passkey`.
+    public func deleteDeployment(_ id: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed("deployments/\(Self.seg(id))", passkey: passkey)
+    }
+
+    /// Offer `package@version` (installed, and seen by the caller) as `app`
+    /// (1 to 64 letters, digits, `.`, `_`, `-`) in deployment `id`, or move
+    /// an offered app to another release of its package. Approved with `passkey`.
+    @discardableResult
+    public func offerApp(
+        _ id: String, app: String, package: String, version: String, passkey: any PasskeyProvider
+    ) async throws -> JSONValue {
+        try await postConfirmed(
+            "deployments/\(Self.seg(id))/apps",
+            ["app": .string(app), "package": .string(package), "version": .string(version)], passkey: passkey)
+    }
+
+    /// Withdraw `app` from deployment `id`, approved with `passkey`; refused
+    /// while an instance created from the deployment still runs it.
+    public func withdrawApp(_ id: String, app: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed("deployments/\(Self.seg(id))/apps/\(Self.seg(app))", passkey: passkey)
+    }
+
+    /// The organizations with instances created from deployment `id`, for
+    /// its managers: each one's id, name, instance count, apps and releases,
+    /// and first instance. Never members, teams or app data.
+    public func deploymentOrgs(_ id: String) async throws -> DeploymentOrgs {
+        try decode(DeploymentOrgs.self, try await json("GET", "deployments/\(Self.seg(id))/orgs"))
     }
 
     // MARK: - Helpers
@@ -1118,13 +1447,15 @@ public enum AppSource: Sendable, Equatable {
     /// A bundle hash (a raw upload, development clusters only).
     case bundle(String)
     /// A package release: the latest when `version` is `nil`; `service` names
-    /// one service of a multi-service bundle.
-    case package(String, version: String? = nil, service: String? = nil)
+    /// one service of a multi-service bundle; `deployment` creates it from a
+    /// deployment's offer (``pageDeployment(_:)``).
+    case package(String, version: String? = nil, service: String? = nil, deployment: String? = nil)
 }
 
 private struct BlobList: Decodable { let blobs: [BlobInfo] }
 private struct PackageList: Decodable { let packages: [PackageInfo] }
 private struct AppList: Decodable { let apps: [AppInfo] }
+private struct DeploymentList: Decodable { let deployments: [DeploymentInfo] }
 private struct PresenceList: Decodable { let present: [PresenceEntry] }
 
 /// Server-sent event frames from a byte stream: `{ id, kind, data }` each,

@@ -48,13 +48,17 @@ for try await event in cloud.events(app) { print(event.kind) }      // sealed SS
   transport key), byte for byte with core's `calimero-sealed`.
 - **Trust.** `CloudPolicy.production` checks the release floor, the release's
   Sigstore signature, the quote's DCAP chain against Intel's collateral
-  (fetched from Intel's PCS) and the image's measurements. Mock quotes pass
+  (from the cloud's PCCS mirror, or Intel's PCS) and the image's measurements. Mock quotes pass
   only with `allowMock` (`.development`).
 - **Sessions.** Passkey session `v2.…` (15 min) and refresh token `rt_…`; a
   `401` triggers one shared refresh. `421 WRONG_NODE` moves to the next node,
-  `421 NOT_LEADER` to the named leader.
+  `421 NOT_LEADER` to the named leader. `CalimeroClient.connect(…cluster:)`
+  reads a cluster's nodes from the node directory.
+- **Step-ups.** Members, invites, passkeys and API keys take a `passkey:` that
+  answers the node's `412 CONFIRM_REQUIRED`.
 - **Retries.** A call or view that meets `503` or no answer is sent again with
-  the same idempotency key (6 retries, 200 ms → 2 s), then `UnavailableError`.
+  the same idempotency key (6 retries, 200 ms → 2 s), then the next node with
+  the same key, then `UnavailableError`.
 - **Errors.** `CalimeroError` and its subclasses: `AppError{appCode, fields}`,
   `ConfirmRequired`, `LoginRequired`, `WrongNode`, `NotLeader`, `NotFound`,
   `UnavailableError`, `ArgsTooLarge`, `IdempotencyMismatch`,

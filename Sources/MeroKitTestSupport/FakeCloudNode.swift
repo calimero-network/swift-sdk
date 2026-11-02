@@ -136,11 +136,14 @@ public final class FakeCloudNode: @unchecked Sendable {
     }
 
     /// Route ``MockURLProtocol`` requests to whichever of `nodes` their URL names.
-    public static func install(_ nodes: [FakeCloudNode]) {
+    /// Any other request goes to `otherwise` (a node directory, say), or is a 404.
+    public static func install(
+        _ nodes: [FakeCloudNode], otherwise: (@Sendable (URLRequest) -> MockURLProtocol.Stub)? = nil
+    ) {
         MockURLProtocol.setHandler { request in
             let url = request.url?.absoluteString ?? ""
             guard let node = nodes.first(where: { url.hasPrefix($0.baseURL + "/") }) else {
-                return .init(status: 404, headers: [:], body: Data())
+                return otherwise?(request) ?? .init(status: 404, headers: [:], body: Data())
             }
             return node.handle(request)
         }

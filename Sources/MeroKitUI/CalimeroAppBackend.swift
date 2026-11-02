@@ -21,6 +21,10 @@ import MeroKit
 /// | names | org: metadata `name`; team: its name; app: metadata `name` (else its name) |
 /// | members | `GET /orgs/{org}` / team; `POST …/members`, `DELETE …/members/{account}` |
 ///
+/// Membership changes and invites are passkey step-ups on 1.0 (`412
+/// CONFIRM_REQUIRED`): they are approved with ``passkey``. Without one they
+/// throw ``PasskeyRequired``.
+///
 /// A `groupId` is `"{orgId}/{teamId}"` for a team (``teamGroupId(org:team:)``)
 /// or an org id for the org itself, as a namespace's root group was.
 public final class CalimeroAppBackend: MeroAppBackend, Sendable {
@@ -31,13 +35,26 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     public let packageName: String
     /// The package version new app instances run; the latest when `nil`.
     public let packageVersion: String?
+    /// The signed-in account's passkey, which approves the step-ups
+    /// (members, invites); `nil` makes them throw ``PasskeyRequired``.
+    public let passkey: (any PasskeyProvider)?
 
-    public init(client: CalimeroClient, account: String, packageName: String, packageVersion: String? = nil) {
+    public init(
+        client: CalimeroClient, account: String, packageName: String, packageVersion: String? = nil,
+        passkey: (any PasskeyProvider)? = nil
+    ) {
         self.client = client
+        self.passkey = passkey
         self.account = account
         self.packageName = packageName
         self.packageVersion = packageVersion
         contract = CloudContextContract(client: client)
+    }
+
+    /// ``passkey``, or ``PasskeyRequired`` for `method`.
+    func approver(_ method: String) throws -> any PasskeyProvider {
+        guard let passkey else { throw PasskeyRequired(method: method) }
+        return passkey
     }
 
     public var hasRelay: Bool { true }
@@ -155,7 +172,8 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     public func createInvitation(namespaceId: String) async throws -> OrgInvitation {
         let name = try? await client.getOrg(namespaceId)
         return OrgInvitation(
-            namespaceId: namespaceId, token: try await client.invite(namespaceId),
+            namespaceId: namespaceId,
+            token: try await client.invite(namespaceId, passkey: try approver("createInvitation")),
             name: name.map { $0.metadata["name"]?.stringValue ?? $0.name })
     }
 
@@ -242,16 +260,16 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     // MARK: Leaving and deleting
 
     public func leaveNamespace(namespaceId: String) async throws {
-        try await client.removeMember(namespaceId, account: account)
+        try await client.removeMember(namespaceId, account: account, passkey: try approver("leaveNamespace"))
     }
 
     public func leaveSubgroup(groupId: String) async throws {
         let place = locate(groupId)
         guard let team = place.team else {
-            try await client.removeMember(place.org, account: account)
+            try await client.removeMember(place.org, account: account, passkey: try approver("leaveSubgroup"))
             return
         }
-        try await client.removeTeamMember(place.org, team, account: account)
+        try await client.removeTeamMember(place.org, team, account: account, passkey: try approver("leaveSubgroup"))
     }
 
     public func deleteSubgroup(groupId: String) async throws {
@@ -286,18 +304,21 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     public func setMemberRole(groupId: String, identity: String, role: GovernanceMemberRole) async throws {
         let place = locate(groupId)
         if let team = place.team {
-            try await client.setTeamMember(place.org, team, account: identity, role: role.teamRole)
+            try await client.setTeamMember(
+                place.org, team, account: identity, passkey: try approver("setMemberRole"), role: role.teamRole)
         } else {
-            try await client.setMember(place.org, account: identity, role: role.orgRole)
+            try await client.setMember(
+                place.org, account: identity, role: role.orgRole, passkey: try approver("setMemberRole"))
         }
     }
 
     public func removeMember(groupId: String, identity: String) async throws {
         let place = locate(groupId)
         if let team = place.team {
-            try await client.removeTeamMember(place.org, team, account: identity)
+            try await client.removeTeamMember(
+                place.org, team, account: identity, passkey: try approver("removeMember"))
         } else {
-            try await client.removeMember(place.org, account: identity)
+            try await client.removeMember(place.org, account: identity, passkey: try approver("removeMember"))
         }
     }
 
@@ -308,4 +329,17 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         metadata["name"] = .string(name)
         try await client.setMemberMetadata(place.org, account: account, .object(metadata))
     }
+}
+
+/// A ``CalimeroAppBackend`` method that needs a passkey step-up (`412
+/// CONFIRM_REQUIRED`: members, invites) was called on a backend made
+/// without a passkey. (== Kotlin `PasskeyRequired`.)
+public struct PasskeyRequired: Error, LocalizedError, Sendable {
+    public let method: String
+
+    public init(method: String) {
+        self.method = method
+    }
+
+    public var errorDescription: String? { "\(method) needs a passkey approval; give the backend a passkey" }
 }

@@ -330,7 +330,7 @@ final class CalimeroClientTests: XCTestCase {
             case ("POST", "/invites/inv_x/redeem"): return .json(["orgId": "o1"])
             case ("POST", "/consent/requests"):
                 return .json([
-                    "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1, "code": "7KQ-M2D",
+                    "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1, "code": "GBS-YKH",
                 ])
             case ("GET", "/consent/r1/result"):
                 return .json(["requestId": "r1", "kind": "upgrade", "status": "approved", "decidedAt": 2])
@@ -350,7 +350,7 @@ final class CalimeroClientTests: XCTestCase {
         let created = try XCTUnwrap(node.requests.last?.json)
         XCTAssertEqual(created["package"], "com.calimero.chat")
         XCTAssertEqual(created["access"], ["kind": "team", "team": "t1"])
-        let token = try await cloud.invite("o1")
+        let token = try await cloud.invite("o1", passkey: SoftPasskey())
         XCTAssertEqual(token, "inv_x")
         _ = try await cloud.redeemInvite("inv_x")
         let started = try await cloud.openConsentPage(
@@ -358,7 +358,7 @@ final class CalimeroClientTests: XCTestCase {
         ) { url in
             XCTAssertEqual(url.absoluteString, "https://node.test/consent/r1")
         }
-        XCTAssertEqual(started.code, "7KQ-M2D", "the confirmation code the app shows before opening the page")
+        XCTAssertEqual(started.code, "GBS-YKH", "the confirmation code the app shows before opening the page")
         let consentBody = try XCTUnwrap(node.requests.first { $0.path == "/consent/requests" }?.json)
         XCTAssertEqual(consentBody["kind"], "upgrade")
         XCTAssertEqual(consentBody["subject"]?["toVersion"], "1.1.0")
@@ -393,5 +393,334 @@ final class CalimeroClientTests: XCTestCase {
         let input = #" { "b" : 1, "a" : [1.50, -0, 1e3, "xé\n\/", true, null, {}] } "#
         let literal = String(decoding: try LiteralJSON.canonical(Data(input.utf8)), as: UTF8.self)
         XCTAssertEqual(literal, #"{"a":[1.5,0,1000,"xé\n/",true,null,{}],"b":1}"#)
+    }
+
+    // MARK: - core rc.7+ parity (mero-js #317–#323)
+
+    private static let stepUpChallenge: JSONValue = [
+        "challengeId": "su1", "challenge": .string(b64url(Data(repeating: 5, count: 32))), "rpId": "localhost",
+    ]
+
+    /// A node that asks for a step-up on every route until the body carries `confirm`.
+    private static func stepUpNode(_ answer: JSONValue = [:]) -> FakeCloudNode {
+        FakeCloudNode { request in
+            if request.path == "/auth/passkeys/add/begin" {
+                return .json([
+                    "challengeId": "add1",
+                    "options": [
+                        "challenge": .string(b64url(Data(repeating: 1, count: 32))),
+                        "rp": ["id": "localhost", "name": "x"],
+                        "user": ["id": .string(b64url(Data([4]))), "name": "ada", "displayName": "ada"],
+                    ],
+                ])
+            }
+            if request.json?["confirm"] == nil {
+                return .error(412, "CONFIRM_REQUIRED", details: stepUpChallenge)
+            }
+            return .json(answer)
+        }
+    }
+
+    func testMembershipsCredentialsAndInvitesAreApprovedWithAPasskey() async throws {
+        let node = Self.stepUpNode(["token": "inv_1", "credentialId": "cred2", "keyId": "k1", "key": "cal_x"])
+        node.install()
+        let cloud = client()
+        let passkey = SoftPasskey()
+        try await cloud.setMember("o1", account: "acc_2", role: .admin, passkey: passkey)
+        try await cloud.removeMember("o1", account: "acc_2", passkey: passkey)
+        try await cloud.setCapabilities("o1", OrgCapabilities(rawValue: 1), passkey: passkey, account: "acc_2")
+        try await cloud.setTeamMember("o1", "t1", account: "acc_2", passkey: passkey, role: .lead)
+        try await cloud.removeTeamMember("o1", "t1", account: "acc_2", passkey: passkey)
+        let token = try await cloud.invite("o1", role: .member, passkey: passkey, teams: ["t1"], uses: 2)
+        XCTAssertEqual(token, "inv_1")
+        let key = try await cloud.createApiKey(label: "ci", readOnly: true, passkey: passkey)
+        XCTAssertEqual(key.key, "cal_x")
+        try await cloud.removePasskey("cred1", passkey: passkey)
+        let added = try await cloud.addPasskey(SoftPasskey(), approver: passkey)
+        XCTAssertEqual(added, "cred2")
+
+        // Each route: refused once with 412, then the same body with `confirm`.
+        let routes = node.requests.filter { $0.path != "/auth/passkeys/add/begin" }
+        XCTAssertEqual(routes.count, 18)
+        for pair in stride(from: 0, to: routes.count, by: 2) {
+            let (first, second) = (routes[pair], routes[pair + 1])
+            XCTAssertEqual(first.path, second.path)
+            XCTAssertEqual(first.method, second.method)
+            XCTAssertNil(first.json?["confirm"])
+            XCTAssertEqual(second.json?["confirm"]?["challengeId"], "su1", second.path)
+        }
+        XCTAssertEqual(
+            Set(routes.map { "\($0.method) \($0.path)" }),
+            [
+                "POST /orgs/o1/members", "DELETE /orgs/o1/members/acc_2", "POST /orgs/o1/capabilities",
+                "POST /orgs/o1/teams/t1/members", "DELETE /orgs/o1/teams/t1/members/acc_2", "POST /orgs/o1/invites",
+                "POST /auth/apikeys", "DELETE /auth/passkeys/cred1", "POST /auth/passkeys/add/finish",
+            ])
+        let invite = try XCTUnwrap(routes.last { $0.path == "/orgs/o1/invites" }?.json)
+        XCTAssertEqual(invite["role"], "member")
+        XCTAssertEqual(invite["teams"], ["t1"])
+        XCTAssertEqual(invite["uses"], 2)
+        let finish = try XCTUnwrap(routes.last?.json)
+        XCTAssertEqual(finish["challengeId"], "add1", "the new passkey's registration rides with the approval")
+        XCTAssertNotNil(finish["registration"])
+    }
+
+    func testRedeemingAnInviteNeedsNoApproval() async throws {
+        let node = FakeCloudNode { _ in .json(["orgId": "o1"]) }
+        node.install()
+        let answer = try await client().redeemInvite("inv_1")
+        XCTAssertEqual(answer["orgId"], "o1")
+        XCTAssertEqual(node.requests.count, 1)
+    }
+
+    func testAsksTheDirectoryForAClustersNodesAndOrdersThemByZone() async throws {
+        let first = FakeCloudNode(baseURL: "https://a.test") { _ in .json(["accountId": "acc"]) }
+        let second = FakeCloudNode(baseURL: "https://b.test") { _ in .json(["accountId": "acc"]) }
+        let listings = Counter()
+        FakeCloudNode.install([first, second]) { request in
+            listings.increment()
+            XCTAssertEqual(request.url?.path, "/v2/eu-1")
+            let body = #"""
+                {"cluster":"eu-1","refreshAfterSeconds":30,"nodes":[
+                {"id":"1","url":"https://b.test/","zone":"far","weight":1},
+                {"id":"2","url":"https://a.test","zone":"near","weight":3},
+                {"id":"3","url":"ftp://c.test","zone":"near","weight":1},
+                {"id":"4","url":"https://d.test","zone":"near","weight":0}]}
+                """#
+            return .init(status: 200, headers: ["content-type": "application/json"], body: Data(body.utf8))
+        }
+        let cloud = try await CalimeroClient.connect(
+            CalimeroConnectOptions(
+                cluster: "eu-1", policy: .development, directory: "https://dir.test/v2", zone: "near",
+                session: MockURLProtocol.makeSession(), random: { 0.99 }))
+        let nodes = await cloud.nodes
+        XCTAssertEqual(nodes, ["https://a.test", "https://b.test"], "zone first; bad URLs and weights dropped")
+        let me = try await cloud.me()
+        XCTAssertEqual(me.accountId, "acc")
+        XCTAssertEqual(first.requests.count, 1)
+        XCTAssertEqual(listings.count, 1)
+    }
+
+    func testTheDirectorysFailuresAreDirectoryErrors() async throws {
+        MockURLProtocol.setHandler { request in
+            if request.url?.path.hasSuffix("/gone") == true { return .init(status: 404, headers: [:], body: Data()) }
+            if request.url?.path.hasSuffix("/empty") == true {
+                return .init(
+                    status: 200, headers: [:], body: Data(#"{"nodes":[{"url":"https://x.test","weight":0}]}"#.utf8))
+            }
+            return .init(status: 200, headers: [:], body: Data("<html>".utf8))
+        }
+        for (cluster, reason) in [("gone", DirectoryFailure.notFound), ("empty", .empty), ("html", .badResponse)] {
+            do {
+                _ = try await readDirectory(
+                    "https://dir.test", cluster: cluster, session: MockURLProtocol.makeSession())
+                XCTFail("expected a DirectoryError for \(cluster)")
+            } catch let error as DirectoryError {
+                XCTAssertEqual(error.reason, reason)
+            }
+        }
+    }
+
+    func testWeightedOrderFollowsTheRoll() {
+        let nodes = [
+            DirectoryNode(url: "https://a", zone: "z1", weight: 1),
+            DirectoryNode(url: "https://b", zone: "z2", weight: 3),
+        ]
+        XCTAssertEqual(orderNodes(nodes, zone: nil, random: { 0 }), ["https://a", "https://b"])
+        XCTAssertEqual(orderNodes(nodes, zone: nil, random: { 0.5 }), ["https://b", "https://a"])
+        XCTAssertEqual(orderNodes(nodes, zone: "z2", random: { 0 }), ["https://b", "https://a"])
+    }
+
+    func testACallFailsOverToTheNextNodeWithTheSameKeyOnceItsRetriesRunOut() async throws {
+        let down = FakeCloudNode(baseURL: "https://n1.test") { _ in .error(503, "UNAVAILABLE") }
+        let up = FakeCloudNode(baseURL: "https://n2.test") { _ in .json(["index": 3, "result": "ok"]) }
+        FakeCloudNode.install([down, up])
+        let cloud = client("https://n1.test", nodes: ["https://n2.test"])
+        let answer = try await cloud.call("a1", "set", ["k": 1])
+        XCTAssertEqual(answer.result, "ok")
+        XCTAssertEqual(down.requests.count, 4, "the first attempt and 3 retries on the first node")
+        XCTAssertEqual(up.requests.count, 1)
+        let keys = (down.requests + up.requests).compactMap { $0.json?["idempotencyKey"]?.stringValue }
+        XCTAssertEqual(Set(keys).count, 1, "the cluster answers the key once, whichever node it reaches")
+        let now = await cloud.nodeUrl
+        XCTAssertEqual(now, "https://n2.test")
+    }
+
+    func testRefreshMovesThroughTheNodesOnWrongNode() async throws {
+        let wrong = FakeCloudNode(baseURL: "https://n1.test") { _ in .error(421, "WRONG_NODE") }
+        let right = FakeCloudNode(baseURL: "https://n2.test") { _ in
+            .json(["accountId": "a", "sessionToken": "v2.new", "expiresAt": 1, "refreshToken": "rt_new"])
+        }
+        FakeCloudNode.install([wrong, right])
+        let cloud = client("https://n1.test", nodes: ["https://n2.test"])
+        await cloud.useSession(
+            CalimeroSession(accountId: "a", sessionToken: "v2.x", expiresAt: 0, refreshToken: "rt_x"))
+        let session = try await cloud.refresh()
+        XCTAssertEqual(session.refreshToken, "rt_new")
+        XCTAssertEqual(right.requests.first?.json?["refreshToken"], "rt_x", "the same token, not yet spent")
+    }
+
+    func testBlobsCarryTheirContentTypeAndAGrantedDownloadNeedsNoSession() async throws {
+        let node = FakeCloudNode { request in
+            if request.method == "POST" {
+                return .json(["blobId": "B1", "id": "aa", "size": .number(Double(request.body.count))])
+            }
+            return FakeCloudAnswer(status: 200, headers: [("content-type", "image/png")], chunks: [Data([1, 2, 3])])
+        }
+        node.install()
+        let cloud = client()
+        let uploaded = try await cloud.uploadBlob("a1", Data([1, 2, 3]), contentType: "image/png")
+        XCTAssertEqual(uploaded.size, 3)
+        XCTAssertEqual(node.requests[0].headers["content-type"], "image/png")
+        _ = try await cloud.uploadBlob("a1", Data([4]))
+        XCTAssertEqual(node.requests[1].headers["content-type"], "application/octet-stream")
+        let content = try await cloud.blobContent("a1", "B1")
+        XCTAssertEqual(content, BlobContent(data: Data([1, 2, 3]), contentType: "image/png"))
+        let granted = try await cloud.downloadBlobGranted("a1", "B1", grant: "g+/=1")
+        XCTAssertEqual(granted, Data([1, 2, 3]))
+        XCTAssertEqual(node.requests.last?.path, "/apps/a1/blobs/B1?grant=g%2B%2F%3D1")
+        XCTAssertNil(node.requests.last?.bearer)
+    }
+
+    func testXcallsDeploymentsAndDeployers() async throws {
+        let node = FakeCloudNode { request in
+            switch (request.method, request.path) {
+            case ("GET", "/apps/a1/xcalls"):
+                return .json([
+                    "pending": 2,
+                    "deadLetters": [
+                        ["seq": 1, "app": "a2", "method": "m", "reason": "trap", "atMs": 1_700_000_000_000]
+                    ],
+                ])
+            case ("GET", "/deployments"):
+                return .json([
+                    "deployments": [
+                        [
+                            "id": "dep1", "name": "Shop", "owner": ["org": "o1"], "createdBy": "acc",
+                            "createdAt": "2026-01-01T00:00:00Z",
+                            "apps": [
+                                [
+                                    "app": "shop", "package": "com.x", "version": "1.0.0", "addedBy": "acc",
+                                    "addedAt": "2026-01-01T00:00:00Z",
+                                ]
+                            ],
+                        ]
+                    ]
+                ])
+            case ("GET", "/deployments/dep1"):
+                return .json([
+                    "id": "dep1", "name": "Shop", "owner": ["kind": "org", "name": "Acme"],
+                    "apps": [["app": "shop", "package": "com.x", "version": "1.0.0"]],
+                ])
+            case ("GET", "/deployments/dep1/orgs"):
+                return .json([
+                    "deployment": "dep1", "outsideOrgs": 1,
+                    "orgs": [
+                        [
+                            "orgId": "o2", "name": .null, "instances": 3, "firstCreatedAt": "2026-01-02T00:00:00Z",
+                            "apps": [["app": "shop", "version": "1.0.0"]],
+                        ]
+                    ],
+                ])
+            case ("GET", "/deployers"):
+                return .json([
+                    "deployments": "granted", "deployers": "owner", "owner": ["account": "acc"],
+                    "grants": [
+                        [
+                            "key": "org:o1", "deployer": ["org": "o1"], "until": .null, "untilSecs": .null,
+                            "grantedAt": "2026-01-01T00:00:00Z", "grantedBy": "acc",
+                        ]
+                    ],
+                ])
+            case ("POST", "/apps"): return .json(["appId": "a9"])
+            default:
+                if request.json?["confirm"] == nil, request.method != "GET" {
+                    return .error(412, "CONFIRM_REQUIRED", details: Self.stepUpChallenge)
+                }
+                return .json(["id": "dep1"])
+            }
+        }
+        node.install()
+        let cloud = client()
+        let passkey = SoftPasskey()
+        let xcalls = try await cloud.appXcalls("a1")
+        XCTAssertEqual(xcalls.pending, 2)
+        XCTAssertEqual(xcalls.deadLetters.first?.app, "a2")
+
+        let id = try await cloud.createDeployment("Shop", owner: .org("o1"), passkey: passkey)
+        XCTAssertEqual(id, "dep1")
+        try await cloud.offerApp(id, app: "shop", package: "com.x", version: "1.0.0", passkey: passkey)
+        try await cloud.withdrawApp(id, app: "shop", passkey: passkey)
+        try await cloud.deleteDeployment(id, passkey: passkey)
+        try await cloud.grantDeployer(.account("acc_2"), passkey: passkey, until: Date(timeIntervalSince1970: 0))
+        try await cloud.revokeDeployer(.org("o1"), passkey: passkey)
+        let confirmed = node.requests.filter { $0.json?["confirm"] != nil }.map { "\($0.method) \($0.path)" }
+        XCTAssertEqual(
+            confirmed,
+            [
+                "POST /deployments", "POST /deployments/dep1/apps", "DELETE /deployments/dep1/apps/shop",
+                "DELETE /deployments/dep1", "POST /deployers", "DELETE /deployers/org:o1",
+            ])
+        let create = try XCTUnwrap(node.requests.last { $0.path == "/deployments" }?.json)
+        XCTAssertEqual(create["owner"], ["org": "o1"])
+        let grant = try XCTUnwrap(node.requests.last { $0.path == "/deployers" }?.json)
+        XCTAssertEqual(grant["deployer"], ["account": "acc_2"])
+        XCTAssertEqual(grant["until"], "1970-01-01T00:00:00Z")
+
+        let mine = try await cloud.deployments()
+        XCTAssertEqual(mine.first?.owner, .org("o1"))
+        let shown = try await cloud.deployment("dep1")
+        XCTAssertEqual(shown.owner.name, "Acme")
+        let orgs = try await cloud.deploymentOrgs("dep1")
+        XCTAssertEqual(orgs.orgs.first?.instances, 3)
+        XCTAssertEqual(orgs.outsideOrgs, 1)
+        let deployers = try await cloud.deployers()
+        XCTAssertEqual(deployers.deployments, .granted)
+        XCTAssertEqual(deployers.grants.first?.deployer, .org("o1"))
+        XCTAssertEqual(deployerKey(.account("a")), "account:a")
+
+        _ = try await cloud.createApp("shop", bundle: .package("com.x", deployment: "dep1"))
+        XCTAssertEqual(node.requests.last?.json?["deployment"], "dep1")
+        XCTAssertEqual(pageDeployment(URL(string: "https://x.test/1.0.0/?deployment=dep1")), "dep1")
+        XCTAssertNil(pageDeployment(URL(string: "https://x.test/1.0.0/")))
+    }
+
+    func testTheConfirmationCodeIsCoresAndAMismatchIsRefused() async throws {
+        XCTAssertEqual(confirmationCode("1.AAAAAAAAAAAAAAAAAAAAAA"), "R02-9P2")
+        XCTAssertEqual(confirmationCode("2.q7Xb3kR0fLzM8nW1yVt5cA"), "54E-429")
+        let node = FakeCloudNode { _ in
+            .json(["requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1, "code": "AAA-AAA"])
+        }
+        node.install()
+        let opened = Counter()
+        do {
+            _ = try await client().openConsentPage(
+                releaseConsent(.account, version: "2.3.110", returnTo: "x://c")
+            ) { _ in opened.increment() }
+            XCTFail("expected CONSENT_CODE_MISMATCH")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "CONSENT_CODE_MISMATCH")
+            XCTAssertEqual(error.details["expected"], "GBS-YKH")
+        }
+        XCTAssertEqual(opened.count, 0, "the page is not opened")
+    }
+
+    func testADeclinedConsentConfirmationDoesNotOpenThePage() async throws {
+        FakeCloudNode { _ in
+            .json(["requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1, "code": "GBS-YKH"])
+        }.install()
+        let opened = Counter()
+        let shown = Box<String?>(nil)
+        let started = try await client().openConsentPage(
+            releaseConsent(.account, version: "2.3.110", returnTo: "x://c"),
+            options: OpenConsentOptions(
+                navigate: { _ in opened.increment() },
+                confirm: { started in
+                    shown.update { $0 = started.code }
+                    return false
+                }))
+        XCTAssertEqual(started.requestId, "r1")
+        XCTAssertEqual(shown.get, "GBS-YKH")
+        XCTAssertEqual(opened.count, 0)
     }
 }
