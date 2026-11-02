@@ -1,143 +1,36 @@
+import Foundation
 import MeroKit
 import XCTest
 
-/// End-to-end tests against a **live** Calimero node.
-///
-/// Skipped automatically unless `MERO_E2E_NODE_URL` is set, so they never affect
-/// the normal `swift test` / unit CI. The `.github/workflows/e2e.yml` job boots a
-/// released `merod` and sets these:
-///
-///   MERO_E2E_NODE_URL          e.g. http://localhost:4001
-///   MERO_E2E_USER              default "dev"
-///   MERO_E2E_PASS              default "dev-password"
-///   MERO_AUTH_BOOTSTRAP_SECRET first-login setup code (core#3221), optional
+/// End-to-end against a real development cluster (`merod local`, mock
+/// attestation). Skipped unless `MERO_E2E_NODE_URL` names one of its nodes,
+/// e.g. `http://127.0.0.1:2501`. With `MERO_E2E_BUNDLE` (a dev `.wasm` that
+/// exports `set`/`get`, like core's kv-store) it also creates an app and
+/// calls it.
 final class RealNodeE2ETests: XCTestCase {
-    private func env(_ key: String) -> String? {
-        guard let value = ProcessInfo.processInfo.environment[key], !value.isEmpty else { return nil }
-        return value
-    }
-
-    private func makeClient() throws -> Mero {
-        let urlString = try XCTUnwrap(env("MERO_E2E_NODE_URL"), "set by the e2e workflow")
-        let url = try XCTUnwrap(URL(string: urlString))
-        return Mero(config: MeroConfig(baseURL: url, timeout: 30, tokenStore: MemoryTokenStore()))
-    }
-
-    private func skipUnlessConfigured() throws {
-        try XCTSkipUnless(
-            env("MERO_E2E_NODE_URL") != nil,
-            "MERO_E2E_NODE_URL not set — skipping live-node e2e"
-        )
-    }
-
-    func testNodeIsHealthy() async throws {
-        try skipUnlessConfigured()
-        let mero = try makeClient()
-        let health = try await mero.auth.getHealth()
-        XCTAssertEqual(health.status, "alive")
-    }
-
-    func testFullAuthJourney() async throws {
-        try skipUnlessConfigured()
-        let mero = try makeClient()
-
-        // Providers advertise the password auth method.
-        let providers = try await mero.auth.getProviders()
-        XCTAssertGreaterThan(providers.count, 0)
-
-        // Authenticate. These are the admin credentials given to `merod init` —
-        // core 0.11.0-rc.17 creates the admin there, and there is no
-        // first-login bootstrap secret any more.
-        let creds = Credentials(
-            username: env("MERO_E2E_USER") ?? "dev",
-            password: env("MERO_E2E_PASS") ?? "dev-password"
-        )
-        let tokens = try await mero.authenticate(creds)
-        XCTAssertFalse(tokens.accessToken.isEmpty)
-        XCTAssertFalse(tokens.refreshToken.isEmpty)
-
-        let authed = await mero.isAuthenticated
-        XCTAssertTrue(authed)
-
-        // The freshly minted token validates.
-        let validation = await mero.auth.validateToken(tokens.accessToken)
-        XCTAssertTrue(validation.valid)
-
-        // A protected admin read succeeds with the bearer token.
-        let contexts = try await mero.admin.getContexts()
-        XCTAssertGreaterThanOrEqual(contexts.contexts.count, 0)
-
-        // Logout clears local state.
-        await mero.logout()
-        let stillAuthed = await mero.isAuthenticated
-        XCTAssertFalse(stillAuthed)
-    }
-
-    /// Provisioning, against the real node — the gap this suite had.
-    ///
-    /// Everything else that checks request shape here is MOCKED: it asserts
-    /// what the SDK sends, which cannot notice that the node stopped accepting
-    /// it. And the live suite only ever did health, auth and one read. So the
-    /// two calls an app must make before it can do anything — create a
-    /// namespace, create a named subgroup — were covered by neither, and both
-    /// had been returning 400/422 since core closed its request bodies.
-    ///
-    /// This is deliberately the whole chain rather than one call: an app that
-    /// cannot reach a context has nothing, no matter which link broke.
-    func testProvisioningChainAgainstARealNode() async throws {
-        try skipUnlessConfigured()
-        let mero = try makeClient()
-        _ = try await mero.authenticate(
-            Credentials(
-                username: env("MERO_E2E_USER") ?? "dev",
-                password: env("MERO_E2E_PASS") ?? "dev-password"))
-
-        // An application has to exist to hang a namespace off. Any installed
-        // one will do; the wire shape under test is the namespace call.
-        //
-        // ⚠️ This used to be `XCTSkipIf(apps.isEmpty)` and nothing else, which
-        // is why this guard had NEVER run in CI: the workflow boots a bare
-        // node, so the listing was always empty and the one test that proves
-        // the provisioning chain skipped itself on every single run. It passed
-        // locally, where the author's node happened to have an app installed,
-        // and the job still reported "Executed 3 tests" — a vacuous-pass guard
-        // that counts executions cannot see a skip inside them.
-        //
-        // So the bundle is installed here rather than assumed. `.mpk`, not a
-        // raw `.wasm`: since rc.31 an application id is derived from a
-        // bundle's package and signer, and a bare module has no identity to
-        // install under (`500 not a signed application bundle`). The path is
-        // the NODE's filesystem, which is the same machine in this job.
-        let applicationId: String
-        if let bundle = env("MERO_E2E_APP_BUNDLE") {
-            applicationId = try await mero.admin.installDevApplication(
-                InstallDevApplicationRequest(path: bundle)
-            ).applicationId
-            XCTAssertFalse(applicationId.isEmpty)
-        } else {
-            let apps = try await mero.admin.listApplications()
-            try XCTSkipIf(
-                apps.apps.isEmpty,
-                "no application installed and MERO_E2E_APP_BUNDLE unset")
-            applicationId = apps.apps[0].id
+    private var nodeURL: String {
+        get throws {
+            guard let url = ProcessInfo.processInfo.environment["MERO_E2E_NODE_URL"], !url.isEmpty else {
+                throw XCTSkip("MERO_E2E_NODE_URL is not set")
+            }
+            return url
         }
+    }
 
-        // 400 if the body carries `upgradePolicy`.
-        let namespace = try await mero.admin.createNamespace(
-            CreateNamespaceRequest(applicationId: applicationId, name: "e2e-workspace"))
-        XCTAssertFalse(namespace.namespaceId.isEmpty)
+    func testSignsUpCreatesAnOrgAndCallsAnApp() async throws {
+        let client = CalimeroClient(CalimeroClientOptions(baseUrl: try nodeURL, policy: .development))
+        let session = try await client.signUp(SoftPasskey(), name: "swift-e2e")
+        XCTAssertFalse(session.accountId.isEmpty)
+        let org = try await client.createOrg("swift-e2e")
+        let orgs = try await client.me().orgs
+        XCTAssertTrue(orgs.contains { $0.orgId == org })
+        try await client.refresh()
 
-        // 422 if the body spells the name `name` instead of `groupName`.
-        let subgroup = try await mero.admin.createGroupInNamespace(
-            namespace.namespaceId,
-            request: CreateGroupInNamespaceRequest(groupName: "e2e-room"))
-        XCTAssertFalse(subgroup.groupId.isEmpty)
-
-        // And the subgroup really is named — a request the node accepted but
-        // read as unnamed would pass every assertion above.
-        let subgroups = try await mero.admin.listNamespaceGroups(namespace.namespaceId)
-        XCTAssertTrue(
-            subgroups.contains { $0.groupId == subgroup.groupId },
-            "the subgroup the node just created should be listed under its namespace")
+        guard let path = ProcessInfo.processInfo.environment["MERO_E2E_BUNDLE"] else { return }
+        let bundle = try await client.uploadBundle(try Data(contentsOf: URL(fileURLWithPath: path)))
+        let app = try await client.createApp("kv", bundle: .bundle(bundle), org: org, initArgs: [:])
+        _ = try await client.call(app, "set", ["key": "a", "value": "1"])
+        let read = try await client.view(app, "get", ["key": "a"])
+        XCTAssertEqual(read.result, "1")
     }
 }

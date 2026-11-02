@@ -17,69 +17,46 @@ struct OpField: Identifiable, Sendable {
     }
 }
 
-/// What a Cloud / relay operation runs against.
-struct CloudOpContext: Sendable {
-    let signIn: CloudSignIn
-    /// `nil` when the account has no relay yet.
-    let relay: RelayClient?
-    let session: CloudSession?
-    /// The whole connection (relay, Bearer reads, attested node key).
-    var connection: CloudConnection?
-
-    func requireConnection() throws -> CloudConnection {
-        guard let connection, connection.relay != nil else {
-            throw AccountError.notSignedIn("No relay serves this account yet.")
-        }
-        return connection
-    }
-
-    func requireRelay() throws -> RelayClient {
-        guard let relay else { throw AccountError.notSignedIn("No relay serves this account yet.") }
-        return relay
-    }
-}
-
-/// A single invokable SDK method: metadata + input fields + an async runner that
-/// returns a rendered (pretty-printed) result string.
-///
-/// Node-admin operations run against the session's `Mero` (on a Cloud session,
-/// the relay's Bearer session). Cloud / relay operations run against the
-/// account layer instead (`cloudRun`).
+/// A single invokable SDK method: metadata, input fields, and an async
+/// runner over the signed-in `CalimeroClient` that returns a rendered
+/// (pretty-printed) result.
 struct SDKOperation: Identifiable, Sendable {
     let id: String
     let category: String
     let name: String
     let summary: String
     let fields: [OpField]
-    let run: @Sendable (Mero, [String: String]) async throws -> String
-    let cloudRun: (@Sendable (CloudOpContext, [String: String]) async throws -> String)?
+    /// Runs over the client, the form's inputs and the signed-in passkey,
+    /// which approves step-ups (`412 CONFIRM_REQUIRED`).
+    let run: @Sendable (CalimeroClient, [String: String], (any PasskeyProvider)?) async throws -> String
 
     init(
-        id: String, category: String, name: String, summary: String, fields: [OpField],
-        run: @escaping @Sendable (Mero, [String: String]) async throws -> String
+        _ id: String, _ category: String, _ name: String, _ summary: String, fields: [OpField] = [],
+        run: @escaping @Sendable (CalimeroClient, [String: String]) async throws -> String
     ) {
-        self.id = id; self.category = category; self.name = name; self.summary = summary
-        self.fields = fields; self.run = run; self.cloudRun = nil
+        self.init(id, category, name, summary, fields: fields, stepUp: { c, i, _ in try await run(c, i) })
     }
 
-    private init(
-        id: String, category: String, name: String, summary: String, fields: [OpField],
-        cloudRun: @escaping @Sendable (CloudOpContext, [String: String]) async throws -> String
+    /// An operation the node approves with the account's passkey.
+    init(
+        _ id: String, _ category: String, _ name: String, _ summary: String, fields: [OpField] = [],
+        stepUp run:
+            @escaping @Sendable (CalimeroClient, [String: String], (any PasskeyProvider)?) async throws
+            -> String
     ) {
-        self.id = id; self.category = category; self.name = name; self.summary = summary
+        self.id = id
+        self.category = category
+        self.name = name
+        self.summary = summary
         self.fields = fields
-        self.run = { _, _ in throw AccountError.notSignedIn("a Cloud operation") }
-        self.cloudRun = cloudRun
+        self.run = run
     }
+}
 
-    /// An operation on the account layer (Cloud manager, relay, warrants).
-    static func cloud(
-        id: String, name: String, summary: String, fields: [OpField] = [],
-        category: String = "Cloud & Relay",
-        _ run: @escaping @Sendable (CloudOpContext, [String: String]) async throws -> String
-    ) -> SDKOperation {
-        SDKOperation(id: id, category: category, name: name, summary: summary, fields: fields, cloudRun: run)
-    }
+/// The passkey a step-up needs, or a refusal to run without one.
+func approver(_ passkey: (any PasskeyProvider)?) throws -> any PasskeyProvider {
+    guard let passkey else { throw AccountError.notSignedIn("this needs your passkey's approval") }
+    return passkey
 }
 
 // MARK: - Rendering / decoding helpers
@@ -91,6 +68,7 @@ enum Fmt {
     }
 
     static func json<T: Encodable>(_ value: T) -> String {
+        if let value = value as? JSONValue, value == .null { return "null" }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         if let data = try? enc.encode(value), let str = String(data: data, encoding: .utf8) { return str }

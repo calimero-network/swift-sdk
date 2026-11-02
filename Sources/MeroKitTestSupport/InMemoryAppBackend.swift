@@ -179,8 +179,8 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     // MARK: Scripted state
 
-    /// The contract: ``recording``, or ``NoRelayContextContract`` while ``hasRelay`` is false.
-    public var contract: any ContextContract { hasRelay ? recording : NoRelayContextContract() }
+    /// The contract: ``recording``, or ``SignedOutContextContract`` while ``hasRelay`` is false.
+    public var contract: any ContextContract { hasRelay ? recording : SignedOutContextContract() }
     public var hasRelay: Bool {
         get { read { $0.hasRelay } }
         set { write { $0.hasRelay = newValue } }
@@ -271,7 +271,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func foundNamespace(name: String) async throws -> AppFoundedNamespace {
         try step("foundNamespace \(name)") { state in
-            guard state.hasRelay else { throw AccountError.noRelay(method: "foundNamespace") }
+            guard state.hasRelay else { throw SignedOutError(method: "foundNamespace") }
             let id = Self.mint("aa", &state.next)
             state.namespaces.append(
                 AppNamespace(id: id, name: name, applicationId: state.applicationId, memberCount: 1))
@@ -291,6 +291,8 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         }
     }
 
+    /// A service's instance (``MeroAppBackend/createServiceContext(groupId:applicationId:service:name:initArgs:)``)
+    /// is logged with `applicationId` `package#service`.
     public func createContext(
         groupId: String, applicationId: String, name: String, initArgs: JSONValue
     ) async throws -> String {
@@ -312,12 +314,12 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         }
     }
 
-    public func createInvitation(namespaceId: String) async throws -> SignedGroupOpenInvitation {
+    public func createInvitation(namespaceId: String) async throws -> OrgInvitation {
         try step("createInvitation \(namespaceId)") { _ in Self.invitation(namespaceId: namespaceId) }
     }
 
     public func joinNamespace(
-        namespaceId: String, invitation: SignedGroupOpenInvitation
+        namespaceId: String, invitation: OrgInvitation
     ) async throws -> AppJoinedNamespace {
         try step("joinNamespace \(namespaceId)") { state in
             if !state.namespaces.contains(where: { $0.id == namespaceId }) {
@@ -328,7 +330,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
                     AppMember(identity: account, role: GovernanceMemberRole.member.rawValue))
             }
             state.hasRelay = true
-            return AppJoinedNamespace(namespaceId: namespaceId, published: true, relayURL: state.joinRelayURL)
+            return AppJoinedNamespace(namespaceId: namespaceId, published: true, nodeURL: state.joinRelayURL)
         }
     }
 
@@ -381,7 +383,7 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
 
     public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
         try step("uploadBlob \(contextId) \(data.count)") { state in
-            guard state.hasRelay else { throw AccountError.noRelay(method: "uploadBlob") }
+            guard state.hasRelay else { throw SignedOutError(method: "uploadBlob") }
             let id = Self.mint("dd", &state.next)
             state.blobs[id] = (contextId, data)
             return AppBlob(blobId: id, size: data.count)
@@ -504,14 +506,9 @@ public final class InMemoryAppBackend: MeroAppBackend, @unchecked Sendable {
         for continuation in targets { continuation.finish(throwing: error) }
     }
 
-    /// An invitation to `namespaceId` shaped like a real one (its signature is not).
-    public static func invitation(namespaceId: String) -> SignedGroupOpenInvitation {
-        let group = (try? Hex.decode(namespaceId, label: "namespaceId", bytes: 32)).map { $0.map(Int.init) }
-        return SignedGroupOpenInvitation(
-            invitation: GroupInvitationFromAdmin(
-                inviterIdentity: Array(repeating: 1, count: 32), groupId: group ?? Array(repeating: 0, count: 32),
-                expirationTimestamp: 4_102_444_800, secretSalt: Array(repeating: 2, count: 32)),
-            inviterSignature: String(repeating: "00", count: 64))
+    /// An invitation to `namespaceId` shaped like a real one (`inv_…`).
+    public static func invitation(namespaceId: String) -> OrgInvitation {
+        OrgInvitation(namespaceId: namespaceId, token: "inv_" + String(namespaceId.prefix(16)))
     }
 
     // MARK: Plumbing

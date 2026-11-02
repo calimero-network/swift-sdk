@@ -336,124 +336,8 @@ final class SealedTransportTests: XCTestCase {
     }
 
     // MARK: - fetchAttestedTransportKey
-
-    func testAsksTheVerifierToCheckTheBindingOfTheReportedKey() async throws {
-        let sent = SealedTestRecorder<TeeAttestRequest>()
-        let checked = SealedTestRecorder<TransportQuoteArgs>()
-        let key = try await fetchAttestedTransportKey(
-            { request in
-                sent.record(request)
-                return TransportAttestation(quoteB64: "quote", transportPublicKey: Self.transportVector)
-            },
-            verifier: AnyTransportQuoteVerifier { args in
-                checked.record(args)
-                return true
-            })
-        XCTAssertEqual(Hex.encode(key), Self.transportVector)
-        let request = try XCTUnwrap(sent.values.first)
-        XCTAssertTrue(request.bindTransportKey)
-        XCTAssertFalse(request.includeCollateral, "a verifier with no use for collateral does not ask for it")
-        let args = try XCTUnwrap(checked.values.first)
-        XCTAssertEqual(args.quoteB64, "quote")
-        XCTAssertEqual(args.nonce, request.nonce)
-        XCTAssertEqual(args.reportDataSuffix, Hex.encode(transportKeyBinding(Data(count: 32), key)))
-    }
-
-    func testRefusesAKeyWhoseQuoteDidNotVerifyOrANodeThatReportsNone() async {
-        let refused = await teeAsyncThrownMessage {
-            _ = try await fetchAttestedTransportKey(
-                { _ in TransportAttestation(quoteB64: "q", transportPublicKey: Self.transportVector) },
-                verifier: AnyTransportQuoteVerifier { _ in false })
-        }
-        assertTeeRefusal(refused, "did not verify")
-        let none = await teeAsyncThrownMessage {
-            _ = try await fetchAttestedTransportKey(
-                { _ in TransportAttestation(quoteB64: "q") }, verifier: AnyTransportQuoteVerifier { _ in true })
-        }
-        assertTeeRefusal(none, "predates sealed transport")
-    }
-
-    // MARK: - SealedTransport.attested
-
-    /// Accepts a "quote" that is exactly `nonce ‖ reportDataSuffix`.
-    private let reportDataVerifier = AnyTransportQuoteVerifier { args in
-        Hex.encode(Data(base64Encoded: args.quoteB64) ?? Data()) == args.nonce + args.reportDataSuffix
-    }
-
-    func testAttestsTheNodeThenSealsEverythingToTheKeyItsQuoteCommitsTo() async throws {
-        let node = SealedStandInNode { _ in .ok(#"{"data":{"alive":true}}"#) }
-        node.install(attesting: true)
-        let sealed = try SealedTransport.attested(
-            baseURL: base, verifier: reportDataVerifier, session: MockURLProtocol.makeSession())
-        let (body, _) = try await sealed.data(for: request("/admin-api/health"))
-        XCTAssertEqual(String(decoding: body, as: UTF8.self), #"{"data":{"alive":true}}"#)
-        _ = try await sealed.data(for: request("/admin-api/health"))
-        XCTAssertEqual(node.attests, 1)
-        XCTAssertEqual(node.handshakes, 1)
-        XCTAssertEqual(node.requests.map(\.path), ["/admin-api/health", "/admin-api/health"])
-    }
-
-    func testSendsNothingSealedToANodeWhoseQuoteTheVerifierRefuses() async throws {
-        let node = SealedStandInNode { _ in .ok() }
-        node.install(attesting: true)
-        let sealed = try SealedTransport.attested(
-            baseURL: base, verifier: AnyTransportQuoteVerifier { _ in false }, session: MockURLProtocol.makeSession())
-        let call = request("/admin-api/health")
-        let refusal = await teeAsyncThrownMessage { _ = try await sealed.data(for: call) }
-        assertTeeRefusal(refusal, "did not verify")
-        XCTAssertEqual(node.handshakes, 0)
-        XCTAssertEqual(node.requests.count, 0)
-    }
-
-    /// Delegated execution to a TEE relay: the warrant and the method's
-    /// arguments reach only the relay's TD.
-    func testCarriesARelayClientIntentToTheRelaySealedWarrantAndArgumentsIncluded() async throws {
-        let context = String(repeating: "01", count: 32)
-        let executor = String(repeating: "4d", count: 32)
-        let node = SealedStandInNode { seen in
-            seen.method == "GET"
-                ? .ok(
-                    CanonicalJSON.string([
-                        "data": [
-                            "executorAccount": .string(executor),
-                            "executorKey": .string(String(repeating: "ec", count: 32)),
-                            "canAuthorOnBehalf": true, "groupId": .string(String(repeating: "ab", count: 32)),
-                            "releaseBytecodeId": .string(String(repeating: "b1", count: 32)), "releaseVersion": "1.2.0",
-                        ]
-                    ]))
-                : .ok(#"{"data":{"rootHash":"root-1","returns":"ok"}}"#)
-        }
-        node.install(attesting: true)
-        let sealed = try SealedTransport.attested(
-            baseURL: base, verifier: reportDataVerifier, session: MockURLProtocol.makeSession())
-        let enrolled = DelegatedFixture.enrolled
-        let relay = RelayClient(
-            relayURL: SealedStandInNode.baseURL, authorAccount: enrolled.account, authorProof: enrolled.credential,
-            keys: DelegatedFixture.keys, nonces: MemoryWarrantNonceStore(), session: sealed.urlSession())
-
-        let result = try await relay.execute(
-            contextId: context, method: "transfer_secret_amount", argsJson: ["to": "bob", "amount": 4242])
-        XCTAssertEqual(result.rootHash, "root-1")
-
-        let discovery = try XCTUnwrap(node.requests.first)
-        XCTAssertEqual(discovery.method, "GET")
-        let intent = try XCTUnwrap(node.requests.last)
-        XCTAssertEqual(intent.method, "POST")
-        XCTAssertEqual(intent.path, "/admin-api/contexts/\(context)/intents")
-        let sent = try MeroJSON.decode(JSONValue.self, from: Data(intent.body.utf8))
-        XCTAssertEqual(sent["method"], "transfer_secret_amount")
-        XCTAssertEqual(sent["argsJson"], ["to": "bob", "amount": 4242])
-        let warrant = try XCTUnwrap(sent["warrant"]?.stringValue)
-        let wire = node.wire
-        for secret in ["transfer_secret_amount", "4242", String(warrant.prefix(32))] {
-            XCTAssertNil(wire.range(of: Data(secret.utf8)), "\(secret) crossed the wire in the clear")
-        }
-    }
 }
 
-// MARK: - Test doubles
-
-/// A finite byte stream for the frame reader.
 struct SealedTestBytes: AsyncIteratorProtocol {
     private let bytes: [UInt8]
     private var index = 0
@@ -574,7 +458,7 @@ final class SealedStandInNode: @unchecked Sendable {
     }
 
     func handle(_ request: URLRequest) -> MockURLProtocol.Stub {
-        let body = FakeNode.body(request)
+        let body = FakeCloudNode.body(request)
         locked { _wire.append(body) }
         let path = request.url?.path ?? ""
         do {
@@ -595,7 +479,8 @@ final class SealedStandInNode: @unchecked Sendable {
     }
 
     private func attest(_ request: URLRequest) -> MockURLProtocol.Stub {
-        let nonce = (try? MeroJSON.decode(JSONValue.self, from: FakeNode.body(request)))?["nonce"]?.stringValue ?? ""
+        let nonce =
+            (try? MeroJSON.decode(JSONValue.self, from: FakeCloudNode.body(request)))?["nonce"]?.stringValue ?? ""
         let key = transportKey
         let quote = (try? Hex.decode(nonce, label: "n", bytes: 32)) ?? Data()
         let reportData = quote + transportKeyBinding(Data(count: 32), key)

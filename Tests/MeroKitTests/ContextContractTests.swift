@@ -51,29 +51,30 @@ final class ContextContractTests: XCTestCase {
 
     func testBoundContractPassesTheContractsFailureThrough() async {
         let contract = RecordingContextContract { _ in
-            throw AccountError.intentRefused(reason: "no", retryable: false, status: 403)
+            throw AppError("the app refused the call", details: ["code": "Forbidden"])
         }
         do {
             _ = try await contract.bound(to: context).execute(method: "post", argsJSON: Data("{}".utf8))
             XCTFail("expected the refusal")
-        } catch AccountError.intentRefused(let reason, _, let status) {
-            XCTAssertEqual(reason, "no")
-            XCTAssertEqual(status, 403)
+        } catch let error as AppError {
+            XCTAssertEqual(error.appCode, "Forbidden")
+            XCTAssertEqual(error.status, 422)
         } catch {
             XCTFail("unexpected \(error)")
         }
     }
 
-    func testNoRelayContractNamesTheMethod() async {
+    func testSignedOutContractNamesTheMethod() async {
         for call in [RecordedContractCall.Path.query, .execute] {
             do {
                 if call == .query {
-                    _ = try await NoRelayContextContract().query(contextId: context, method: "get_feed", args: [:])
+                    _ = try await SignedOutContextContract().query(contextId: context, method: "get_feed", args: [:])
                 } else {
-                    _ = try await NoRelayContextContract().execute(contextId: context, method: "get_feed", args: [:])
+                    _ = try await SignedOutContextContract().execute(contextId: context, method: "get_feed", args: [:])
                 }
-                XCTFail("expected noRelay")
-            } catch AccountError.noRelay(let method) {
+                XCTFail("expected SignedOutError")
+            } catch let error as SignedOutError {
+                let method = error.method
                 XCTAssertEqual(method, "get_feed")
             } catch {
                 XCTFail("unexpected \(error)")

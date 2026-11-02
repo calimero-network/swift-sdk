@@ -274,7 +274,7 @@ final class AgentTestGate: @unchecked Sendable {
 
     func install() {
         MockURLProtocol.setHandler { [self] request in
-            let body = (try? MeroJSON.decode(JSONValue.self, from: FakeNode.body(request))) ?? .null
+            let body = (try? MeroJSON.decode(JSONValue.self, from: FakeCloudNode.body(request))) ?? .null
             do {
                 let answer = try handle(request.url?.path ?? "", body)
                 return .init(

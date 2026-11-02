@@ -1,95 +1,28 @@
 ---
 title: Sealed transport
-description: Requests encrypted end to end to a TEE node's attested key — the Noise NK handshake, sealed frames, SealedTransport and its URLSession, and sealing a relay with connectCloud and delegated sessions.
+description: Every request after attestation is encrypted end to end to the node's attested transport key — Noise NK, sealed frames, and SealedTransport.
 sidebar:
-  order: 11
+  order: 3
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-A node speaks plain HTTP, and any TLS in front of it ends outside the enclave,
-at whatever proxy or relay the operator runs. Everything crossing that hop —
-the bearer token, a warrant, JSON-RPC arguments, results — is readable there.
-**Sealing** encrypts it so that only the attested TD can read it, and only the
-TD can produce a response the client accepts. It is a port of mero-js
-`src/sealed/sealed.ts` and `noise.ts`, byte for byte with core's
-`crates/server/src/sealed.rs` (its published vectors are the tests).
-
-## The wire
+Only `GET /health` and `GET /attestation` are plaintext. Everything else is
+sealed: `CalimeroClient` opens a `SealedTransport` per node, keyed by the
+transport key the node's quote binds, and every request and response
+(event streams included) travels inside it. The wire format is core's
+`calimero-sealed`, byte for byte (the tests run core's published vectors):
 
 ```text
 handshake   Noise_NK_25519_AESGCM_SHA256, prologue "calimero/sealed-http/v2"
   request   POST /sealed/v2/handshake   0x02 ‖ transport_pk ‖ Noise message 1
   response  0x02 ‖ Noise message 2 (payload = session_id(16) ‖ lifetime secs, u32 BE)
 exchange    POST /sealed/v2
-  header    0x02 ‖ session_id(16) ‖ request_id (u64 BE; from 1, each used once)
+  header    0x02 ‖ session_id(16) ‖ request_id (u64 BE; from 1)
   request   header ‖ AES-256-GCM(req key, nonce = request_id ‖ 0u32, aad = header, inner)
-  response  frames, each u32 BE length ‖ AES-256-GCM(resp key, nonce = request_id ‖ index, aad = header, kind ‖ data)
-            kind 0 = head (JSON), 1 = body bytes, 2 = end; no end frame = cut short
+  response  frames: u32 BE length ‖ AES-256-GCM(resp key, nonce = request_id ‖ index, aad = header, kind ‖ data)
 ```
 
-`SealedTransport.handshakePath`, `.sealedPath` and `.contentType`
-(`application/vnd.calimero.sealed`) name the routes. The transport key only
-authenticates the node; the session keys come from both sides' ephemeral
-keys, so once a session is gone (an hour at most) what was sent in it cannot
-be opened, not even with the transport key.
-
-## A sealed transport
-
-```swift
-// A node known only by URL: attest its transport key, then seal everything to it.
-let sealed = try SealedTransport.attested(baseURL: nodeURL, verifier: try createSignedReleaseVerifier(
-  SignedReleaseVerifierOptions(release: { try await fetchNodeRelease(url) },
-                               profile: "locked-read-only", minReleaseVersion: "2.3.99")))
-
-let (data, response) = try await sealed.data(for: request)   // or send(_:) to stream the body
-let mero = Mero(config: MeroConfig(baseURL: nodeURL), session: sealed.urlSession())
-```
-
-- `SealedTransport(baseURL:key:session:)` takes the key as `.key(Data)` or
-  `.attest { ... }` (typically `fetchAttestedTransportKey(_:verifier:)`).
-  Given a function, a restarted node is attested again through it and the
-  request retried once; given bytes, a restart throws `StaleTransportKeyError`.
-- `urlSession(configuration:)` hands any `URLSession` consumer — `Mero`,
-  `RelayClient`, `URLSessionHttpClient`, the SSE clients — a session whose
-  every request is sealed (`SealedURLProtocol`). Server-sent events stream
-  sealed, frame by frame. WebSockets cannot be sealed.
-- A request for a URL outside the base URL is **refused**, never sent in the
-  clear.
-- One session serves many requests, concurrent ones included, renewed a minute
-  before the node would drop it; a forgotten session (`unknown_session`) is
-  reopened and the request resent; a `busy` handshake waits `Retry-After` (≤ 5 s)
-  once. Any other envelope refusal is a `SealedTransportError` (`status`, `code`).
-- `createSignedReleaseSealedFetch(_:)` is the whole recipe for a relay: the
-  release it names in `/admin-api/tee/info` (or `releaseVersion` for a node
-  that refuses that unsealed), from `releaseSource`, verified, then attested
-  and sealed.
-- `transportKeyBinding(_:_:)` is what the quote's report data carries:
-  `SHA-256("calimero.tee-attest.transport-key.v1" ‖ inner ‖ key)`.
-
-## Sealing a relay
-
-```swift
-let connection = try await connectCloud(ConnectCloudOptions(
-  authorAccount: account, authorProof: credential, keys: keys, sessionToken: token,
-  seal: DcapRelayKeyVerifier.signedReleaseVerifier(relayURL: relayURL)))
-```
-
-With `seal`, every call to the relay — the warrant, the method's arguments,
-the login, its reads — is sealed to the key its attested TD holds; calls to
-the cloud stay plain (they carry no intent).
-
-Delegated sessions seal a hosted relay **by default**
-(`DelegatedEnvironment.sealRelays`, `CloudConfig.sealRelays`):
-`DelegatedAccounts.relayTransportSession(_:env:)` is the one sealed session
-per relay their clients, logins and governance share, and
-`DelegatedAccounts.forgetRelaySealing()` drops them. A loopback relay is never
-sealed.
-
-<Aside type="note">
-A relay whose node leaves auth to its proxy (no `[server.sealed] forward_auth`)
-cannot guard a logged-in route inside the envelope and answers
-`403 sealed_route_unguarded` from inside it. Only then does a delegated
-session send that request — and later logged-in ones — plain over TLS: the
-answer is sealed, so nobody on the way can forge it to force the downgrade.
-</Aside>
+A session is renewed a minute before it lapses, reopened when the node forgot
+it (`unknown_session`), and the node is attested again when it restarted
+(`stale_transport_key`). `SealedTransport.urlSession()` seals any
+`URLSession` request to the node; a request outside its base URL is refused,
+never sent in the clear.
