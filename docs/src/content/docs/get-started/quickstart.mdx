@@ -17,8 +17,10 @@ Products: `MeroKit` (the client), `MeroKitUI` (SwiftUI session and app layer),
 ## A development cluster
 
 ```sh
-# in calimero-network/core (merod is Linux only; on macOS run it in Docker)
+# in calimero-network/core, on Linux:
 cargo run -p merod -- local     # 3 nodes on 127.0.0.1:2501-2503, mock attestation
+# on a Mac (merod 1.0 is Linux only), in a swift-sdk checkout, with Docker:
+scripts/dev-cluster.sh up
 ```
 
 ```swift
