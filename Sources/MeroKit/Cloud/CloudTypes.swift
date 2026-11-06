@@ -156,15 +156,30 @@ public struct UpgradeRun: Codable, Sendable, Equatable {
 }
 
 /// One of an app's blobs: `blobId` base58 (what apps print), `id` hex. (== mero-js `BlobInfo`.)
+///
+/// A component app's sealed file (core rc.9+, ``CalimeroClient/uploadFile(_:_:)``)
+/// lists with `sealed` true and the plaintext's `sha256` (hex), for the app's
+/// owner and its organization's members only; `size` is the plaintext's.
 public struct BlobInfo: Codable, Sendable, Equatable {
     public var blobId: String
     public var id: String
     public var size: Int
+    /// The plaintext's SHA-256 (hex): a sealed file's only.
+    public var sha256: String?
+    /// `true` for a component app's sealed file; absent for a blob.
+    public var sealed: Bool?
+    /// The upload's index in the app's log: what ``CalimeroClient/uploadFile(_:_:)`` answers.
+    public var index: Int?
 
-    public init(blobId: String, id: String, size: Int) {
+    public init(
+        blobId: String, id: String, size: Int, sha256: String? = nil, sealed: Bool? = nil, index: Int? = nil
+    ) {
         self.blobId = blobId
         self.id = id
         self.size = size
+        self.sha256 = sha256
+        self.sealed = sealed
+        self.index = index
     }
 }
 
@@ -274,11 +289,15 @@ public struct OrgInfo: Sendable, Equatable {
     public var publishes: [String]
     /// `nil` unless a deadline stopped new work: approve `release` (or newer) to lift it.
     public var newWorkStopped: ReleaseDeadlineStop?
+    /// The recovery key and any recovery under way (core rc.9+); `nil` while
+    /// the organization has none.
+    public var recovery: OrgRecovery?
     /// The whole answer.
     public var raw: JSONValue
 
     public init(json: JSONValue) {
         raw = json
+        recovery = json["recovery"].flatMap(OrgRecovery.init(json:))
         orgId = json["orgId"]?.stringValue ?? ""
         name = json["name"]?.stringValue ?? ""
         members = (json["members"]?.objectValue ?? [:]).compactMapValues { $0.stringValue.flatMap(OrgRole.init) }
@@ -370,6 +389,15 @@ public struct AccountInfo: Sendable, Equatable {
     public var orgs: [OrgMembership]
     /// The passkey (device) this session was opened with.
     public var passkeyId: String?
+    /// How the credential signed in: `session` or `apiKey`.
+    public var via: String?
+    /// The package the session is bound to (core rc.9+): opened on an app's
+    /// frontend or on an origin its manager registered
+    /// (``CalimeroClient/addPackageOrigin(_:origin:passkey:rpId:)``). `nil`
+    /// for an unbound session.
+    public var app: String?
+    /// The registered web origin the session was opened on, when the node recorded one.
+    public var origin: String?
     public var raw: JSONValue
 
     public init(json: JSONValue) {
@@ -383,6 +411,139 @@ public struct AccountInfo: Sendable, Equatable {
                 role: o["role"]?.stringValue.flatMap(OrgRole.init) ?? .member)
         }
         passkeyId = json["passkeyId"]?.stringValue
+        via = json["via"]?.stringValue
+        app = json["app"]?.stringValue
+        origin = json["origin"]?.stringValue
+    }
+}
+
+/// `GET /sign-up` (core rc.9+): who may create an account on the cluster,
+/// read without a session, so an app can say "invite only" before any
+/// passkey prompt. (== mero-js `SignUpPolicy`.)
+public struct SignUpPolicy: Codable, Sendable, Equatable {
+    /// `open` (anyone), `invite` (an organization or sign-up invite), `closed` (a sign-up invite only).
+    public enum Policy: String, Codable, Sendable, Equatable {
+        case open
+        case invite
+        case closed
+    }
+
+    public var policy: Policy
+    /// Whether an organization invite lets a new person sign up (and join it).
+    public var orgInvites: Bool
+    /// Whether a cluster sign-up invite does (always).
+    public var signUpInvites: Bool
+    /// Whether a sign-up without an invite is refused.
+    public var inviteRequired: Bool
+
+    public init(policy: Policy, orgInvites: Bool, signUpInvites: Bool, inviteRequired: Bool) {
+        self.policy = policy
+        self.orgInvites = orgInvites
+        self.signUpInvites = signUpInvites
+        self.inviteRequired = inviteRequired
+    }
+}
+
+/// An upgrade key's scope (core rc.10+): the one app it upgrades, and the
+/// package whose signed releases it may move the app to (default: the
+/// package the app runs). (== mero-js `createApiKey`'s `upgrades`.)
+public struct UpgradeKeyScope: Sendable, Equatable {
+    public var app: String
+    public var package: String?
+
+    public init(app: String, package: String? = nil) {
+        self.app = app
+        self.package = package
+    }
+}
+
+/// One web origin registered for a package (core rc.9+), so a frontend its
+/// managers host themselves signs people in with passkeys.
+/// (== mero-js `PackageOrigin` / `PackageOriginAdded`.)
+public struct PackageOrigin: Codable, Sendable, Equatable {
+    /// The package; absent from a listing's rows on some nodes.
+    public var package: String?
+    /// `scheme://host[:port]`.
+    public var origin: String
+    /// The WebAuthn relying-party id passkeys made there are bound to.
+    public var rpId: String
+    /// The account that registered it.
+    public var addedBy: String
+    /// RFC 3339.
+    public var addedAt: String
+
+    public init(package: String? = nil, origin: String, rpId: String, addedBy: String, addedAt: String) {
+        self.package = package
+        self.origin = origin
+        self.rpId = rpId
+        self.addedBy = addedBy
+        self.addedAt = addedAt
+    }
+}
+
+/// An organization's recovery key (core rc.9+, core `Org::recovery`).
+/// (== mero-js `OrgRecovery`.)
+public struct OrgRecovery: Sendable, Equatable {
+    /// The key's Ed25519 public half, base64url.
+    public var publicKey: String
+    /// When the owner set it (Unix seconds).
+    public var setAt: Int
+    /// A recovery under way: warn every member, the owner first, who may cancel it.
+    public var pending: PendingRecovery?
+
+    public init(publicKey: String, setAt: Int, pending: PendingRecovery? = nil) {
+        self.publicKey = publicKey
+        self.setAt = setAt
+        self.pending = pending
+    }
+
+    init?(json: JSONValue) {
+        guard let publicKey = json["publicKey"]?.stringValue else { return nil }
+        self.publicKey = publicKey
+        setAt = json["setAt"]?.intValue ?? 0
+        pending = json["pending"].flatMap { p in
+            p["account"]?.stringValue.map {
+                PendingRecovery(
+                    account: $0, startedAt: p["startedAt"]?.intValue ?? 0, readyAt: p["readyAt"]?.intValue ?? 0)
+            }
+        }
+    }
+}
+
+/// When a recovery started and the earliest it may finish (Unix seconds).
+/// (== mero-js `RecoveryTimes`.)
+public struct RecoveryTimes: Codable, Sendable, Equatable {
+    public var startedAt: Int
+    public var readyAt: Int
+
+    public init(startedAt: Int, readyAt: Int) {
+        self.startedAt = startedAt
+        self.readyAt = readyAt
+    }
+}
+
+/// A recovery under way: the account the organization goes to, and when (Unix seconds).
+public struct PendingRecovery: Sendable, Equatable {
+    public var account: String
+    public var startedAt: Int
+    public var readyAt: Int
+
+    public init(account: String, startedAt: Int, readyAt: Int) {
+        self.account = account
+        self.startedAt = startedAt
+        self.readyAt = readyAt
+    }
+}
+
+/// What finishing a recovery answers: the organization, and the owners it
+/// had before (who left it). (== mero-js `finishRecovery`'s answer.)
+public struct RecoveryFinished: Codable, Sendable, Equatable {
+    public var org: String
+    public var previousOwners: [String]
+
+    public init(org: String, previousOwners: [String]) {
+        self.org = org
+        self.previousOwners = previousOwners
     }
 }
 

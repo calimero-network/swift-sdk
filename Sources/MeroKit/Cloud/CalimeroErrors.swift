@@ -145,6 +145,98 @@ public final class ConsentStale: CalimeroError, @unchecked Sendable {
     }
 }
 
+/// `403 ORIGIN_NOT_REGISTERED` (core rc.9+): a sign-up or sign-in named a web
+/// origin the cluster does not know, neither one of its own nor one a
+/// package's manager registered (``CalimeroClient/addPackageOrigin(_:origin:passkey:rpId:)``).
+/// ``origin`` is the origin the ceremony named and ``package`` the package it
+/// was expected for, when known. (== mero-js `OriginNotRegistered`.)
+public final class OriginNotRegistered: CalimeroError, @unchecked Sendable {
+    public let origin: String
+    public let package: String
+
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        origin = details["origin"]?.stringValue ?? ""
+        package = details["package"]?.stringValue ?? ""
+        super.init(status: 403, code: "ORIGIN_NOT_REGISTERED", message: message, details: details)
+    }
+}
+
+/// `400 BAD_ORIGIN` or `400 BAD_RP_ID`: the origin a package's manager tried
+/// to register is not a bare web origin (`scheme://host[:port]`), or the
+/// relying-party id given for it does not fit its host. `code` says which.
+/// (== mero-js `BadOrigin`.)
+public final class BadOrigin: CalimeroError, @unchecked Sendable {
+    public init(code: String, message: String, details: [String: JSONValue] = [:]) {
+        super.init(status: 400, code: code, message: message, details: details)
+    }
+}
+
+/// `409 ORIGIN_TAKEN`: the origin is registered already (for this package or
+/// another), or it is one of the cluster's own. (== mero-js `OriginTaken`.)
+public final class OriginTaken: CalimeroError, @unchecked Sendable {
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        super.init(status: 409, code: "ORIGIN_TAKEN", message: message, details: details)
+    }
+}
+
+/// `429 QUOTA_EXCEEDED`: the caller holds as many of something (origins,
+/// blobs, an organization's file bytes, …) as it may. (== mero-js `QuotaExceeded`.)
+public final class QuotaExceeded: CalimeroError, @unchecked Sendable {
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        super.init(status: 429, code: "QUOTA_EXCEEDED", message: message, details: details)
+    }
+}
+
+/// Why a sign-up was refused (``SignUpRefused/reason``), read from what the
+/// node said. (== mero-js `SignUpRefusal`.)
+public enum SignUpRefusal: String, Sendable, Equatable {
+    /// The cluster takes new accounts with an invite only.
+    case inviteOnly = "invite-only"
+    /// Only a cluster sign-up invite (the operator's or the owner's) admits.
+    case closed
+    /// The invite is not one the cluster knows (mistyped, revoked, used up).
+    case unknownInvite = "unknown-invite"
+    /// Past its expiry, or no use left.
+    case expiredInvite = "expired-invite"
+    /// The organization the invite was for was deleted.
+    case orgGone = "org-gone"
+    case other
+}
+
+/// `403 SIGN_UP_REFUSED` (core rc.9+): the cluster's sign-up policy does not
+/// take this sign-up (``CalimeroClient/signUpPolicy()``), answered by
+/// `register/begin` before a passkey is made and by `register/finish` before
+/// its challenge is spent. (== mero-js `SignUpRefused`.)
+public final class SignUpRefused: CalimeroError, @unchecked Sendable {
+    public let reason: SignUpRefusal
+
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        reason = Self.refusal(message)
+        super.init(status: 403, code: "SIGN_UP_REFUSED", message: message, details: details)
+    }
+
+    private static func refusal(_ message: String) -> SignUpRefusal {
+        if message.contains("invite only") { return .inviteOnly }
+        if message.contains("pre-authorized") || message.contains("sign-up invite") { return .closed }
+        if message.contains("unknown invite") { return .unknownInvite }
+        if message.contains("invite has expired") { return .expiredInvite }
+        if message.contains("organization is gone") { return .orgGone }
+        return .other
+    }
+}
+
+/// `409 RECOVERY_NOT_READY` (core rc.9+): an organization's recovery may
+/// finish only once its 72-hour delay has passed. ``readyAt`` is when it may
+/// (Unix seconds), when the node said. (== mero-js `RecoveryNotReady`.)
+public final class RecoveryNotReady: CalimeroError, @unchecked Sendable {
+    public let readyAt: Int?
+
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        readyAt = details["readyAt"]?.doubleValue.map { Int($0) }
+        super.init(status: 409, code: "RECOVERY_NOT_READY", message: message, details: details)
+    }
+}
+
 /// `422 APP_ERROR`: the app refused the call. ``appCode`` is the app's
 /// declared error (`Taken`, `Forbidden`, …) and ``fields`` its named fields.
 /// The call was logged, so its idempotency key is spent. (== mero-js `AppError`.)
@@ -240,7 +332,25 @@ public func errorFrom(status: Int, body: JSONValue?, retryAfter header: String? 
     case "413 ARGS_TOO_LARGE": return ArgsTooLarge(message, details: details)
     case "422 APP_ERROR": return AppError(message, details: details)
     case "422 TRAP": return TrapError(message, details: details)
-    default: return CalimeroError(status: status, code: code, message: message, details: details)
+    default:
+        return accountError(status: status, code: code, message: message, details: details)
+            ?? CalimeroError(status: status, code: code, message: message, details: details)
+    }
+}
+
+/// The sign-up, origin, quota and recovery refusals (core rc.9+), apart so
+/// ``errorFrom(status:body:retryAfter:)`` stays one readable switch.
+private func accountError(
+    status: Int, code: String, message: String, details: [String: JSONValue]
+) -> CalimeroError? {
+    switch "\(status) \(code)" {
+    case "403 SIGN_UP_REFUSED": return SignUpRefused(message, details: details)
+    case "403 ORIGIN_NOT_REGISTERED": return OriginNotRegistered(message, details: details)
+    case "400 BAD_ORIGIN", "400 BAD_RP_ID": return BadOrigin(code: code, message: message, details: details)
+    case "409 ORIGIN_TAKEN": return OriginTaken(message, details: details)
+    case "429 QUOTA_EXCEEDED": return QuotaExceeded(message, details: details)
+    case "409 RECOVERY_NOT_READY": return RecoveryNotReady(message, details: details)
+    default: return nil
     }
 }
 

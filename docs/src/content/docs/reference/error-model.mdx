@@ -21,6 +21,12 @@ the code together. Every one is a subclass of `CalimeroError` (`status`,
 | `409 IDEMPOTENCY_MISMATCH` | `IdempotencyMismatch` | |
 | `409 RELEASE_DEADLINE` | `ReleaseDeadlineError` | `release`, `after` |
 | `409 CONSENT_STALE` | `ConsentStale` | |
+| `403 SIGN_UP_REFUSED` | `SignUpRefused` | `reason` (`.inviteOnly`, `.closed`, `.unknownInvite`, `.expiredInvite`, `.orgGone`, `.other`); core rc.9+ |
+| `403 ORIGIN_NOT_REGISTERED` | `OriginNotRegistered` | `origin`, `package`; core rc.9+ |
+| `400 BAD_ORIGIN`, `400 BAD_RP_ID` | `BadOrigin` | `code` says which |
+| `409 ORIGIN_TAKEN` | `OriginTaken` | |
+| `429 QUOTA_EXCEEDED` | `QuotaExceeded` | origins, a component app's blobs, an organization's file bytes |
+| `409 RECOVERY_NOT_READY` | `RecoveryNotReady` | `readyAt` (Unix seconds) |
 | `422 APP_ERROR` | `AppError` | `appCode`, `fields` |
 | `422 TRAP` | `TrapError` | `kind` |
 | `503 *`, or no answer | `UnavailableError` | `reason`, `committed` (`.no` / `.unknown`), `retryAfter`; after retries |
