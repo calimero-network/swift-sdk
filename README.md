@@ -8,7 +8,7 @@ live events. It is the Swift port of
 the same methods, the same typed errors, the same retry and failover rules.
 
 - Swift 5.9+, iOS 15+ / macOS 12+, no third-party dependencies.
-- A Calimero 1.0 cluster (core `1.0.0-rc.3`, [`ci/core-version`](ci/core-version)),
+- A Calimero 1.0 cluster (core `1.0.0-rc.10`, [`ci/core-version`](ci/core-version)),
   or `merod local` for development.
 - Docs: <https://calimero-network.github.io/swift-sdk/>
 
@@ -54,15 +54,22 @@ for try await event in cloud.events(app) { print(event.kind) }      // sealed SS
   `401` triggers one shared refresh. `421 WRONG_NODE` moves to the next node,
   `421 NOT_LEADER` to the named leader. `CalimeroClient.connect(…cluster:)`
   reads a cluster's nodes from the node directory.
-- **Step-ups.** Members, invites, passkeys and API keys take a `passkey:` that
-  answers the node's `412 CONFIRM_REQUIRED`.
+- **Step-ups.** Members, invites, passkeys, API keys (creating and revoking),
+  package origins and organization recovery take a `passkey:` that answers the
+  node's `412 CONFIRM_REQUIRED`. A sign-up prompts twice: the new passkey then
+  signs the account it creates.
+- **Sign-up policy.** `signUpPolicy()` says whether the cluster is `open`,
+  `invite` or `closed` before any prompt; `signUp(_:name:invite:)` takes an
+  organization or sign-up invite.
 - **Retries.** A call or view that meets `503` or no answer is sent again with
   the same idempotency key (6 retries, 200 ms → 2 s), then the next node with
   the same key, then `UnavailableError`.
 - **Errors.** `CalimeroError` and its subclasses: `AppError{appCode, fields}`,
   `ConfirmRequired`, `LoginRequired`, `WrongNode`, `NotLeader`, `NotFound`,
   `UnavailableError`, `ArgsTooLarge`, `IdempotencyMismatch`,
-  `ReleaseDeadlineError`, `ConsentStale`, `TrapError`; plus `ConfirmCancelled`.
+  `ReleaseDeadlineError`, `ConsentStale`, `TrapError`, `SignUpRefused{reason}`,
+  `OriginNotRegistered`, `BadOrigin`, `OriginTaken`, `QuotaExceeded`,
+  `RecoveryNotReady{readyAt}`; plus `ConfirmCancelled`.
 - **Approvals** happen on the node's consent page: `requestConsent` → open the
   `url` in the system browser → `consentResult`.
 

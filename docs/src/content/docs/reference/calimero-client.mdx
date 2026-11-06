@@ -16,14 +16,15 @@ Methods marked with a passkey (`passkey:`) are step-ups: the node answers
 | Group | Methods |
 | --- | --- |
 | Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `nodeUrl`, `nodes`, `connect` |
-| Identity | `signUp`, `signIn`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey(_:approver:)`, `removePasskey(_:passkey:)`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey(…, passkey:)`, `revokeApiKey` |
+| Identity | `signUp(_:name:invite:origin:)`, `signIn(_:origin:)`, `signUpPolicy`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey(_:approver:)`, `removePasskey(_:passkey:)`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey(…, upgrades:, passkey:)`, `revokeApiKey(_:passkey:)` |
+| Package origins | `packageOrigins`, `addPackageOrigin(_:origin:passkey:rpId:)`, `removePackageOrigin(_:origin:passkey:)` |
 | Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed` |
-| Bundles, blobs | `uploadBundle`, `uploadBlob(_:_:contentType:)`, `downloadBlob`, `downloadBlobGranted`, `blobContent`, `listBlobs`, `blobInfo`, `deleteBlob` |
+| Bundles, blobs | `uploadBundle`, `uploadBlob(_:_:contentType:)`, `uploadFile(_:_:)`, `downloadBlob`, `downloadBlobGranted`, `blobContent`, `listBlobs`, `blobInfo`, `deleteBlob` |
 | Packages | `uploadPackage`, `installPackage`, `packages`, `package`, `uninstallPackage` |
 | App instances | `listApps`, `getApp`, `createApp`, `deleteApp`, `setAccess`, `setAppMetadata`, `appStorage`, `appAbi`, `appXcalls`, `transferApp`, `upgradeApp` |
 | Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events` |
 | Presence, aliases | `publishPresence`, `presence`, `presenceStream`, `setAlias`, `aliases`, `alias`, `deleteAlias` |
-| Organizations | `createOrg`, `getOrg`, `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember(…, passkey:)`, `removeMember(…, passkey:)`, `setCapabilities(…, passkey:)`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember(…, passkey:)`, `removeTeamMember(…, passkey:)`, `invite(…, passkey:)`, `redeemInvite` |
+| Organizations | `createOrg(_:recoveryKey:)`, `getOrg`, `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `cancelRecovery(_:passkey:)`, `finishRecovery(_:passkey:)` (`RecoverySeed`), `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember(…, passkey:)`, `removeMember(…, passkey:)`, `setCapabilities(…, passkey:)`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember(…, passkey:)`, `removeTeamMember(…, passkey:)`, `invite(…, passkey:)`, `redeemInvite` |
 | Approvals | `approveRelease`, `approveOutbound`, `appsReport`, `appsReportAll`, `releaseRules`, `pendingApprovals`, `requestConsent`, `openConsentPage`, `consentResult`, `waitForConsent`, `publisherBinding`, `bindPublisher`, `upgradePublished` |
 | Deployments | `createDeployment`, `deployments`, `deployment`, `deleteDeployment`, `offerApp`, `withdrawApp`, `deploymentOrgs`; `createApp(bundle: .package(…, deployment:))`; `pageDeployment(_:)`, `frontendManifest(_:)` |
 | Deployers | `grantDeployer`, `deployers`, `revokeDeployer` |

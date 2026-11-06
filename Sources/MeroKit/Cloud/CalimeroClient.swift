@@ -430,30 +430,76 @@ public actor CalimeroClient {
 
     // MARK: - Identity
 
-    /// Create an account with a new passkey, and sign in.
+    /// Create an account with a new passkey, and sign in. The node then asks
+    /// the new passkey to sign the account it creates (`412
+    /// CONFIRM_REQUIRED`, core rc.9+), so a sign-up prompts twice: create,
+    /// then sign.
+    ///
+    /// `invite` is an organization invite's token (the new account joins the
+    /// organization at the invite's role) or a cluster sign-up invite's; a
+    /// cluster whose policy is `invite` or `closed` (``signUpPolicy()``)
+    /// needs one. It goes on both halves and on the retry. A sign-up the
+    /// policy refuses, or an unknown, expired or used invite, is
+    /// ``SignUpRefused``, from `begin`, before any passkey is made.
+    ///
+    /// `origin` names the web origin the ceremony runs on, for a frontend
+    /// served from an origin a package's manager registered
+    /// (``addPackageOrigin(_:origin:passkey:rpId:)``): the passkey is made for
+    /// that origin's relying party and the session is bound to its package.
+    /// An unregistered one is ``OriginNotRegistered``. A native app leaves it `nil`.
     @discardableResult
-    public func signUp(_ passkey: any PasskeyProvider, name: String) async throws -> CalimeroSession {
-        let begin = try await post("auth/passkey/register/begin", ["name": .string(name)])
+    public func signUp(
+        _ passkey: any PasskeyProvider, name: String, invite: String? = nil, origin: String? = nil
+    ) async throws -> CalimeroSession {
+        var extra: [String: JSONValue] = [:]
+        if let invite, !invite.isEmpty { extra["invite"] = .string(invite) }
+        var beginBody = extra
+        beginBody["name"] = .string(name)
+        if let origin { beginBody["origin"] = .string(origin) }
+        let begin = try await beginCeremony("auth/passkey/register/begin", .object(beginBody), origin: origin)
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("the registration did not begin")
         }
         let registration = try await passkey.create(options: options)
-        let data = try await json(
-            "POST", "auth/passkey/register/finish",
-            body: CanonicalJSON.data(["challengeId": .string(challengeId), "registration": try Self.json(registration)])
-        )
+        var finish = extra
+        finish["challengeId"] = .string(challengeId)
+        finish["registration"] = try Self.json(registration)
+        let data = try await confirmed(.object(finish), passkey: passkey) { body in
+            try await self.json("POST", "auth/passkey/register/finish", body: CanonicalJSON.data(body))
+        }
         let session = try decode(CalimeroSession.self, data)
         useSession(session)
         return session
     }
 
-    /// Sign in with an existing passkey.
+    /// Who may create an account on the cluster (`GET /sign-up`, core
+    /// rc.9+); needs no session.
+    public func signUpPolicy() async throws -> SignUpPolicy {
+        try decode(SignUpPolicy.self, try await json("GET", "sign-up"))
+    }
+
+    /// POST a ceremony's `begin`, naming the `origin` sent in an
+    /// ``OriginNotRegistered`` the node leaves it out of.
+    private func beginCeremony(_ path: String, _ body: JSONValue, origin: String?) async throws -> JSONValue {
+        do {
+            return try await post(path, body)
+        } catch let error as OriginNotRegistered where error.origin.isEmpty && origin != nil {
+            var details = error.details
+            details["origin"] = origin.map(JSONValue.string)
+            throw OriginNotRegistered(error.message, details: details)
+        }
+    }
+
+    /// Sign in with an existing passkey. `origin`: as for
+    /// ``signUp(_:name:invite:origin:)``; the assertion is made for the
+    /// relying-party id the node answers for it.
     @discardableResult
-    public func signIn(_ passkey: any PasskeyProvider) async throws -> CalimeroSession {
-        let begin = try await post("auth/passkey/login/begin")
+    public func signIn(_ passkey: any PasskeyProvider, origin: String? = nil) async throws -> CalimeroSession {
+        let begin = try await beginCeremony(
+            "auth/passkey/login/begin", origin.map { ["origin": .string($0)] } ?? [:], origin: origin)
         guard let challengeId = begin["challengeId"]?.stringValue,
             let challenge = begin["options"]?["challenge"]?.stringValue,
-            let rpId = begin["options"]?["rpId"]?.stringValue
+            let rpId = begin["options"]?["rpId"]?.stringValue ?? begin["options"]?["rp"]?["id"]?.stringValue
         else { throw AccountError.protocolViolation("the sign-in did not begin") }
         let assertion = try await passkey.get(challenge: try fromB64url(challenge), rpId: rpId, allowCredentials: nil)
         let data = try await json(
@@ -573,16 +619,26 @@ public actor CalimeroClient {
         try await get("auth/apikeys")["keys"]?.arrayValue ?? []
     }
 
-    public func revokeApiKey(_ keyId: String) async throws {
-        try await delete("auth/apikeys/\(Self.seg(keyId))")
+    /// Revoke one of the account's API keys, approved with its `passkey`
+    /// (`412 CONFIRM_REQUIRED`, core rc.9+).
+    public func revokeApiKey(_ keyId: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed("auth/apikeys/\(Self.seg(keyId))", passkey: passkey)
     }
 
     /// Create an API key for an agent or server, approved with the account's
     /// `passkey` (`412 CONFIRM_REQUIRED`); needs a passkey session (an API
     /// key is refused `403`). The key is returned once.
+    ///
+    /// `upgrades` (core rc.10+) makes an upgrade key, for CI: it upgrades
+    /// that one app to signed releases of its package (default: the one the
+    /// app runs, by that package's pinned signer) with
+    /// ``upgradeApp(_:version:package:service:bundle:migrate:passkey:)`` and
+    /// no passkey, and every other request with it is refused `403
+    /// UPGRADE_KEY_ONLY`. It takes no other scope field.
     public func createApiKey(
         label: String? = nil, apps: [String]? = nil, methods: [String]? = nil, readOnly: Bool? = nil,
-        allowConfirm: Bool? = nil, ttlSecs: Int? = nil, passkey: any PasskeyProvider
+        allowConfirm: Bool? = nil, ttlSecs: Int? = nil, upgrades: UpgradeKeyScope? = nil,
+        passkey: any PasskeyProvider
     ) async throws -> (keyId: String, key: String) {
         var body: [String: JSONValue] = [:]
         if let label { body["label"] = .string(label) }
@@ -591,6 +647,11 @@ public actor CalimeroClient {
         if let readOnly { body["readOnly"] = .bool(readOnly) }
         if let allowConfirm { body["allowConfirm"] = .bool(allowConfirm) }
         if let ttlSecs { body["ttlSecs"] = .number(Double(ttlSecs)) }
+        if let upgrades {
+            var scope: [String: JSONValue] = ["app": .string(upgrades.app)]
+            if let package = upgrades.package { scope["package"] = .string(package) }
+            body["upgrades"] = .object(scope)
+        }
         let answer = try await postConfirmed("auth/apikeys", .object(body), passkey: passkey)
         return (answer["keyId"]?.stringValue ?? "", answer["key"]?.stringValue ?? "")
     }
@@ -607,12 +668,27 @@ public actor CalimeroClient {
     /// hex. `contentType` (printable ASCII; the node refuses another with
     /// `400`) is sent as the upload's `Content-Type`: a component app records
     /// it and serves downloads with it. A component app holding as many blobs
-    /// as it may answers `429 QUOTA_EXCEEDED`.
+    /// as it may answers ``QuotaExceeded``.
     public func uploadBlob(
         _ app: String, _ data: Data, contentType: String = "application/octet-stream"
     ) async throws -> BlobInfo {
         try decode(
             BlobInfo.self, try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
+    }
+
+    /// Upload a sealed file for component app `app` (core rc.9+,
+    /// `POST /apps/{app}/blobs?sealed=true`): sealed under a key of its own
+    /// that only the app's code reads, replicated on the app's replicas. Its
+    /// owner and its organization's members only (`403` to others), charged
+    /// to the organization's file quota (``QuotaExceeded``); a non-component
+    /// app answers `409 NOT_SUPPORTED`. Answers its id, the plaintext's
+    /// `size` and `sha256`, and the upload's log `index`. No route serves,
+    /// replaces or deletes a sealed file: the app's runs open it by id.
+    public func uploadFile(_ app: String, _ data: Data) async throws -> BlobInfo {
+        try decode(
+            BlobInfo.self,
+            try await json(
+                "POST", "apps/\(Self.seg(app))/blobs?sealed=true", body: data, contentType: "application/octet-stream"))
     }
 
     /// One of `app`'s blobs, by id (base58 or hex).
@@ -747,7 +823,9 @@ public actor CalimeroClient {
 
     /// Move an app to another release of its package (`version`), another
     /// package, or a bundle hash, running its migration. Where the node asks
-    /// for an approval (`412 CONFIRM_REQUIRED`), `passkey` gives it.
+    /// for an approval (`412 CONFIRM_REQUIRED`), `passkey` gives it. With an
+    /// upgrade key (``createApiKey(label:apps:methods:readOnly:allowConfirm:ttlSecs:upgrades:passkey:)``
+    /// `upgrades`) pass no passkey and a `version` of the key's package.
     @discardableResult
     public func upgradeApp(
         _ app: String, version: String? = nil, package: String? = nil, service: String? = nil, bundle: String? = nil,
@@ -982,9 +1060,57 @@ public actor CalimeroClient {
 
     // MARK: - Organizations
 
-    /// Create an organization; answers its id.
-    public func createOrg(_ name: String) async throws -> String {
-        try await post("orgs", ["name": .string(name)])["orgId"]?.stringValue ?? ""
+    /// Create an organization; answers its id. `recoveryKey` (core rc.9+,
+    /// ``RecoverySeed/publicKey``) lets whoever holds its seed recover the
+    /// organization if its owner loses every passkey; keep the seed offline
+    /// (``RecoverySeed/text``).
+    public func createOrg(_ name: String, recoveryKey: String? = nil) async throws -> String {
+        var body: [String: JSONValue] = ["name": .string(name)]
+        if let recoveryKey { body["recoveryKey"] = .string(recoveryKey) }
+        return try await post("orgs", .object(body))["orgId"]?.stringValue ?? ""
+    }
+
+    /// Set or rotate (`publicKey`, ``RecoverySeed/publicKey``) or remove
+    /// (`nil`) the organization's recovery key (core rc.9+): its owner only,
+    /// approved with `passkey`. A recovery under way is cancelled, and the
+    /// old seed's signatures are refused from then on.
+    public func setRecoveryKey(_ org: String, publicKey: String?, passkey: any PasskeyProvider) async throws {
+        try await postConfirmed(
+            "orgs/\(Self.seg(org))/recovery", ["publicKey": publicKey.map(JSONValue.string) ?? .null],
+            passkey: passkey)
+    }
+
+    /// Start handing `org` to the signed-in account with the recovery
+    /// `seed`, which signs here and never leaves this process (core rc.9+).
+    /// Finish with ``finishRecovery(_:passkey:)`` once `readyAt` has passed
+    /// (72 hours); until then the owner may ``cancelRecovery(_:passkey:)``
+    /// and every member sees it in ``OrgInfo/recovery``. A wrong seed, no
+    /// organization or none set is `403 WRONG_RECOVERY_KEY`.
+    public func startRecovery(_ org: String, seed: RecoverySeed) async throws -> RecoveryTimes {
+        let account = try await me().accountId
+        let nonce = b64url(randomBytes(16))
+        let signature = try seed.sign(org: org, account: account, nonce: nonce)
+        let data = try await json(
+            "POST", "orgs/\(Self.seg(org))/recovery/start",
+            body: CanonicalJSON.data(["nonce": .string(nonce), "signature": .string(signature)]))
+        return try decode(RecoveryTimes.self, data)
+    }
+
+    /// Cancel the recovery under way: the organization's owner, approved with `passkey` (core rc.9+).
+    public func cancelRecovery(_ org: String, passkey: any PasskeyProvider) async throws {
+        try await postConfirmed("orgs/\(Self.seg(org))/recovery/cancel", [:], passkey: passkey)
+    }
+
+    /// Finish a recovery this account started, once its delay passed
+    /// (``RecoveryNotReady`` before, with `readyAt`), approved with this
+    /// account's `passkey` (core rc.9+). The account becomes the owner; the
+    /// previous owner leaves the organization.
+    @discardableResult
+    public func finishRecovery(_ org: String, passkey: any PasskeyProvider) async throws -> RecoveryFinished {
+        let answer = try await postConfirmed("orgs/\(Self.seg(org))/recovery/finish", [:], passkey: passkey)
+        return RecoveryFinished(
+            org: answer["org"]?.stringValue ?? org,
+            previousOwners: (answer["previousOwners"]?.arrayValue ?? []).compactMap(\.stringValue))
     }
 
     /// The organization, with the teams this caller reaches or manages.
@@ -1316,6 +1442,41 @@ public actor CalimeroClient {
         try await post("invites/\(Self.seg(token))/redeem")
     }
 
+    // MARK: - Package origins
+
+    /// The web origins `package`'s managers registered (core rc.9+) so a
+    /// frontend they host themselves signs people in with passkeys: a session
+    /// opened on one is bound to the package. ``NotFound`` for an unknown
+    /// package; `403` to anyone not managing it. (== mero-js `packageOrigins.list`.)
+    public func packageOrigins(_ package: String) async throws -> [PackageOrigin] {
+        try decode(PackageOriginList.self, try await json("GET", "package-origins/\(Self.seg(package))")).origins
+    }
+
+    /// Register `origin` (`scheme://host[:port]`) for `package`, approved
+    /// with `passkey` (`412 CONFIRM_REQUIRED` over `__add_origin`). `rpId`
+    /// defaults to the node's choice for the origin (its host). Refusals:
+    /// ``BadOrigin`` (`BAD_ORIGIN`, `BAD_RP_ID`), ``OriginTaken``,
+    /// ``QuotaExceeded``. (== mero-js `packageOrigins.add`.)
+    @discardableResult
+    public func addPackageOrigin(
+        _ package: String, origin: String, passkey: any PasskeyProvider, rpId: String? = nil
+    ) async throws -> PackageOrigin {
+        var body: [String: JSONValue] = ["origin": .string(origin)]
+        if let rpId { body["rpId"] = .string(rpId) }
+        let data = try await confirmed(.object(body), passkey: passkey) { body in
+            try await self.json("POST", "package-origins/\(Self.seg(package))", body: CanonicalJSON.data(body))
+        }
+        return try decode(PackageOrigin.self, data)
+    }
+
+    /// Remove `origin` from `package`, approved with `passkey`
+    /// (`__remove_origin`). Sessions opened there stop working (`401`).
+    /// ``NotFound`` if it was not registered. (== mero-js `packageOrigins.remove`.)
+    public func removePackageOrigin(_ package: String, origin: String, passkey: any PasskeyProvider) async throws {
+        try await deleteConfirmed(
+            "package-origins/\(Self.seg(package))", passkey: passkey, body: ["origin": .string(origin)])
+    }
+
     // MARK: - Deployers
 
     /// Let an account or organization install apps where the cluster's
@@ -1453,6 +1614,7 @@ public enum AppSource: Sendable, Equatable {
 }
 
 private struct BlobList: Decodable { let blobs: [BlobInfo] }
+private struct PackageOriginList: Decodable { let origins: [PackageOrigin] }
 private struct PackageList: Decodable { let packages: [PackageInfo] }
 private struct AppList: Decodable { let apps: [AppInfo] }
 private struct DeploymentList: Decodable { let deployments: [DeploymentInfo] }

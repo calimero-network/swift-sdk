@@ -35,7 +35,8 @@ iterating) to close the stream.
 
 | Call | Route |
 | --- | --- |
-| `createOrg(name)`, `getOrg(org)`, `setOrgMetadata` | `/orgs`, `/orgs/{org}` |
+| `createOrg(name, recoveryKey:)`, `getOrg(org)`, `setOrgMetadata` | `/orgs`, `/orgs/{org}` |
+| `setRecoveryKey(org, publicKey:, passkey:)`, `startRecovery(org, seed:)`, `cancelRecovery(org, passkey:)`, `finishRecovery(org, passkey:)` | `/orgs/{org}/recovery…` |
 | `createTeam(org, name:, join: .everyone/.invite)`, `getTeam`, `updateTeam`, `deleteTeam` | `/orgs/{org}/teams/…` |
 | `setMember`, `removeMember`, `setTeamMember`, `removeTeamMember`, `setCapabilities` (each with `passkey:`) | `/orgs/{org}/members`, `…/capabilities` |
 | `invite(org, role:, passkey:, teams:)` → `inv_…` | `POST /orgs/{org}/invites` |
@@ -44,12 +45,33 @@ iterating) to close the stream.
 
 `me()` lists the account's organizations.
 
+An owner who loses every passkey gets the organization back with its recovery
+seed (core rc.9+). The seed never leaves the device: the node stores only its
+public key and checks a signature the seed makes for the recovering account.
+
+```swift
+let seed = RecoverySeed()
+showToOwner(seed.text)   // 64 hex digits in groups of eight; keep it offline
+let org = try await client.createOrg("Acme", recoveryKey: seed.publicKey)
+
+// Every passkey lost: sign up again with a new passkey, then
+let times = try await fresh.startRecovery(org, seed: try RecoverySeed(text: written))
+// 72 hours later (the owner may cancelRecovery; members see getOrg(org).recovery?.pending)
+try await fresh.finishRecovery(org, passkey: newPasskey)   // RecoveryNotReady before readyAt
+```
+
+Rotating the key (`setRecoveryKey`) cancels a recovery under way, and the old
+seed is refused from then on.
+
 ## Blobs and presence
 
 `uploadBlob(app, data, contentType:)`, `downloadBlob(app, id)`,
 `blobContent(app, id, grant:)` (bytes and content type),
 `downloadBlobGranted(app, id, grant:)` (no session: a grant one of the app's
 runs handed out), `listBlobs`, `blobInfo`, `deleteBlob` on
-`/apps/{app}/blobs`; `appXcalls(app)` for a component app's outbox and dead
+`/apps/{app}/blobs`; `uploadFile(app, data)` for a component app's sealed file
+(core rc.9+: only the app's code reads it; its owner and organization members
+upload it, and see `sealed` and the plaintext's `sha256` in `listBlobs` and
+`blobInfo`); `appXcalls(app)` for a component app's outbox and dead
 letters; `publishPresence`, `presence`,
 `presenceStream` on `/apps/{app}/presence`.
