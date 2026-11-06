@@ -107,5 +107,6 @@ XCUITest suite drives.
 swift build && swift test
 swiftlint lint --strict
 swift-format lint --recursive --strict Sources Tests Examples
-MERO_E2E_NODE_URL=http://127.0.0.1:2501 swift test --filter MeroKitE2ETests   # against merod local
+scripts/dev-cluster.sh up                       # merod local on :2501-2503 (Docker on a Mac)
+MERO_E2E_NODE_URL=http://127.0.0.1:2501 swift test --filter MeroKitE2ETests   # against it
 ```
