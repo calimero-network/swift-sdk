@@ -281,6 +281,64 @@ public final class MeroClient: ObservableObject {
         }
     }
 
+    /// Sign in through the package's served page (``ServedPageHandoff``): the
+    /// page opens in the system sign-in sheet, the person signs in there with
+    /// their passkey, and the page sends back a session bound to this package,
+    /// sealed to a key made for this sign-in only. Then this client talks to
+    /// the node the page signed in on, and the session is stored like any other.
+    ///
+    /// - Parameters:
+    ///   - cluster: the Calimero Cloud cluster to sign in on (its own host for
+    ///     the package); `nil`: the package's primary cluster.
+    ///   - callback: the app's own scheme, which the page's frontend sends the
+    ///     session back to (`mero-chat://signed-in`).
+    ///   - opener: the sheet; an ephemeral ``SystemWebAuthenticator`` by default,
+    ///     so the page holds no session of its own.
+    /// - Returns: whether it worked; a failure lands in ``errorMessage``.
+    @discardableResult
+    public func signInWithServedPage(
+        cluster: String? = nil, callback: CloudCallback, appsDomain: String = AppHost.defaultDomain,
+        opener: any WebAuthenticating = MeroClient.servedPageOpener()
+    ) async -> Bool {
+        guard let package = config.packageName else {
+            errorMessage = "No app package is configured."
+            return false
+        }
+        isLoading = true
+        errorMessage = nil
+        defer { isLoading = false }
+        do {
+            let origin = AppHost.origin(package: package, cluster: cluster, domain: appsDomain)
+            let version = try await AppHost.latestVersion(origin: origin, session: urlSession)
+            let handoff = ServedPageHandoff()
+            let answer = try await opener.authenticate(url: handoff.url(origin: origin, version: version), callback: callback)
+            let signedIn = try handoff.open(answer)
+            connect(nodeURL: signedIn.nodeUrl, nodes: signedIn.nodes, allowMock: config.policy.allowMock)
+            guard let cloud else { throw AccountError.notSignedIn("could not connect to \(signedIn.nodeUrl)") }
+            await cloud.useSession(signedIn.session)
+            store.save(
+                StoredCloudSession(
+                    nodeURL: signedIn.nodeUrl, nodes: signedIn.nodes, allowMock: allowMock, session: signedIn.session))
+            if session?.accountId != signedIn.accountId { sessionRevision += 1 }
+            session = signedIn.session
+            return true
+        } catch is WebAuthenticationCancelled {
+            return false
+        } catch {
+            errorMessage = Self.describe(error)
+            return false
+        }
+    }
+
+    /// The sheet for ``signInWithServedPage(cluster:callback:appsDomain:opener:)``: ephemeral.
+    public static func servedPageOpener() -> any WebAuthenticating {
+        #if canImport(AuthenticationServices) && (os(iOS) || os(macOS))
+        return SystemWebAuthenticator(prefersEphemeralWebBrowserSession: true)
+        #else
+        return NoWebAuthenticator()
+        #endif
+    }
+
     /// The system browser where there is one.
     public static func defaultOpener() -> any WebAuthenticating {
         #if canImport(AuthenticationServices) && (os(iOS) || os(macOS))
