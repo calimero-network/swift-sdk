@@ -131,7 +131,7 @@ extension CalimeroClient {
 
         /// Move an app to another organization: `POST /apps/{app}/move` (`app_move`).
         ///
-        /// Its data where it is; its files, runs and quotas go to the target, `org` or app-team access becomes the target's app team of its package. `bringMembers` adds the source's members who reach it, capped at `member`.
+        /// Its data where it is; its files, runs and quotas go to the target, `org` or app-team access becomes the target's app team of its package. `bringMembers` adds the source's members who reach it, capped at `member`. `from` is the organization it left, `null` for an app of the caller's own; `added` the accounts brought; `revokedInvites` how many invites to its old team were withdrawn.
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
@@ -384,6 +384,8 @@ extension CalimeroClient {
         }
 
         /// Who is present: `GET /apps/{app}/presence` (`presence_get`).
+        ///
+        /// One entry per present device (a session's passkey, or an API key): its account, device and state (hex).
         ///
         /// **Who:** whoever the app's access admits (a public app: anyone).
         @discardableResult
@@ -885,7 +887,7 @@ extension CalimeroClient {
 
         /// The account's live sessions: `GET /auth/sessions` (`sessions_list`).
         ///
-        /// Latest active first, at most 256.
+        /// Latest active first, at most 256. `openedAt` (Unix seconds) is `null` for a session opened before the node kept it.
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend).
         @discardableResult
@@ -970,6 +972,8 @@ extension CalimeroClient {
 
         /// The deployers: `GET /deployers` (`deployer_list`).
         ///
+        /// The operator, or the cluster's owner: the deployments and deployers governance, the owner (`null` until named), and every grant (`until` RFC 3339 and `untilSecs`, `null` for none; `grantedAt` RFC 3339; `deployer` `null` for a key it cannot read).
+        ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend).
         @discardableResult
         public func deployerList() async throws -> Operations.DeployerList.Output.Ok.Body.JsonPayload {
@@ -992,7 +996,7 @@ extension CalimeroClient {
 
         /// Create a deployment: `POST /deployments` (`deployment_create`).
         ///
-        /// A named set of releases an owner (an account or organization) offers for others to instantiate.
+        /// A named set of releases an owner (an account or organization) offers for others to instantiate. Answers its id, the record as made (no apps yet) and its frontend host (`null` on a node with no apps domain).
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
@@ -1052,6 +1056,8 @@ extension CalimeroClient {
         }
 
         /// The organizations a deployment serves: `GET /deployments/{id}/orgs` (`deployment_orgs`).
+        ///
+        /// For its managers: each organization with instances from it, its name (`null` when unknown), member counts (`activeMembers30d`: active in the last 30 days), its instances and the releases they run, and when its first was created (RFC 3339); instances outside an organization are only counted (`outsideOrgs`). Never who the members are.
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
@@ -1241,7 +1247,7 @@ extension CalimeroClient {
 
         /// The organization's invites: `GET /orgs/{org}/invites` (`invite_list`).
         ///
-        /// Their keys and terms, never a token.
+        /// Their keys and terms, never a token: `expiresAt` Unix seconds; `createdBy` and `createdAt` are `null` on an invite from before they were kept.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -1856,11 +1862,11 @@ extension CalimeroClient {
             }
         }
 
-        /// A signing key's organization: `GET /publishers/{signer}` (`publisher_binding`).
+        /// Whether a signing key is bound: `GET /publishers/{signer}` (`publisher_binding`).
         ///
-        /// The organization a package signing key (`did:key`) is bound to, if any.
+        /// Whether a package signing key (`did:key`) is bound to an organization on this cluster (`bound`, never which), and its binding generation (`0`: never bound).
         ///
-        /// **Who:** anyone.
+        /// **Who:** signed in (a session or an API key).
         @discardableResult
         public func publisherBinding(signer: Swift.String) async throws -> Operations.PublisherBinding.Output.Ok.Body.JsonPayload {
             let input = Operations.PublisherBinding.Input(path: .init(signer: signer))
@@ -1871,7 +1877,7 @@ extension CalimeroClient {
 
         /// The cluster's releases: `GET /releases` (`releases_public`).
         ///
-        /// The mero-tee releases the cluster's nodes run and the deadlines set on them.
+        /// The cluster's governance and the deadlines set on mero-tee releases, oldest release first: after `after` (RFC 3339; `afterSecs` Unix seconds) a scope that has not approved that release (or a newer one) starts no new work.
         ///
         /// **Who:** anyone.
         @discardableResult
