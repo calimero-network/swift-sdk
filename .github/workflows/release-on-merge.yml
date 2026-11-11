@@ -2,8 +2,8 @@ name: Release on merge
 
 # Every push to master (a merged pull request) runs semantic-release over the
 # conventional commits since the last `v*` tag (.releaserc.json): `feat` is a
-# minor release, `fix`/`chore`/`refactor`/`perf` a patch, `docs`/`ci`/`test`/
-# `build` none, and `!` or a `BREAKING-CHANGE:` footer a major. When there is
+# minor release, `fix`/`perf` a patch, every other type (`docs`, `chore`,
+# `refactor`, `style`, `test`, `build`, `ci`, `revert`) none, and `!` or a `BREAKING-CHANGE:` footer a major. When there is
 # one it pushes the tag `v<version>` and creates the GitHub Release with notes
 # made from those commits.
 #

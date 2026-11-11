@@ -29,8 +29,8 @@ section says whether it does), the type picks the version bump:
 | PR title | Release |
 | --- | --- |
 | `feat: ...` | minor |
-| `fix:`, `chore:`, `refactor:`, `perf:` | patch |
-| `docs:`, `test:`, `build:`, `ci:` | none |
+| `fix:`, `perf:` | patch |
+| `docs:`, `chore:`, `refactor:`, `style:`, `test:`, `build:`, `ci:`, `revert:` | none |
 | `<type>!: ...`, or a `BREAKING-CHANGE:` footer | major |
 
 - Only the hyphenated `BREAKING-CHANGE:` footer keyword makes a major (besides
@@ -42,10 +42,11 @@ section says whether it does), the type picks the version bump:
   `["BREAKING-CHANGE"]`, and prose that says "breaking change" does nothing.
 - Prefer `!` in the title over the footer: the title is visible in review,
   while the squash commit's body is whatever the merge dialog fills in.
-- `chore:` releases a patch. A change that must not release anything
-  (documentation, CI, tests, build tooling) is `docs:`, `ci:`, `test:` or
-  `build:`. A change to what users read in the package (a README shipped to
-  npm, docstrings) that should reach them is titled `fix(docs):` (a patch).
+- Only `feat:`, `fix:` and `perf:` release (plus a major from `!` or the
+  footer); every other type releases nothing. A change to what users read in
+  the package (a README shipped to npm, docstrings) that should reach them is
+  titled `fix(docs):` (a patch). To ship a change that touches no feature or
+  fix (e.g. a dependency bump consumers need), title it `fix(deps): ...`.
 - Choose the type for what the change does to whoever depends on the release,
   not for the size of the diff.
 
@@ -100,7 +101,8 @@ has each SDK re-vendor it on the machine-owned branch `chore/core-openapi` and
 open (or refresh) one pull request. Core's classifier titles that pull request
 from what changed in the generated surface: `feat(api)!:` when something a
 caller uses was removed or changed, `feat(api):` when something was only
-added, `chore(api):` otherwise.
+added, `chore(api):` otherwise (descriptions only), which releases nothing:
+that change reaches consumers with the SDK's next release.
 
 Don't retitle these down: `feat(api)!:` turned into `feat(api):` ships a
 breaking change as a minor to every consumer on a `^` range. Retitle up if the
@@ -166,8 +168,8 @@ commits since the last `v*` tag:
 | Commit (the squash-merge title) | Release |
 | --- | --- |
 | `feat: …` | minor |
-| `fix:`, `chore:`, `refactor:`, `perf:` | patch |
-| `docs:`, `ci:`, `test:`, `build:` | none |
+| `fix:`, `perf:` | patch |
+| `docs:`, `chore:`, `refactor:`, `style:`, `ci:`, `test:`, `build:`, `revert:` | none |
 | `feat!: …`, or a `BREAKING-CHANGE:` footer | major |
 
 Only the hyphenated `BREAKING-CHANGE` keyword counts: a body line that happens
