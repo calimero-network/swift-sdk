@@ -7,11 +7,12 @@ openapi/openapi.json stays byte for byte what core publishes; the generator
 (1.10.3) reads this script's output instead. Each rewrite keeps the
 document's meaning:
 
-1. A nullable reference, `anyOf: [{$ref}, {type: null}]`, becomes the
-   reference, and leaves its object's `required` list. The generator skips
-   the `null` branch and would wrap the reference in a one-field struct; an
-   optional property of the referenced type is what the schema says.
-   (Core spells every other nullable `type: [T, "null"]`, which needs nothing.)
+1. A nullable `anyOf` property (`[{$ref}, {type: null}]`, or several
+   branches and `null`) loses its `null` branch and leaves its object's
+   `required` list: the generator skips a `null` branch with a warning, and
+   would wrap a lone reference in a one-field struct. An optional property
+   is what the schema says. (Core spells every other nullable
+   `type: [T, "null"]`, which needs nothing.)
 2. `contentEncoding: base64url` is dropped: core keeps it on purpose (the
    value travels as base64url text), but OpenAPIKit knows only RFC 2045's
    encodings and refuses the document. The value stays a string.
@@ -29,16 +30,19 @@ import json
 import sys
 
 
-def nullable_ref(schema):
-    """The `$ref` of `anyOf: [{$ref}, {type: null}]`, else None."""
+def without_null(schema):
+    """`anyOf: [..., {type: null}]` without its null branch (None if it has none)."""
     if not isinstance(schema, dict):
         return None
     branches = schema.get("anyOf")
-    if isinstance(branches, list) and len(branches) == 2 and {"type": "null"} in branches:
-        other = next(b for b in branches if b != {"type": "null"})
-        if set(other) == {"$ref"}:
-            return other
-    return None
+    if not isinstance(branches, list) or {"type": "null"} not in branches:
+        return None
+    rest = [b for b in branches if b != {"type": "null"}]
+    if len(rest) == 1:
+        return dict(rest[0])
+    out = {k: v for k, v in schema.items() if k != "anyOf"}
+    out["anyOf"] = rest
+    return out
 
 
 def normalize(node):
@@ -48,9 +52,9 @@ def normalize(node):
         properties = node.get("properties")
         if isinstance(properties, dict):
             for name, schema in properties.items():
-                ref = nullable_ref(schema)
-                if ref is not None:
-                    properties[name] = dict(ref)
+                rewritten = without_null(schema)
+                if rewritten is not None:
+                    properties[name] = rewritten
                     if name in node.get("required", []):
                         node["required"] = [r for r in node["required"] if r != name]
         for value in node.values():
