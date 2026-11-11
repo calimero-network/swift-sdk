@@ -25,8 +25,9 @@ private let accountOps: [SDKOperation] = [
         let session = try await c.refresh()
         return "Refreshed: session for \(session.accountId), expires \(Date(timeIntervalSince1970: session.expiresAt))"
     },
-    SDKOperation("attestation", "Account", "publicApi.attestation", "The node's attestation document (display only)") {
-        c, _ in
+    SDKOperation(
+        "attestation", "Account", "publicApi.attestation", "The node's attestation document (display only)"
+    ) { c, _ in
         let nonce = Hex.encode(randomBytes(32))
         return Fmt.json(try await c.publicApi.attestation(nonce: nonce))
     },
@@ -52,8 +53,9 @@ private let appOps: [SDKOperation] = [
         let app = try field(i, "app")
         return Fmt.json(try await c.answerJSON { try await c.apps.get(app: app) })
     },
-    SDKOperation("abi", "Apps", "apps.abi", "The ABI the app's bundle embeds", fields: [.line("app", "App id")]) {
-        c, i in
+    SDKOperation(
+        "abi", "Apps", "apps.abi", "The ABI the app's bundle embeds", fields: [.line("app", "App id")]
+    ) { c, i in
         let app = try field(i, "app")
         return Fmt.json(try await c.answerJSON { try await c.apps.abi(app: app) })
     },
@@ -84,13 +86,14 @@ private let appOps: [SDKOperation] = [
     SDKOperation("blobs", "Apps", "listBlobs", "An app's blobs", fields: [.line("app", "App id")]) { c, i in
         Fmt.json(try await c.listBlobs(try field(i, "app")))
     },
-    SDKOperation("presence", "Apps", "apps.presenceGet", "Who is present in an app", fields: [.line("app", "App id")]) {
-        c, i in
+    SDKOperation(
+        "presence", "Apps", "apps.presenceGet", "Who is present in an app", fields: [.line("app", "App id")]
+    ) { c, i in
         let app = try field(i, "app")
         return Fmt.json(try await c.answerJSON { try await c.apps.presenceGet(app: app) })
     },
-    SDKOperation("packages", "Apps", "packagesApi.list", "Installed packages and their versions") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.packagesApi.list() })
+    SDKOperation("packages", "Apps", "packages.list", "Installed packages and their versions") { c, _ in
+        Fmt.json(try await c.answerJSON { try await c.packages.list() })
     },
 ]
 
@@ -154,8 +157,9 @@ private let approvalOps: [SDKOperation] = [
         let lines = releases + upgrades
         return lines.isEmpty ? "Nothing waits for a decision." : lines.joined(separator: "\n")
     },
-    SDKOperation("rules", "Approvals", "publicApi.releasesPublic", "The cluster's governance and release deadlines") {
-        c, _ in
+    SDKOperation(
+        "rules", "Approvals", "publicApi.releasesPublic", "The cluster's governance and release deadlines"
+    ) { c, _ in
         Fmt.json(try await c.answerJSON { try await c.publicApi.releasesPublic() })
     },
     SDKOperation(

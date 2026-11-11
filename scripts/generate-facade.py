@@ -151,7 +151,10 @@ def taken_names(root):
     """The member names CalimeroClient already declares (in its own files), which a group may not take."""
     names = set()
     for file in ("Cloud/CalimeroClient.swift", "Cloud/CalimeroClient+Deprecated.swift", "Api/CalimeroApi.swift"):
-        with open(os.path.join(root, "Sources", "MeroKit", file), encoding="utf-8") as f:
+        path = os.path.join(root, "Sources", "MeroKit", file)
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8") as f:
             text = f.read()
         names.update(re.findall(r"^    (?:public |private |)(?:nonisolated )?(?:static )?(?:func|var|let) (\w+)", text, re.M))
     return names

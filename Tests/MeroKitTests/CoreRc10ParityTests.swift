@@ -81,7 +81,7 @@ final class CoreRc10ParityTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        let policy = try await cloud.answer(as: SignUpPolicy.self) { try await cloud.deploymentsApi.signUpPublic() }
+        let policy = try await cloud.answer(as: SignUpPolicy.self) { try await cloud.deployments.signUpPublic() }
         XCTAssertEqual(
             policy, SignUpPolicy(policy: .invite, orgInvites: true, signUpInvites: true, inviteRequired: true))
         XCTAssertNil(node.requests[0].bearer)
@@ -190,18 +190,18 @@ final class CoreRc10ParityTests: XCTestCase {
         let cloud = client()
         let passkey = SoftPasskey()
         let added = try await cloud.answer(as: PackageOrigin.self) {
-            try await cloud.packagesApi.originsAdd(
+            try await cloud.packages.originsAdd(
                 package: "com.example.chat", origin: "https://chat.example.com", rpId: "chat.example.com",
                 passkey: passkey)
         }
         XCTAssertEqual(added.rpId, "chat.example.com")
         XCTAssertEqual(added.package, "com.example.chat")
         let listed = try await cloud.answer(as: OriginListing.self) {
-            try await cloud.packagesApi.originsList(package: "com.example.chat")
+            try await cloud.packages.originsList(package: "com.example.chat")
         }.origins
         XCTAssertEqual(listed, [added])
         _ = try await cloud.answerJSON {
-            try await cloud.packagesApi.originsRemove(
+            try await cloud.packages.originsRemove(
                 package: "com.example.chat", origin: "https://chat.example.com", passkey: passkey)
         }
 

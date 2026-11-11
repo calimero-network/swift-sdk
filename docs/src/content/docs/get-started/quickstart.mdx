@@ -31,7 +31,7 @@ let client = CalimeroClient(CalimeroClientOptions(
     policy: .development))                 // trusts mock attestation: development only
 
 try await client.signUp(SoftPasskey(), name: "ada")   // a software passkey for rp `localhost`
-let bundle = try await client.packagesApi.bundlePut(body: wasm).hash   // dev clusters only
+let bundle = try await client.packages.bundlePut(body: wasm).hash   // dev clusters only
 let app = try await client.apps.create(name: "kv", bundle: bundle).appId
 _ = try await client.call(app, "set", ["key": "a", "value": "1"])
 let value = try await client.view(app, "get", ["key": "a"]).result

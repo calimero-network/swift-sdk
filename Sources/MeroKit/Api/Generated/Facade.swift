@@ -945,9 +945,9 @@ extension CalimeroClient {
 
 extension CalimeroClient {
     /// The `deployments` routes of the node API, one method per operation.
-    public nonisolated var deploymentsApi: Deployments { Deployments(client: self) }
+    public nonisolated var deployments: Deployments { Deployments(client: self) }
 
-    /// The `deployments` routes of the node API (``CalimeroClient/deploymentsApi``).
+    /// The `deployments` routes of the node API (``CalimeroClient/deployments``).
     public struct Deployments: Sendable {
         let client: CalimeroClient
 
@@ -1678,9 +1678,9 @@ extension CalimeroClient {
 
 extension CalimeroClient {
     /// The `packages` routes of the node API, one method per operation.
-    public nonisolated var packagesApi: Packages { Packages(client: self) }
+    public nonisolated var packages: Packages { Packages(client: self) }
 
-    /// The `packages` routes of the node API (``CalimeroClient/packagesApi``).
+    /// The `packages` routes of the node API (``CalimeroClient/packages``).
     public struct Packages: Sendable {
         let client: CalimeroClient
 

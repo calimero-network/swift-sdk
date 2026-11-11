@@ -50,10 +50,8 @@ for try await event in cloud.events(app) { print(event.kind) }      // sealed SS
 
 Every route of the node API is a method of `CalimeroClient`, grouped as the
 OpenAPI document groups them (`x-calimero-group`): `auth`, `apps`, `orgs`,
-`consent`, `ops`, and `packagesApi`, `deploymentsApi` (sign-up, deployers,
-deployments) and `publicApi`, which take an `Api` suffix because
-`CalimeroClient` already has `packages()` and `deployments()` and `public` is
-a keyword. Each takes the path parameters, the JSON body's fields and the query
+`consent`, `ops`, `packages`, `deployments` (sign-up, deployers,
+deployments) and `publicApi` (`public` is a keyword). Each takes the path parameters, the JSON body's fields and the query
 as labelled arguments and answers the typed success value (`import MeroAPI`
 to name it); a refusal throws the same typed errors as below.
 

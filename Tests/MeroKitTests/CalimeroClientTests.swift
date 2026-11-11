@@ -654,24 +654,24 @@ final class CalimeroClientTests: XCTestCase {
         XCTAssertEqual(xcalls.deadLetters.first?.app, "a2")
 
         let created = try await cloud.answerJSON {
-            try await cloud.deploymentsApi.create(name: "Shop", owner: Deployer.org("o1").generated, passkey: passkey)
+            try await cloud.deployments.create(name: "Shop", owner: Deployer.org("o1").generated, passkey: passkey)
         }
         let id = try XCTUnwrap(created["id"]?.stringValue)
         XCTAssertEqual(id, "dep1")
         _ = try await cloud.answerJSON {
-            try await cloud.deploymentsApi.offer(
+            try await cloud.deployments.offer(
                 id: id, app: "shop", package: "com.x", version: "1.0.0", passkey: passkey)
         }
         _ = try await cloud.answerJSON {
-            try await cloud.deploymentsApi.withdraw(id: id, app: "shop", passkey: passkey)
+            try await cloud.deployments.withdraw(id: id, app: "shop", passkey: passkey)
         }
-        _ = try await cloud.answerJSON { try await cloud.deploymentsApi.delete(id: id, passkey: passkey) }
+        _ = try await cloud.answerJSON { try await cloud.deployments.delete(id: id, passkey: passkey) }
         _ = try await cloud.answerJSON {
-            try await cloud.deploymentsApi.deployerGrant(
+            try await cloud.deployments.deployerGrant(
                 deployer: Deployer.account("acc_2").generated, until: "1970-01-01T00:00:00Z", passkey: passkey)
         }
         _ = try await cloud.answerJSON {
-            try await cloud.deploymentsApi.deployerRevoke(key: Deployer.org("o1").key, passkey: passkey)
+            try await cloud.deployments.deployerRevoke(key: Deployer.org("o1").key, passkey: passkey)
         }
         let confirmed = node.requests.filter { $0.json?["confirm"] != nil }.map { "\($0.method) \($0.path)" }
         XCTAssertEqual(
@@ -688,15 +688,15 @@ final class CalimeroClientTests: XCTestCase {
         XCTAssertEqual(grant["deployer"], ["account": "acc_2"])
         XCTAssertEqual(grant["until"], "1970-01-01T00:00:00Z")
 
-        let mine = try await cloud.answer(as: DeploymentListing.self) { try await cloud.deploymentsApi.list() }
+        let mine = try await cloud.answer(as: DeploymentListing.self) { try await cloud.deployments.list() }
             .deployments
         XCTAssertEqual(mine.first?.owner, .org("o1"))
-        let shown = try await cloud.answer(as: PublicDeployment.self) { try await cloud.deploymentsApi.get(id: "dep1") }
+        let shown = try await cloud.answer(as: PublicDeployment.self) { try await cloud.deployments.get(id: "dep1") }
         XCTAssertEqual(shown.owner.name, "Acme")
-        let orgs = try await cloud.answer(as: DeploymentOrgs.self) { try await cloud.deploymentsApi.orgs(id: "dep1") }
+        let orgs = try await cloud.answer(as: DeploymentOrgs.self) { try await cloud.deployments.orgs(id: "dep1") }
         XCTAssertEqual(orgs.orgs.first?.instances, 3)
         XCTAssertEqual(orgs.outsideOrgs, 1)
-        let deployers = try await cloud.answer(as: DeployersInfo.self) { try await cloud.deploymentsApi.deployerList() }
+        let deployers = try await cloud.answer(as: DeployersInfo.self) { try await cloud.deployments.deployerList() }
         XCTAssertEqual(deployers.deployments, .granted)
         XCTAssertEqual(deployers.grants.first?.deployer, .org("o1"))
         XCTAssertEqual(deployerKey(.account("a")), "account:a")

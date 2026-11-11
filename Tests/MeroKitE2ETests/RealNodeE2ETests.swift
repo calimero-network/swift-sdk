@@ -29,7 +29,7 @@ final class RealNodeE2ETests: XCTestCase {
         try await client.refresh()
 
         guard let path = ProcessInfo.processInfo.environment["MERO_E2E_BUNDLE"] else { return }
-        let bundle = try await client.packagesApi.bundlePut(body: try Data(contentsOf: URL(fileURLWithPath: path))).hash
+        let bundle = try await client.packages.bundlePut(body: try Data(contentsOf: URL(fileURLWithPath: path))).hash
         let app = try await client.apps.create(name: "kv", bundle: bundle, org: org).appId
         _ = try await client.call(app, "set", ["key": "a", "value": "1"])
         let read = try await client.view(app, "get", ["key": "a"])

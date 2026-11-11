@@ -6,12 +6,15 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 
 **Breaking.** The 82 `CalimeroClient` methods 0.x deprecated in favour of the
 generated facade are removed. Every route is reached through the facade
-(`client.auth`, `.apps`, `.orgs`, `.consent`, `.ops`, `.packagesApi`,
-`.deploymentsApi`, `.publicApi`), which answers the generated types
+(`client.auth`, `.apps`, `.orgs`, `.consent`, `.ops`, `.packages`,
+`.deployments`, `.publicApi`), which answers the generated types
 (`import MeroAPI`) and throws the same typed errors.
 
 Upgrade notes:
 
+- The groups 0.x called `packagesApi` and `deploymentsApi` (their names
+  were taken by `packages()` and `deployments()`) are `packages` and
+  `deployments`.
 - Replace each call with the method the table below names; the facade takes
   labelled arguments (`orgs.get(org: id)`, not `getOrg(id)`) and answers the
   generated type: `orgs.create(name:).orgId`, `orgs.inviteCreate(...).token`,
@@ -35,7 +38,7 @@ Upgrade notes:
 
 | Removed (0.x) | Use (generated facade) |
 | --- | --- |
-| `signUpPolicy()` | `deploymentsApi.signUpPublic()` |
+| `signUpPolicy()` | `deployments.signUpPublic()` |
 | `me()` | `auth.me()` |
 | `removePasskey(_:passkey:)` | `auth.passkeyRemove(cred:passkey:)` |
 | `labelPasskey(_:label:)` | `auth.passkeyLabel(cred:label:)` |
@@ -44,15 +47,15 @@ Upgrade notes:
 | `listApiKeys()` | `auth.apikeyList()` |
 | `revokeApiKey(_:passkey:)` | `auth.apikeyRevoke(key:passkey:)` |
 | `createApiKey(label:apps:methods:readOnly:allowConfirm:ttlSecs:upgrades:passkey:)` | `auth.apikeyCreate` |
-| `uploadBundle(_:)` | `packagesApi.bundlePut(body:)` |
+| `uploadBundle(_:)` | `packages.bundlePut(body:)` |
 | `downloadBlob(_:_:)` | `apps.blobDownload(app:id:)` |
 | `downloadBlobGranted(_:_:grant:)` | `apps.blobDownload(app:id:grant:)` |
 | `deleteBlob(_:_:)` | `apps.blobDelete(app:id:)` |
-| `uploadPackage(_:)` | `packagesApi.upload(body:)` |
-| `installPackage(_:version:)` | `packagesApi.install(package:version:)` |
-| `packages()` | `packagesApi.list()` |
-| `package(_:)` | `packagesApi.get(package:)` |
-| `uninstallPackage(_:version:)` | `packagesApi.uninstall` or `packagesApi.versionUninstall` |
+| `uploadPackage(_:)` | `packages.upload(body:)` |
+| `installPackage(_:version:)` | `packages.install(package:version:)` |
+| `packages()` | `packages.list()` |
+| `package(_:)` | `packages.get(package:)` |
+| `uninstallPackage(_:version:)` | `packages.uninstall` or `packages.versionUninstall` |
 | `listApps(package:bundle:)` | `apps.list(package:bundle:)` |
 | `getApp(_:)` | `apps.get(app:)` |
 | `deleteApp(_:)` | `apps.delete(app:)` |
@@ -102,20 +105,20 @@ Upgrade notes:
 | `removeTeamMember(_:_:account:passkey:)` | `orgs.teamRemoveMember(org:team:account:passkey:)` |
 | `invite(_:role:passkey:teams:ttlSecs:uses:)` | `orgs.inviteCreate(org:role:teams:ttlSecs:uses:allApps:passkey:)` |
 | `redeemInvite(_:)` | `orgs.inviteRedeem(token:)` |
-| `packageOrigins(_:)` | `packagesApi.originsList(package:)` |
-| `addPackageOrigin(_:origin:passkey:rpId:)` | `packagesApi.originsAdd(package:origin:rpId:served:passkey:)` |
-| `removePackageOrigin(_:origin:passkey:)` | `packagesApi.originsRemove(package:origin:passkey:)` |
-| `grantDeployer(_:passkey:until:)` | `deploymentsApi.deployerGrant(deployer:until:passkey:)` |
-| `deployers()` | `deploymentsApi.deployerList()` |
-| `revokeDeployer(_:passkey:)` | `deploymentsApi.deployerRevoke(key:passkey:)` |
-| `revokeDeployer(key:passkey:)` | `deploymentsApi.deployerRevoke(key:passkey:)` |
-| `createDeployment(_:owner:passkey:)` | `deploymentsApi.create(name:owner:passkey:)` |
-| `deployments()` | `deploymentsApi.list()` |
-| `deployment(_:)` | `deploymentsApi.get(id:)` |
-| `deleteDeployment(_:passkey:)` | `deploymentsApi.delete(id:passkey:)` |
-| `offerApp(_:app:package:version:passkey:)` | `deploymentsApi.offer(id:app:package:version:passkey:)` |
-| `withdrawApp(_:app:passkey:)` | `deploymentsApi.withdraw(id:app:passkey:)` |
-| `deploymentOrgs(_:)` | `deploymentsApi.orgs(id:)` |
+| `packageOrigins(_:)` | `packages.originsList(package:)` |
+| `addPackageOrigin(_:origin:passkey:rpId:)` | `packages.originsAdd(package:origin:rpId:served:passkey:)` |
+| `removePackageOrigin(_:origin:passkey:)` | `packages.originsRemove(package:origin:passkey:)` |
+| `grantDeployer(_:passkey:until:)` | `deployments.deployerGrant(deployer:until:passkey:)` |
+| `deployers()` | `deployments.deployerList()` |
+| `revokeDeployer(_:passkey:)` | `deployments.deployerRevoke(key:passkey:)` |
+| `revokeDeployer(key:passkey:)` | `deployments.deployerRevoke(key:passkey:)` |
+| `createDeployment(_:owner:passkey:)` | `deployments.create(name:owner:passkey:)` |
+| `deployments()` | `deployments.list()` |
+| `deployment(_:)` | `deployments.get(id:)` |
+| `deleteDeployment(_:passkey:)` | `deployments.delete(id:passkey:)` |
+| `offerApp(_:app:package:version:passkey:)` | `deployments.offer(id:app:package:version:passkey:)` |
+| `withdrawApp(_:app:passkey:)` | `deployments.withdraw(id:app:passkey:)` |
+| `deploymentOrgs(_:)` | `deployments.orgs(id:)` |
 | `requestConsent(_:)` | `consent.pageCreate(body:)` |
 
 
@@ -124,7 +127,7 @@ Upgrade notes:
 `CalimeroClient` gains a facade with one method per route of core's OpenAPI
 document (`openapi/openapi.json`, core `docs/openapi`), grouped by its
 `x-calimero-group`: `client.orgs.inviteCreate(org:role:...)`,
-`client.apps.get(app:)`, `client.auth.me()`, `client.packagesApi.list()`, ...
+`client.apps.get(app:)`, `client.auth.me()`, `client.packages.list()`, ...
 Retry-safe operations retry and fail over like `call`. It is generated (`scripts/generate-openapi.sh`)
 over swift-openapi-generator's client (the new `MeroAPI` product, whose types
 the facade answers) and checked in; CI fails when it is stale. Requests still

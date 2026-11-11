@@ -32,7 +32,7 @@ invite or a cluster sign-up invite) or `closed` (a sign-up invite only). Read it
 without a session, before any passkey prompt, and sign up with an invite:
 
 ```swift
-let policy = try await client.deploymentsApi.signUpPublic()   // GET /sign-up
+let policy = try await client.deployments.signUpPublic()   // GET /sign-up
 if policy.inviteRequired { /* ask for the invite */ }
 try await client.signUp(PlatformPasskey(), name: "bob", invite: token)
 ```
