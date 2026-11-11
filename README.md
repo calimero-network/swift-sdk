@@ -39,8 +39,8 @@ try await client.signUp(SoftPasskey(), name: "ada")
 let cloud = CalimeroClient(CalimeroClientOptions(baseUrl: nodeURL, policy: .production))
 try await cloud.signIn(PlatformPasskey())
 
-let org = try await cloud.createOrg("Acme")
-let app = try await cloud.createApp("chat", bundle: .package("com.calimero.chat"), org: org)
+let org = try await cloud.orgs.create(name: "Acme").orgId
+let app = try await cloud.apps.create(name: "chat", package: "com.calimero.chat", org: org).appId
 _ = try await cloud.call(app, "send_message", ["message": "hi"])   // POST /apps/{app}/intents
 let page = try await cloud.view(app, "get_messages", [:])          // POST /apps/{app}/views
 for try await event in cloud.events(app) { print(event.kind) }      // sealed SSE
@@ -78,11 +78,11 @@ The facade (`Sources/MeroKit/Api/Generated`) and `MeroAPI`
 in [`openapi/source`](openapi/source), by
 [`scripts/generate-openapi.sh`](scripts/generate-openapi.sh), and checked in:
 `refresh [REF]` vendors a newer document, `check` (a CI job) fails on stale
-output. The methods `CalimeroClient` had before (`getOrg`, `invite`,
-`createApp`, ...) still work and are deprecated in favour of the facade method
-their warning names. `call`/`view` (idempotent retries, failover, exact
-numbers), the sign-in ceremonies, the event streams and the escape hatches
-(`post`, `postConfirmed`, ...) are not.
+output. MeroKit 1.0 removed the 0.x wrappers (`getOrg`, `invite`,
+`createApp`, ...): [CHANGELOG.md](CHANGELOG.md) maps each to its facade
+method. `call`/`view` (idempotent retries, failover, exact numbers), the
+sign-in ceremonies, the event streams and the escape hatches (`post`,
+`postConfirmed`, `answer(as:_:)`, ...) are hand-written.
 
 ## Behaviour
 

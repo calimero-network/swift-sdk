@@ -425,17 +425,25 @@ public actor CalimeroClient {
         try decode(JSONValue.self, data)
     }
 
-    /// The node's answer to one facade call, decoded as the deprecated
-    /// methods always read it (leniently, as `T`), not as the generated type.
-    func legacy<T: Decodable, R: Sendable>(
-        _ type: T.Type, _ operation: @Sendable () async throws -> R
+    /// The node's answer to one facade call, read as `type` the way MeroKit
+    /// read it before its API was generated: leniently, a field the
+    /// document does not name (or names but the node left out) included or
+    /// defaulted, whether or not the generated type accepts the answer.
+    /// For the answers whose document shape is narrower than what the node
+    /// sends (`GET /orgs/{org}` and its `memberMetadata`, say):
+    ///
+    /// ```swift
+    /// let org = OrgInfo(json: try await client.answerJSON { try await client.orgs.get(org: id) })
+    /// ```
+    public func answer<T: Decodable, R: Sendable>(
+        as type: T.Type, _ operation: @Sendable () async throws -> R
     ) async throws -> T {
-        try decode(type, try await answer(operation))
+        try decode(type, try await answerBytes(operation))
     }
 
-    /// ``legacy(_:_:)`` as JSON.
-    func legacyValue<R: Sendable>(_ operation: @Sendable () async throws -> R) async throws -> JSONValue {
-        try value(try await answer(operation))
+    /// ``answer(as:_:)`` as JSON.
+    public func answerJSON<R: Sendable>(_ operation: @Sendable () async throws -> R) async throws -> JSONValue {
+        try value(try await answerBytes(operation))
     }
 
     /// `value` as generated type `T`, through its JSON.
@@ -562,7 +570,7 @@ public actor CalimeroClient {
     ) async throws -> CalimeroSession {
         let invite = invite.flatMap { $0.isEmpty ? nil : $0 }
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answer { try await self.auth.registerBegin(name: name, origin: origin, invite: invite) }
+            try await self.answerBytes { try await self.auth.registerBegin(name: name, origin: origin, invite: invite) }
         }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("the registration did not begin")
@@ -573,7 +581,7 @@ public actor CalimeroClient {
         // step-up middleware answers with it.
         let session = try decode(
             CalimeroSession.self,
-            try await answer {
+            try await answerBytes {
                 try await self.auth.registerFinish(
                     challengeId: challengeId, registration: converted, invite: invite, passkey: passkey)
             })
@@ -601,7 +609,7 @@ public actor CalimeroClient {
     @discardableResult
     public func signIn(_ passkey: any PasskeyProvider, origin: String? = nil) async throws -> CalimeroSession {
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answer { try await self.auth.loginBegin(origin: origin) }
+            try await self.answerBytes { try await self.auth.loginBegin(origin: origin) }
         }
         guard let challengeId = begin["challengeId"]?.stringValue,
             let challenge = begin["options"]?["challenge"]?.stringValue,
@@ -609,7 +617,7 @@ public actor CalimeroClient {
         else { throw AccountError.protocolViolation("the sign-in did not begin") }
         let assertion = try await passkey.get(challenge: try fromB64url(challenge), rpId: rpId, allowCredentials: nil)
         let converted: Components.Schemas.Assertion = try Self.converted(assertion)
-        let session = try await legacy(CalimeroSession.self) {
+        let session = try await answer(as: CalimeroSession.self) {
             try await self.auth.loginFinish(challengeId: challengeId, assertion: converted)
         }
         useSession(session)
@@ -640,7 +648,7 @@ public actor CalimeroClient {
         while true {
             do {
                 let token = current.refreshToken
-                let session = try await legacy(CalimeroSession.self) {
+                let session = try await answer(as: CalimeroSession.self) {
                     try await self.auth.refresh(refreshToken: token)
                 }
                 // A sign-in or another session taken while this one was refreshing wins.
@@ -655,14 +663,14 @@ public actor CalimeroClient {
 
     /// End this session.
     public func signOut() async throws {
-        _ = try await answer { try await self.auth.logout() }
+        _ = try await answerBytes { try await self.auth.logout() }
         credential = nil
         setCurrent(nil)
     }
 
     /// End every session of the signed-in account, on every device, this one too.
     public func signOutEverywhere() async throws {
-        _ = try await answer { try await self.auth.logoutAll() }
+        _ = try await answerBytes { try await self.auth.logoutAll() }
         credential = nil
         setCurrent(nil)
     }
@@ -678,13 +686,13 @@ public actor CalimeroClient {
     /// a passkey the account already has (`412 CONFIRM_REQUIRED`, never the
     /// new one), which `approver` gives.
     public func addPasskey(_ passkey: any PasskeyProvider, approver: any PasskeyProvider) async throws -> String {
-        let begin = try await legacyValue { try await self.auth.passkeyAddBegin() }
+        let begin = try await answerJSON { try await self.auth.passkeyAddBegin() }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("adding a passkey did not begin")
         }
         let created = try await passkey.create(options: options)
         let registration: Components.Schemas.Registration = try Self.converted(created)
-        let finished = try await legacyValue {
+        let finished = try await answerJSON {
             try await self.auth.passkeyAddFinish(
                 challengeId: challengeId, registration: registration, passkey: approver)
         }
@@ -708,7 +716,7 @@ public actor CalimeroClient {
                 BlobInfo.self,
                 try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
         }
-        return try await legacy(BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data) }
+        return try await answer(as: BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data) }
     }
 
     /// Upload a sealed file for component app `app` (core rc.9+,
@@ -720,7 +728,7 @@ public actor CalimeroClient {
     /// `size` and `sha256`, and the upload's log `index`. No route serves,
     /// replaces or deletes a sealed file: the app's runs open it by id.
     public func uploadFile(_ app: String, _ data: Data) async throws -> BlobInfo {
-        try await legacy(BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data, sealed: true) }
+        try await answer(as: BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data, sealed: true) }
     }
 
     /// ``downloadBlob(_:_:)`` (or, with `grant`,
@@ -744,12 +752,12 @@ public actor CalimeroClient {
 
     /// `app`'s blobs.
     public func listBlobs(_ app: String) async throws -> [BlobInfo] {
-        try await legacy(BlobList.self) { try await self.apps.blobList(app: app) }.blobs
+        try await answer(as: BlobList.self) { try await self.apps.blobList(app: app) }.blobs
     }
 
     /// One of `app`'s blobs' id and size; ``NotFound`` if the app has no such blob.
     public func blobInfo(_ app: String, _ id: String) async throws -> BlobInfo {
-        try await legacy(BlobInfo.self) { try await self.apps.blobInfo(app: app, id: id) }
+        try await answer(as: BlobInfo.self) { try await self.apps.blobInfo(app: app, id: id) }
     }
 
     // MARK: - Packages
@@ -907,7 +915,7 @@ public actor CalimeroClient {
             try await postConfirmed("orgs/\(Self.seg(org))/recovery", ["publicKey": .null], passkey: passkey)
             return
         }
-        _ = try await answer { try await self.orgs.recoverySet(org: org, publicKey: publicKey, passkey: passkey) }
+        _ = try await answerBytes { try await self.orgs.recoverySet(org: org, publicKey: publicKey, passkey: passkey) }
     }
 
     /// Start handing `org` to the signed-in account with the recovery
@@ -917,10 +925,10 @@ public actor CalimeroClient {
     /// and every member sees it in ``OrgInfo/recovery``. A wrong seed, no
     /// organization or none set is `403 WRONG_RECOVERY_KEY`.
     public func startRecovery(_ org: String, seed: RecoverySeed) async throws -> RecoveryTimes {
-        let account = AccountInfo(json: try await legacyValue { try await self.auth.me() }).accountId
+        let account = AccountInfo(json: try await answerJSON { try await self.auth.me() }).accountId
         let nonce = b64url(randomBytes(16))
         let signature = try seed.sign(org: org, account: account, nonce: nonce)
-        return try await legacy(RecoveryTimes.self) {
+        return try await answer(as: RecoveryTimes.self) {
             try await self.orgs.recoveryStart(org: org, nonce: nonce, signature: signature)
         }
     }
@@ -944,29 +952,25 @@ public actor CalimeroClient {
     private func reportPage(_ org: String?, _ page: PageOptions) async throws -> AppsReport {
         _ = try page.query()
         if let org {
-            return try await legacy(AppsReport.self) {
+            return try await answer(as: AppsReport.self) {
                 try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
             }
         }
-        return try await legacy(AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
+        return try await answer(as: AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
     }
 
     /// What waits for a decision in a scope (`org`, or the account's own apps with `nil`).
     public func pendingApprovals(org: String? = nil) async throws -> PendingApprovals {
         async let report = appsReportAll(org)
-        async let rules = legacy(ReleaseRules.self) { try await self.publicApi.releasesPublic() }
+        async let rules = answer(as: ReleaseRules.self) { try await self.publicApi.releasesPublic() }
         return pendingApprovalsFrom(try await report, rules: try await rules)
     }
 
     /// Ask the node to ask the user: an approval decided on the node's own
     /// consent page, never in the app. Send the person to the answer's `url`
     /// (`MeroKitUI`'s `ConsentPage` opens it in the system browser).
-    @available(*, deprecated, message: "use client.consent.pageCreate(body:)")
-    public func requestConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
-        try await startConsent(request)
-    }
-
-    /// ``requestConsent(_:)``, for the methods that are not deprecated.
+    /// Ask the node to ask the user (`POST /consent/requests`), for
+    /// ``openConsentPage(_:options:)``.
     private func startConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
         // A request the document's `oneOf` does not describe goes as written,
         // for the node to judge, as it always did.
@@ -977,7 +981,7 @@ public actor CalimeroClient {
             return try decode(
                 ConsentStarted.self, try await json("POST", "consent/requests", body: CanonicalJSON.data(request.json)))
         }
-        return try await legacy(ConsentStarted.self) { try await self.consent.pageCreate(body: body) }
+        return try await answer(as: ConsentStarted.self) { try await self.consent.pageCreate(body: body) }
     }
 
     /// ``requestConsent(_:)``, then hand the page's URL to `navigate`.
@@ -1029,7 +1033,9 @@ public actor CalimeroClient {
         -> ConsentResult
     {
         while true {
-            let result = try await legacy(ConsentResult.self) { try await self.consent.pageResult(request: requestId) }
+            let result = try await answer(as: ConsentResult.self) {
+                try await self.consent.pageResult(request: requestId)
+            }
             if result.status != .pending || Task.isCancelled { return result }
             if let expiresAt, Date().timeIntervalSince1970 >= expiresAt { return result }
             await sleep(interval)
@@ -1058,7 +1064,7 @@ public actor CalimeroClient {
         let join: Components.Schemas.TeamJoin? = try join.map { try Self.converted($0) }
         let metadata = try metadata.map { try OpenAPIValueContainer($0) }
         let parent = parent.flatMap { $0 }
-        _ = try await answer {
+        _ = try await answerBytes {
             try await self.orgs.teamUpdate(
                 org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)
         }

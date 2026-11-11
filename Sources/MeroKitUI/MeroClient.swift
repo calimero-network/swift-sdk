@@ -1,4 +1,5 @@
 import Foundation
+import MeroAPI
 import MeroKit
 
 #if canImport(Combine)
@@ -264,7 +265,8 @@ public final class MeroClient: ObservableObject {
         do {
             let (started, _) = try await ConsentLauncher.request(
                 client: cloud, request: request(callback.url), callback: callback, opener: opener, confirm: confirm)
-            return try await cloud.consentResult(started.requestId)
+            let id = started.requestId
+            return try await cloud.answer(as: ConsentResult.self) { try await cloud.consent.pageResult(request: id) }
         } catch {
             errorMessage = Self.describe(error)
             return nil

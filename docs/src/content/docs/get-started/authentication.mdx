@@ -32,7 +32,7 @@ invite or a cluster sign-up invite) or `closed` (a sign-up invite only). Read it
 without a session, before any passkey prompt, and sign up with an invite:
 
 ```swift
-let policy = try await client.signUpPolicy()       // GET /sign-up
+let policy = try await client.deploymentsApi.signUpPublic()   // GET /sign-up
 if policy.inviteRequired { /* ask for the invite */ }
 try await client.signUp(PlatformPasskey(), name: "bob", invite: token)
 ```
@@ -97,9 +97,10 @@ in the Keychain (`KeychainCloudSessionStore`); `MeroClient` does this for you.
 ## Step-up confirmations
 
 `412 CONFIRM_REQUIRED` asks for a passkey assertion over the exact request:
-the `*Confirmed` methods (`callConfirmed`, `postConfirmed`, `deleteOrg`,
-`upgradeApp(passkey:)`, `approveRelease`, …) answer it with the passkey you
-give them and send the request once more with `confirm`. On core rc.7+ these
+`callConfirmed`, `postConfirmed` and every facade method the document marks
+`x-calimero-step-up` (`orgs.delete`, `apps.upgrade`, `orgs.releaseApproval`,
+…) answer it with the `passkey:` you give them (else the client's
+`useStepUp` passkey) and send the request once more with `confirm`. On core rc.7+ these
 are step-ups too, so they take a `passkey:`: adding (`addPasskey(_:approver:)`,
 approved by a passkey the account already has) and removing passkeys, creating
 API keys, setting and removing members and team members, capabilities, and
@@ -118,7 +119,10 @@ let the app show it before the page opens.
 Release, upgrade and outbound approvals are never made inside an app:
 
 ```swift
-let started = try await client.requestConsent(upgradeConsent(app: app, toVersion: "1.2.0", returnTo: "myapp://consent"))
+let request = upgradeConsent(app: app, toVersion: "1.2.0", returnTo: "myapp://consent")
+let started = try await client.consent.pageCreate(body: try request.generated())
 // open started.url in the system browser (MeroClient.requestConsent uses ASWebAuthenticationSession)
-let result = try await client.consentResult(started.requestId)
+let result = try await client.answer(as: ConsentResult.self) {
+    try await client.consent.pageResult(request: started.requestId)
+}
 ```

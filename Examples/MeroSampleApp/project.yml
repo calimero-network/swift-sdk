@@ -63,6 +63,8 @@ targets:
         product: MeroKit
       - package: MeroKit
         product: MeroKitUI
+      - package: MeroKit
+        product: MeroAPI
       # `-uitest-mock` runs the UI against an in-app cluster (FakeCloud).
       - package: MeroKit
         product: MeroKitTestSupport

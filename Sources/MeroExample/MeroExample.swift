@@ -1,4 +1,5 @@
 import Foundation
+import MeroAPI
 import MeroKit
 
 // A runnable tour of MeroKit against a Calimero 1.0 cluster.
@@ -53,7 +54,7 @@ struct MeroExample {
         do {
             let session = try await client.signUp(passkey, name: env("MERO_NAME") ?? "example")
             print("signed up as", session.accountId)
-            let apps = try await client.listApps()
+            let apps = try await client.apps.list().apps
             print("apps:", apps.map(\.name))
             if let app = env("MERO_APP") {
                 let answer = try await client.view(app, env("MERO_METHOD") ?? "get", [:])

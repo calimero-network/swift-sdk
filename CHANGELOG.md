@@ -2,6 +2,123 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## 1.0.0 (unreleased): the deprecated route wrappers are gone
+
+**Breaking.** The 82 `CalimeroClient` methods 0.x deprecated in favour of the
+generated facade are removed. Every route is reached through the facade
+(`client.auth`, `.apps`, `.orgs`, `.consent`, `.ops`, `.packagesApi`,
+`.deploymentsApi`, `.publicApi`), which answers the generated types
+(`import MeroAPI`) and throws the same typed errors.
+
+Upgrade notes:
+
+- Replace each call with the method the table below names; the facade takes
+  labelled arguments (`orgs.get(org: id)`, not `getOrg(id)`) and answers the
+  generated type: `orgs.create(name:).orgId`, `orgs.inviteCreate(...).token`,
+  `apps.create(...).appId`.
+- To keep reading an answer as MeroKit's types, as 0.x did (leniently, with
+  the fields the document leaves out), wrap the call:
+  `OrgInfo(json: try await client.answerJSON { try await client.orgs.get(org: id) })`,
+  `try await client.answer(as: ConsentResult.self) { try await client.consent.pageResult(request: id) }`.
+- Arguments that were MeroKit types take their `generated` form:
+  `AppAccess.team(id).generated`, `Deployer.org(id).generated`,
+  `OrgRole.admin.generated`, `TeamJoin.everyone.generated`,
+  `try ConsentRequest.generated()`.
+- A step-up method takes `passkey:` (or set `useStepUp(_:)` once); an
+  operator decision takes `operatorSigner:` (or `useOperatorSigner(_:)`).
+- Kept, because the document cannot express them: `call`/`callJSON`/
+  `callConfirmed`/`view`/`viewJSON`, `events`/`presenceStream`, the sign-in
+  ceremonies, `uploadBlob(_:_:contentType:)`, `uploadFile`, `blobContent`,
+  `listBlobs`, `blobInfo`, `setRecoveryKey` (to remove a key), `updateTeam` (to
+  move a team to the top), `startRecovery`, `openConsentPage`,
+  `waitForConsent`, `pendingApprovals`, `appsReportAll` and the raw routes.
+
+| Removed (0.x) | Use (generated facade) |
+| --- | --- |
+| `signUpPolicy()` | `deploymentsApi.signUpPublic()` |
+| `me()` | `auth.me()` |
+| `removePasskey(_:passkey:)` | `auth.passkeyRemove(cred:passkey:)` |
+| `labelPasskey(_:label:)` | `auth.passkeyLabel(cred:label:)` |
+| `usage()` | `auth.usage()` |
+| `attestation()` | `publicApi.attestation(nonce:)` |
+| `listApiKeys()` | `auth.apikeyList()` |
+| `revokeApiKey(_:passkey:)` | `auth.apikeyRevoke(key:passkey:)` |
+| `createApiKey(label:apps:methods:readOnly:allowConfirm:ttlSecs:upgrades:passkey:)` | `auth.apikeyCreate` |
+| `uploadBundle(_:)` | `packagesApi.bundlePut(body:)` |
+| `downloadBlob(_:_:)` | `apps.blobDownload(app:id:)` |
+| `downloadBlobGranted(_:_:grant:)` | `apps.blobDownload(app:id:grant:)` |
+| `deleteBlob(_:_:)` | `apps.blobDelete(app:id:)` |
+| `uploadPackage(_:)` | `packagesApi.upload(body:)` |
+| `installPackage(_:version:)` | `packagesApi.install(package:version:)` |
+| `packages()` | `packagesApi.list()` |
+| `package(_:)` | `packagesApi.get(package:)` |
+| `uninstallPackage(_:version:)` | `packagesApi.uninstall` or `packagesApi.versionUninstall` |
+| `listApps(package:bundle:)` | `apps.list(package:bundle:)` |
+| `getApp(_:)` | `apps.get(app:)` |
+| `deleteApp(_:)` | `apps.delete(app:)` |
+| `setAccess(_:_:)` | `apps.access(app:access:)` |
+| `setAppMetadata(_:_:)` | `apps.metadata(app:metadata:)` |
+| `appXcalls(_:)` | `apps.xcalls(app:)` |
+| `appStorage(_:)` | `apps.storage(app:)` |
+| `appAbi(_:)` | `apps.abi(app:)` |
+| `transferApp(_:to:passkey:)` | `apps.transfer(app:to:passkey:)` |
+| `upgradeApp(_:version:package:service:bundle:migrate:passkey:)` | `apps.upgrade(app:bundle:package:version:service:migrate:passkey:)` |
+| `createApp(_:bundle:org:access:confirmMethods:initArgs:)` | `apps.create` |
+| `publishPresence(_:seq:state:)` | `apps.presencePublish(app:seq:state:)` |
+| `presence(_:)` | `apps.presenceGet(app:)` |
+| `setAlias(_:app:)` | `auth.aliasSet(alias:app:)` |
+| `aliases()` | `auth.aliasList()` |
+| `alias(_:)` | `auth.aliasGet(alias:)` |
+| `deleteAlias(_:)` | `auth.aliasDelete(alias:)` |
+| `createOrg(_:recoveryKey:)` | `orgs.create(name:recoveryKey:)` |
+| `cancelRecovery(_:passkey:)` | `orgs.recoveryCancel(org:passkey:)` |
+| `finishRecovery(_:passkey:)` | `orgs.recoveryFinish(org:passkey:)` |
+| `getOrg(_:)` | `orgs.get(org:)` |
+| `deleteOrg(_:passkey:)` | `orgs.delete(org:passkey:)` |
+| `setOrgMetadata(_:_:)` | `orgs.metadata(org:metadata:)` |
+| `setMemberMetadata(_:account:_:)` | `orgs.memberMetadata(org:account:metadata:)` |
+| `upgradeOrg(_:_:passkey:)` | `orgs.upgrade(org:package:version:team:cascade:migrate:passkey:)` |
+| `upgradeRun(_:_:)` | `orgs.upgradeStatus(org:run:)` |
+| `retryUpgradeRun(_:_:passkey:)` | `orgs.upgradeRetry(org:run:passkey:operatorSigner:)` |
+| `approveRelease(_:version:passkey:approved:)` | `orgs.releaseApproval` or `auth.releaseApproval` |
+| `approveOutbound(_:package:passkey:prefixes:replace:)` | `orgs.outboundApproval` or `auth.outboundApproval` |
+| `appsReport(_:page:)` | `orgs.apps(org:after:limit:)` or `auth.apps(after:limit:)` |
+| `releaseRules()` | `publicApi.releasesPublic()` |
+| `consentResult(_:)` | `consent.pageResult(request:)` |
+| `publisherBinding(_:)` | `publicApi.publisherBinding(signer:)` |
+| `bindPublisher(_:_:passkey:)` | `orgs.publisher(org:signerId:publicKey:signature:passkey:)` |
+| `upgradePublished(_:package:version:migrate:passkey:)` | `orgs.publisherUpgrade(org:package:version:migrate:passkey:)` |
+| `opsApps(page:)` | `ops.apps(after:limit:)` |
+| `opsOrgs(page:)` | `ops.orgs(after:limit:)` |
+| `setReleaseDeadline(_:after:)` | `ops.releaseDeadline(version:after:operatorSigner:)` |
+| `liftReleaseDeadline(_:)` | `ops.releaseDeadlineLift(version:operatorSigner:)` |
+| `setMember(_:account:role:passkey:)` | `orgs.setMember(org:account:role:passkey:)` |
+| `removeMember(_:account:passkey:)` | `orgs.removeMember(org:account:passkey:)` |
+| `setCapabilities(_:_:passkey:account:team:)` | `orgs.capabilities(org:account:team:capabilities:passkey:)` |
+| `createTeam(_:name:join:parent:)` | `orgs.teamCreate(org:name:parent:join:)` |
+| `getTeam(_:_:)` | `orgs.teamGet(org:team:)` |
+| `deleteTeam(_:_:)` | `orgs.teamDelete(org:team:passkey:)` |
+| `setTeamMember(_:_:account:passkey:role:lead:capabilities:)` | `orgs.teamSetMember` |
+| `removeTeamMember(_:_:account:passkey:)` | `orgs.teamRemoveMember(org:team:account:passkey:)` |
+| `invite(_:role:passkey:teams:ttlSecs:uses:)` | `orgs.inviteCreate(org:role:teams:ttlSecs:uses:allApps:passkey:)` |
+| `redeemInvite(_:)` | `orgs.inviteRedeem(token:)` |
+| `packageOrigins(_:)` | `packagesApi.originsList(package:)` |
+| `addPackageOrigin(_:origin:passkey:rpId:)` | `packagesApi.originsAdd(package:origin:rpId:served:passkey:)` |
+| `removePackageOrigin(_:origin:passkey:)` | `packagesApi.originsRemove(package:origin:passkey:)` |
+| `grantDeployer(_:passkey:until:)` | `deploymentsApi.deployerGrant(deployer:until:passkey:)` |
+| `deployers()` | `deploymentsApi.deployerList()` |
+| `revokeDeployer(_:passkey:)` | `deploymentsApi.deployerRevoke(key:passkey:)` |
+| `revokeDeployer(key:passkey:)` | `deploymentsApi.deployerRevoke(key:passkey:)` |
+| `createDeployment(_:owner:passkey:)` | `deploymentsApi.create(name:owner:passkey:)` |
+| `deployments()` | `deploymentsApi.list()` |
+| `deployment(_:)` | `deploymentsApi.get(id:)` |
+| `deleteDeployment(_:passkey:)` | `deploymentsApi.delete(id:passkey:)` |
+| `offerApp(_:app:package:version:passkey:)` | `deploymentsApi.offer(id:app:package:version:passkey:)` |
+| `withdrawApp(_:app:passkey:)` | `deploymentsApi.withdraw(id:app:passkey:)` |
+| `deploymentOrgs(_:)` | `deploymentsApi.orgs(id:)` |
+| `requestConsent(_:)` | `consent.pageCreate(body:)` |
+
+
 ## Unreleased: the node API is generated from core's OpenAPI document
 
 `CalimeroClient` gains a facade with one method per route of core's OpenAPI

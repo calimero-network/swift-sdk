@@ -53,7 +53,7 @@ let package = Package(
         // The native analog of mero-react's MeroProvider/useMero + LoginModal.
         .target(
             name: "MeroKitUI",
-            dependencies: ["MeroKit"],
+            dependencies: ["MeroKit", "MeroAPI", .product(name: "OpenAPIRuntime", package: "swift-openapi-runtime")],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
@@ -61,7 +61,7 @@ let package = Package(
         // A runnable end-to-end example that exercises the whole SDK.
         .executableTarget(
             name: "MeroExample",
-            dependencies: ["MeroKit"],
+            dependencies: ["MeroKit", "MeroAPI"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
@@ -76,7 +76,7 @@ let package = Package(
         // Unit tests + fully-mocked end-to-end journeys (no node required).
         .testTarget(
             name: "MeroKitTests",
-            dependencies: ["MeroKit", "MeroKitTestSupport"],
+            dependencies: ["MeroKit", "MeroAPI", "MeroKitTestSupport"],
             // Response bodies captured verbatim from a live node at the pinned
             // core release. Kept as files rather than string literals so they
             // stay diffable against a re-capture after a core bump — see
@@ -98,7 +98,7 @@ let package = Package(
         // MERO_E2E_NODE_URL is set (see .github/workflows/e2e.yml).
         .testTarget(
             name: "MeroKitE2ETests",
-            dependencies: ["MeroKit"],
+            dependencies: ["MeroKit", "MeroAPI"],
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency"),
             ]
