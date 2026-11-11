@@ -1,0 +1,204 @@
+name: OpenAPI sync
+
+# Keeps openapi/openapi.json, Sources/MeroAPI/Generated and the facade
+# (Sources/MeroKit/Api/Generated/Facade.swift) in step with core's OpenAPI
+# document. core's openapi-sync.yml sends `core-openapi` with the commit
+# whose document changed; a weekly run catches a missed event. When the
+# regenerated sources differ, a pull request on the machine-owned branch
+# chore/core-openapi is opened (or refreshed) as the GitHub App, so CI runs on
+# it (a pull request made with GITHUB_TOKEN would not trigger CI).
+#
+# Needs the organization's GitHub App installed on this repository, with
+# `vars.GH_APP_ID` and `secrets.GH_APP_PRIVATE_KEY` (as core's fleet-bump.yml).
+on:
+  repository_dispatch:
+    types: [core-openapi]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'A core branch, tag or full commit to sync to'
+        required: false
+        default: master
+      dry_run:
+        description: 'Regenerate and report, but open no pull request'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '41 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openapi-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Sync with core's OpenAPI document
+    # The runner CI's `generated` job uses: the generator is built from source
+    # with the Swift toolchain there (scripts/generate-openapi.sh), so the
+    # output is byte for byte what that job checks.
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Pick the core revision
+        id: target
+        env:
+          DISPATCHED: ${{ github.event.client_payload.commit }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          ref="${DISPATCHED:-${INPUT_REF:-master}}"
+          if [ -n "$DISPATCHED" ] && ! [[ "$DISPATCHED" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::client_payload.commit must be a full commit sha, got '$DISPATCHED'"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Syncing to core $ref"
+
+      - name: Refresh the document and regenerate
+        id: refresh
+        env:
+          REF: ${{ steps.target.outputs.ref }}
+        run: |
+          set -euo pipefail
+          cp Sources/MeroKit/Api/Generated/Facade.swift "$RUNNER_TEMP/Facade.before.swift"
+          scripts/generate-openapi.sh refresh "$REF"
+          . openapi/source
+          echo "commit=$CORE_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "short=${CORE_COMMIT:0:9}" >> "$GITHUB_OUTPUT"
+          if [ -z "$(git status --porcelain -- openapi Sources)" ]; then
+            echo "::notice::already in sync with core ${CORE_COMMIT:0:9}: nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Describe the facade change
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          COMMIT: ${{ steps.refresh.outputs.commit }}
+          SHORT: ${{ steps.refresh.outputs.short }}
+          CORE_REPO: ${{ github.repository_owner }}/core
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/Facade.before.swift" Sources/MeroKit/Api/Generated/Facade.swift \
+            > "$RUNNER_TEMP/facade-diff.md" <<'PY'
+          import re, sys
+
+          def methods(path):
+              """`group.name` -> the method's declaration, one line."""
+              out, group = {}, None
+              for line in open(path, encoding="utf-8"):
+                  m = re.match(r"    public nonisolated var (\w+):", line)
+                  if m:
+                      group = m.group(1)
+                  m = re.match(r"        public func (`?\w+`?)\((.*)\) async throws(.*?) \{$", line)
+                  if m and group:
+                      out[f"{group}.{m.group(1)}"] = f"{group}.{m.group(1)}({m.group(2)}){m.group(3)}".rstrip()
+              return out
+
+          before, after = methods(sys.argv[1]), methods(sys.argv[2])
+          added = sorted(set(after) - set(before))
+          removed = sorted(set(before) - set(after))
+          changed = sorted(k for k in set(before) & set(after) if before[k] != after[k])
+
+          def block(title, keys, show):
+              print(f"**{title}** ({len(keys)})")
+              print()
+              if not keys:
+                  print("None.")
+              for k in keys:
+                  print(f"- `{show(k)}`")
+              print()
+
+          block("Added", added, lambda k: after[k])
+          block("Removed", removed, lambda k: before[k])
+          print(f"**Signature changed** ({len(changed)})")
+          print()
+          if not changed:
+              print("None.")
+          for k in changed:
+              print(f"- `{k}`")
+              print(f"  - before: `{before[k]}`")
+              print(f"  - after: `{after[k]}`")
+          print()
+          if removed or changed:
+              print("> A removed or renamed facade method, or a changed signature, breaks callers: "
+                    "release this with a **major** version bump.")
+          else:
+              print("> No facade method was removed or changed: a minor (or patch) release.")
+          PY
+          {
+            echo "Syncs \`openapi/openapi.json\` with [\`$CORE_REPO@$SHORT\`](https://github.com/$CORE_REPO/commit/$COMMIT)"
+            echo "and regenerates \`Sources/MeroAPI/Generated\` and the facade (\`scripts/generate-openapi.sh\`)."
+            echo
+            echo "### Facade changes"
+            echo
+            cat "$RUNNER_TEMP/facade-diff.md"
+            echo
+            echo "Opened by \`.github/workflows/openapi-sync.yml\`; the branch \`chore/core-openapi\` is"
+            echo "machine-owned and is force-pushed on every sync. Do not push to it by hand."
+          } > "$RUNNER_TEMP/pr-body.md"
+          cat "$RUNNER_TEMP/pr-body.md" >> "$GITHUB_STEP_SUMMARY"
+          git --no-pager diff --stat
+
+      - name: Mint a token for this repository
+        if: steps.refresh.outputs.changed == 'true' && inputs.dry_run != true
+        id: token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Identify the app
+        if: steps.refresh.outputs.changed == 'true' && inputs.dry_run != true
+        id: app
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: echo "uid=$(gh api "/users/${SLUG}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Open or refresh the pull request
+        if: steps.refresh.outputs.changed == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.repository.default_branch }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+          APP_UID: ${{ steps.app.outputs.uid }}
+          SHORT: ${{ steps.refresh.outputs.short }}
+          COMMIT: ${{ steps.refresh.outputs.commit }}
+        run: |
+          set -euo pipefail
+          branch="chore/core-openapi"
+          title="chore(api): sync with core $SHORT"
+
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${APP_UID}+${SLUG}[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          # Only what the refresh writes.
+          git add -- openapi Sources/MeroAPI/Generated Sources/MeroKit/Api/Generated
+          git commit -m "$title" -m "Generated by openapi-sync.yml from calimero-network/core@$COMMIT."
+
+          # Machine-owned: a re-sync replaces it rather than stacking commits.
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          git push --force origin "$branch"
+
+          if gh pr view "$branch" --repo "$REPO" >/dev/null 2>&1; then
+            gh pr edit "$branch" --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/pr-body.md"
+            echo "::notice::refreshed the existing pull request for $branch"
+          else
+            gh pr create --repo "$REPO" --base "$BASE" --head "$branch" --title "$title" \
+              --body-file "$RUNNER_TEMP/pr-body.md"
+          fi
+          gh pr view "$branch" --repo "$REPO" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
