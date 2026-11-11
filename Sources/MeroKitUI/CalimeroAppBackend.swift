@@ -55,37 +55,32 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
 
     // MARK: Reads
 
-    // The node's answers, read as MeroKit's types (`answerJSON`): the
-    // document's shapes leave out fields these read (`memberMetadata`, ...).
+    // The node's typed answers, read as MeroKit's types through their JSON.
 
     func accountInfo() async throws -> AccountInfo {
-        AccountInfo(json: try await client.answerJSON { try await self.client.auth.me() })
+        AccountInfo(json: try JSONValue(encoding: try await client.auth.me()))
     }
 
     func fetchOrg(_ id: String) async throws -> OrgInfo {
-        OrgInfo(json: try await client.answerJSON { try await self.client.orgs.get(org: id) })
+        OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))
     }
 
     func fetchTeam(_ org: String, _ team: String) async throws -> TeamInfo {
-        TeamInfo(
-            json: try await client.answerJSON { try await self.client.orgs.teamGet(org: org, team: team) }, org: org)
+        TeamInfo(json: try JSONValue(encoding: try await client.orgs.teamGet(org: org, team: team)), org: org)
     }
 
     func fetchApps(package: String? = nil) async throws -> [AppInfo] {
-        try await client.answer(as: AppList.self) { try await self.client.apps.list(package: package) }.apps
+        let apps = try await client.apps.list(package: package).apps
+        return try MeroJSON.decode([AppInfo].self, from: try MeroJSON.encode(apps))
     }
 
     func appRecord(_ id: String) async throws -> JSONValue {
-        try await client.answerJSON { try await self.client.apps.get(app: id) }
+        try JSONValue(encoding: try await client.apps.get(app: id))
     }
 
     func invite(_ org: String) async throws -> String {
         let approval = try approver("createInvitation")
-        let answer = try await client.answerJSON {
-            try await self.client.orgs.inviteCreate(org: org, role: .member, teams: [], passkey: approval)
-        }
-        guard let token = answer["token"]?.stringValue else { throw AccountError.protocolViolation("no invite token") }
-        return token
+        return try await client.orgs.inviteCreate(org: org, role: .member, teams: [], passkey: approval).token
     }
 
     func createApp(
@@ -105,15 +100,10 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         let version = release?.version
         let named = service
         let args = try OpenAPIValueContainer(initArgs)
-        let created = try await client.answerJSON {
-            try await self.client.apps.create(
-                name: name, bundle: bundle, package: package, version: version, service: named, org: org,
-                access: access.generated, initArgs: args)
-        }
-        guard let appId = created["appId"]?.stringValue else {
-            throw AccountError.protocolViolation("the node created no app")
-        }
-        return appId
+        return try await client.apps.create(
+            name: name, bundle: bundle, package: package, version: version, service: named, org: org,
+            access: access.generated, initArgs: args
+        ).appId
     }
 
     /// ``passkey``, or ``PasskeyRequired`` for `method`.
@@ -194,21 +184,17 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     public func foundNamespace(name: String) async throws -> AppFoundedNamespace {
-        let org =
-            try await client.answerJSON { try await self.client.orgs.create(name: name) }["orgId"]?.stringValue ?? ""
+        let org = try await client.orgs.create(name: name).orgId
         var metadata: [String: JSONValue] = ["name": .string(name)]
         if !packageName.isEmpty { metadata["package"] = .string(packageName) }
         let orgMetadata = try OpenAPIValueContainer(JSONValue.object(metadata))
-        _ = try await client.answerJSON { try await self.client.orgs.metadata(org: org, metadata: orgMetadata) }
+        _ = try await client.orgs.metadata(org: org, metadata: orgMetadata)
         return AppFoundedNamespace(namespaceId: org)
     }
 
     public func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String {
         let join: TeamJoin = isPublic ? .everyone : .invite
-        let team =
-            try await client.answerJSON {
-                try await self.client.orgs.teamCreate(org: namespaceId, name: name, join: join.generated)
-            }["teamId"]?.stringValue ?? ""
+        let team = try await client.orgs.teamCreate(org: namespaceId, name: name, join: join.generated).teamId
         return teamGroupId(org: namespaceId, team: team)
     }
 
@@ -249,9 +235,7 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     public func joinNamespace(namespaceId: String, invitation: OrgInvitation) async throws -> AppJoinedNamespace {
-        let token = invitation.token
-        let answer = try await client.answerJSON { try await self.client.orgs.inviteRedeem(token: token) }
-        let org = answer["orgId"]?.stringValue ?? answer["org"]?.stringValue ?? invitation.namespaceId
+        let org = try await client.orgs.inviteRedeem(token: invitation.token).org
         return AppJoinedNamespace(
             namespaceId: org.isEmpty ? namespaceId : org, published: true, nodeURL: await client.nodeUrl)
     }
@@ -301,14 +285,14 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         var metadata = org.metadata.objectValue ?? [:]
         metadata["name"] = .string(name)
         let orgMetadata = try OpenAPIValueContainer(JSONValue.object(metadata))
-        _ = try await client.answerJSON { try await self.client.orgs.metadata(org: place.org, metadata: orgMetadata) }
+        _ = try await client.orgs.metadata(org: place.org, metadata: orgMetadata)
     }
 
     public func setContextName(groupId: String, contextId: String, name: String) async throws {
         var metadata = try await appRecord(contextId)["metadata"]?.objectValue ?? [:]
         metadata["name"] = .string(name)
         let appMetadata = try OpenAPIValueContainer(JSONValue.object(metadata))
-        _ = try await client.answerJSON { try await self.client.apps.metadata(app: contextId, metadata: appMetadata) }
+        _ = try await client.apps.metadata(app: contextId, metadata: appMetadata)
     }
 
     /// A record's name (its metadata's `name`, else `fallback`) and its other string fields.
@@ -323,8 +307,8 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     // MARK: Blobs
 
     public func uploadBlob(contextId: String, data: Data) async throws -> AppBlob {
-        let blob = try await client.uploadBlob(contextId, data)
-        return AppBlob(blobId: blob.blobId, size: blob.size)
+        let blob = try await client.apps.blobUpload(app: contextId, body: data)
+        return AppBlob(blobId: blob.blobId, size: Int(blob.size))
     }
 
     public func getBlob(blobId: String, contextId: String) async throws -> Data {
@@ -335,27 +319,21 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
 
     public func leaveNamespace(namespaceId: String) async throws {
         let approval = try approver("leaveNamespace")
-        _ = try await client.answerJSON {
-            try await self.client.orgs.removeMember(
-                org: namespaceId, account: account, passkey: approval)
-        }
+        _ = try await client.orgs.removeMember(
+            org: namespaceId, account: account, passkey: approval)
     }
 
     public func leaveSubgroup(groupId: String) async throws {
         let place = locate(groupId)
         guard let team = place.team else {
             let approval = try approver("leaveSubgroup")
-            _ = try await client.answerJSON {
-                try await self.client.orgs.removeMember(
-                    org: place.org, account: account, passkey: approval)
-            }
+            _ = try await client.orgs.removeMember(
+                org: place.org, account: account, passkey: approval)
             return
         }
         let approval = try approver("leaveSubgroup")
-        _ = try await client.answerJSON {
-            try await self.client.orgs.teamRemoveMember(
-                org: place.org, team: team, account: account, passkey: approval)
-        }
+        _ = try await client.orgs.teamRemoveMember(
+            org: place.org, team: team, account: account, passkey: approval)
     }
 
     public func deleteSubgroup(groupId: String) async throws {
@@ -363,11 +341,11 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         guard let team = place.team else {
             throw AccountError.invalidInput("\(groupId) is an organization, not a team")
         }
-        _ = try await client.answerJSON { try await self.client.orgs.teamDelete(org: place.org, team: team) }
+        _ = try await client.orgs.teamDelete(org: place.org, team: team)
     }
 
     public func removeContext(groupId: String, contextId: String) async throws {
-        _ = try await client.answerJSON { try await self.client.apps.delete(app: contextId) }
+        _ = try await client.apps.delete(app: contextId)
     }
 
     // MARK: Members
@@ -391,17 +369,13 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         let place = locate(groupId)
         if let team = place.team {
             let approval = try approver("setMemberRole")
-            _ = try await client.answerJSON {
-                try await self.client.orgs.teamSetMember(
-                    org: place.org, team: team, account: identity, role: role.teamRole.generated,
-                    passkey: approval)
-            }
+            _ = try await client.orgs.teamSetMember(
+                org: place.org, team: team, account: identity, role: role.teamRole.generated,
+                passkey: approval)
         } else {
             let approval = try approver("setMemberRole")
-            _ = try await client.answerJSON {
-                try await self.client.orgs.setMember(
-                    org: place.org, account: identity, role: role.orgRole.generated, passkey: approval)
-            }
+            _ = try await client.orgs.setMember(
+                org: place.org, account: identity, role: role.orgRole.generated, passkey: approval)
         }
     }
 
@@ -409,16 +383,12 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         let place = locate(groupId)
         if let team = place.team {
             let approval = try approver("removeMember")
-            _ = try await client.answerJSON {
-                try await self.client.orgs.teamRemoveMember(
-                    org: place.org, team: team, account: identity, passkey: approval)
-            }
+            _ = try await client.orgs.teamRemoveMember(
+                org: place.org, team: team, account: identity, passkey: approval)
         } else {
             let approval = try approver("removeMember")
-            _ = try await client.answerJSON {
-                try await self.client.orgs.removeMember(
-                    org: place.org, account: identity, passkey: approval)
-            }
+            _ = try await client.orgs.removeMember(
+                org: place.org, account: identity, passkey: approval)
         }
     }
 
@@ -428,9 +398,7 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         var metadata = org.memberMetadata[account]?.objectValue ?? [:]
         metadata["name"] = .string(name)
         let memberMetadata = try OpenAPIValueContainer(JSONValue.object(metadata))
-        _ = try await client.answerJSON {
-            try await self.client.orgs.memberMetadata(org: place.org, account: account, metadata: memberMetadata)
-        }
+        _ = try await client.orgs.memberMetadata(org: place.org, account: account, metadata: memberMetadata)
     }
 }
 

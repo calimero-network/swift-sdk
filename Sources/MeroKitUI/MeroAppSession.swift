@@ -50,9 +50,8 @@ public enum ConsentLauncher {
         confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async throws -> (started: ConsentStarted, returned: URL?) {
         let body = try request.generated()
-        let started = try await client.answer(as: ConsentStarted.self) {
-            try await client.consent.pageCreate(body: body)
-        }
+        let started = try MeroJSON.decode(
+            ConsentStarted.self, from: try MeroJSON.encode(try await client.consent.pageCreate(body: body)))
         try CalimeroClient.checkConsentCode(started)
         if let confirm, !(await confirm(started)) { return (started, nil) }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
@@ -203,9 +202,8 @@ public final class MeroAppSession: ObservableObject {
         if let restoreTask { await restoreTask.value }
         if let back = consentReturn(url) {
             if let cloud = client.cloud {
-                consentResult = try? await cloud.answer(as: ConsentResult.self) {
-                    try await cloud.consent.pageResult(request: back.requestId)
-                }
+                consentResult = try? await MeroJSON.decode(
+                    ConsentResult.self, from: MeroJSON.encode(cloud.consent.pageResult(request: back.requestId)))
             }
             return true
         }

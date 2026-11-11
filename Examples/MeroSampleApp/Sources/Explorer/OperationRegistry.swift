@@ -16,10 +16,10 @@ private func field(_ inputs: [String: String], _ key: String) throws -> String {
 
 private let accountOps: [SDKOperation] = [
     SDKOperation("me", "Account", "auth.me", "Your account, passkeys and organizations") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.auth.me() })
+        Fmt.json(try await c.auth.me())
     },
     SDKOperation("usage", "Account", "auth.usage", "What the account uses, with the cluster's quotas") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.auth.usage() })
+        Fmt.json(try await c.auth.usage())
     },
     SDKOperation("refresh", "Account", "refresh", "Swap the refresh token for a new session") { c, _ in
         let session = try await c.refresh()
@@ -32,10 +32,10 @@ private let accountOps: [SDKOperation] = [
         return Fmt.json(try await c.publicApi.attestation(nonce: nonce))
     },
     SDKOperation("apikeys", "Account", "auth.apikeyList", "The account's API keys (never the keys)") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.auth.apikeyList() })
+        Fmt.json(try await c.auth.apikeyList())
     },
     SDKOperation("aliases", "Account", "auth.aliasList", "This account's aliases, alias to app id") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.auth.aliasList() })
+        Fmt.json(try await c.auth.aliasList())
     },
 ]
 
@@ -47,17 +47,17 @@ private let appOps: [SDKOperation] = [
         fields: [.line("package", "Package", "com.calimero.chat")]
     ) { c, i in
         let package = i.opt("package")
-        return Fmt.json(try await c.answerJSON { try await c.apps.list(package: package) })
+        return Fmt.json(try await c.apps.list(package: package))
     },
     SDKOperation("app", "Apps", "apps.get", "One app instance's record", fields: [.line("app", "App id")]) { c, i in
         let app = try field(i, "app")
-        return Fmt.json(try await c.answerJSON { try await c.apps.get(app: app) })
+        return Fmt.json(try await c.apps.get(app: app))
     },
     SDKOperation(
         "abi", "Apps", "apps.abi", "The ABI the app's bundle embeds", fields: [.line("app", "App id")]
     ) { c, i in
         let app = try field(i, "app")
-        return Fmt.json(try await c.answerJSON { try await c.apps.abi(app: app) })
+        return Fmt.json(try await c.apps.abi(app: app))
     },
     SDKOperation(
         "view", "Apps", "view", "Run a read-only method (POST /apps/{app}/views)",
@@ -90,10 +90,10 @@ private let appOps: [SDKOperation] = [
         "presence", "Apps", "apps.presenceGet", "Who is present in an app", fields: [.line("app", "App id")]
     ) { c, i in
         let app = try field(i, "app")
-        return Fmt.json(try await c.answerJSON { try await c.apps.presenceGet(app: app) })
+        return Fmt.json(try await c.apps.presenceGet(app: app))
     },
     SDKOperation("packages", "Apps", "packages.list", "Installed packages and their versions") { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.packages.list() })
+        Fmt.json(try await c.packages.list())
     },
 ]
 
@@ -110,7 +110,7 @@ private let orgOps: [SDKOperation] = [
         "org.get", "Organizations", "orgs.get", "An organization and its teams", fields: [.line("org", "Org id")]
     ) { c, i in
         let org = try field(i, "org")
-        return Fmt.json(try await c.answerJSON { try await c.orgs.get(org: org) })
+        return Fmt.json(try await c.orgs.get(org: org))
     },
     SDKOperation(
         "team.create", "Organizations", "orgs.teamCreate", "Create a team (open: everyone may join)",
@@ -125,7 +125,7 @@ private let orgOps: [SDKOperation] = [
         fields: [.line("org", "Org id"), .line("team", "Team id")]
     ) { c, i in
         let (org, team) = (try field(i, "org"), try field(i, "team"))
-        return Fmt.json(try await c.answerJSON { try await c.orgs.teamGet(org: org, team: team) })
+        return Fmt.json(try await c.orgs.teamGet(org: org, team: team))
     },
     SDKOperation(
         "invite", "Organizations", "orgs.inviteCreate", "Mint an invite token (approved with your passkey)",
@@ -140,7 +140,7 @@ private let orgOps: [SDKOperation] = [
         fields: [.line("token", "Token", "inv_…")]
     ) { c, i in
         let token = try field(i, "token")
-        return Fmt.json(try await c.answerJSON { try await c.orgs.inviteRedeem(token: token) })
+        return Fmt.json(try await c.orgs.inviteRedeem(token: token))
     },
 ]
 
@@ -160,14 +160,14 @@ private let approvalOps: [SDKOperation] = [
     SDKOperation(
         "rules", "Approvals", "publicApi.releasesPublic", "The cluster's governance and release deadlines"
     ) { c, _ in
-        Fmt.json(try await c.answerJSON { try await c.publicApi.releasesPublic() })
+        Fmt.json(try await c.publicApi.releasesPublic())
     },
     SDKOperation(
         "consent.result", "Approvals", "consent.pageResult", "The decision on a consent request",
         fields: [.line("request", "Request id")]
     ) { c, i in
         let request = try field(i, "request")
-        return Fmt.json(try await c.answerJSON { try await c.consent.pageResult(request: request) })
+        return Fmt.json(try await c.consent.pageResult(request: request))
     },
 ]
 

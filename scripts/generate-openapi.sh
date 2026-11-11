@@ -108,6 +108,11 @@ case "${1:-generate}" in
     diff -ru "$OUT" "$fresh/MeroAPI" >"$changes" || stale=1
     diff -u "$FACADE" "$fresh/Facade.swift" >>"$changes" || stale=1
     if [ "$stale" = 1 ]; then
+      # Kept for CI to hand back (the `generated` job uploads it).
+      rm -rf "$ROOT/.build/openapi-fresh"
+      mkdir -p "$ROOT/.build/openapi-fresh/Sources/MeroAPI" "$ROOT/.build/openapi-fresh/Sources/MeroKit/Api/Generated"
+      cp -R "$fresh/MeroAPI" "$ROOT/.build/openapi-fresh/Sources/MeroAPI/Generated"
+      cp "$fresh/Facade.swift" "$ROOT/.build/openapi-fresh/Sources/MeroKit/Api/Generated/Facade.swift"
       head -100 "$changes" >&2
       die "the generated sources are stale: run scripts/generate-openapi.sh and commit the result"
     fi

@@ -28,9 +28,12 @@ final class MeroAppSessionTests: XCTestCase {
         node = FakeCloudNode { request in
             switch request.path {
             case "/consent/requests":
-                return .json(["requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1])
+                return .json([
+                    "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1,
+                    "code": .string(confirmationCode("r1")),
+                ])
             case "/consent/r1/result":
-                return .json(["requestId": "r1", "kind": "upgrade", "status": "approved"])
+                return .json(["requestId": "r1", "kind": "upgrade", "status": "approved", "decidedAt": 2])
             default: return cluster.handle(request)
             }
         }

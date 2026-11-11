@@ -233,7 +233,11 @@ final class CoreRc10ParityTests: XCTestCase {
         let node = FakeCloudNode { request in
             switch request.path {
             case "/orgs": return .json(["orgId": "o1"])
-            case "/auth/me": return .json(["accountId": "acc_new"])
+            case "/auth/me":
+                return .json([
+                    "accountId": "acc_new", "name": "new", "passkeys": [], "orgs": [], "via": "session",
+                    "passkeyId": .null, "approvedReleases": [], "outboundApprovals": [:],
+                ])
             case "/orgs/o1/recovery/start": return .json(["startedAt": 100, "readyAt": 259_300])
             case "/orgs/o1/recovery/finish":
                 if request.json?["confirm"] == nil { return .error(412, "CONFIRM_REQUIRED", details: Self.stepUp) }

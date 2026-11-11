@@ -4,7 +4,7 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 
 ## 1.0.0 (unreleased): the deprecated route wrappers are gone
 
-**Breaking.** The 82 `CalimeroClient` methods 0.x deprecated in favour of the
+**Breaking.** The 83 `CalimeroClient` methods 0.x deprecated in favour of the
 generated facade are removed. Every route is reached through the facade
 (`client.auth`, `.apps`, `.orgs`, `.consent`, `.ops`, `.packages`,
 `.deployments`, `.publicApi`), which answers the generated types
@@ -19,22 +19,23 @@ Upgrade notes:
   labelled arguments (`orgs.get(org: id)`, not `getOrg(id)`) and answers the
   generated type: `orgs.create(name:).orgId`, `orgs.inviteCreate(...).token`,
   `apps.create(...).appId`.
-- To keep reading an answer as MeroKit's types, as 0.x did (leniently, with
-  the fields the document leaves out), wrap the call:
-  `OrgInfo(json: try await client.answerJSON { try await client.orgs.get(org: id) })`,
-  `try await client.answer(as: ConsentResult.self) { try await client.consent.pageResult(request: id) }`.
+- Answers are the generated types, decoded strictly (core@94bcde3 types
+  every answer and makes optional what older nodes leave out). To read one as
+  a MeroKit type, go through its JSON:
+  `OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))`.
 - Arguments that were MeroKit types take their `generated` form:
   `AppAccess.team(id).generated`, `Deployer.org(id).generated`,
   `OrgRole.admin.generated`, `TeamJoin.everyone.generated`,
   `try ConsentRequest.generated()`.
 - A step-up method takes `passkey:` (or set `useStepUp(_:)` once); an
   operator decision takes `operatorSigner:` (or `useOperatorSigner(_:)`).
-- Kept, because the document cannot express them: `call`/`callJSON`/
-  `callConfirmed`/`view`/`viewJSON`, `events`/`presenceStream`, the sign-in
-  ceremonies, `uploadBlob(_:_:contentType:)`, `uploadFile`, `blobContent`,
-  `listBlobs`, `blobInfo`, `setRecoveryKey` (to remove a key), `updateTeam` (to
-  move a team to the top), `startRecovery`, `openConsentPage`,
-  `waitForConsent`, `pendingApprovals`, `appsReportAll` and the raw routes.
+- Kept, hand-written (several requests, byte-exact numbers, streams, the
+  sealed-file fields the blob shapes leave out, or a MeroKit-typed
+  convenience): `call`/`callJSON`/`callConfirmed`/`view`/`viewJSON`,
+  `events`/`presenceStream`, the sign-in ceremonies, `uploadFile`,
+  `blobContent`, `listBlobs`, `blobInfo`, `setRecoveryKey`, `updateTeam`,
+  `startRecovery`, `openConsentPage`, `waitForConsent`, `pendingApprovals`,
+  `appsReportAll` and the raw routes.
 
 | Removed (0.x) | Use (generated facade) |
 | --- | --- |
@@ -47,6 +48,7 @@ Upgrade notes:
 | `listApiKeys()` | `auth.apikeyList()` |
 | `revokeApiKey(_:passkey:)` | `auth.apikeyRevoke(key:passkey:)` |
 | `createApiKey(label:apps:methods:readOnly:allowConfirm:ttlSecs:upgrades:passkey:)` | `auth.apikeyCreate` |
+| `uploadBlob(_:_:contentType:)` | `apps.blobUpload(app:body:contentType:)` |
 | `uploadBundle(_:)` | `packages.bundlePut(body:)` |
 | `downloadBlob(_:_:)` | `apps.blobDownload(app:id:)` |
 | `downloadBlobGranted(_:_:grant:)` | `apps.blobDownload(app:id:grant:)` |
@@ -137,7 +139,7 @@ go through the attested sealed channel; refusals throw the same typed errors.
   call's `passkey:` or the client's `useStepUp(_:)` passkey; a `428
   OPERATOR_SIGNATURE_REQUIRED` (new: `OperatorSignatureRequired`) with the
   call's `operatorSigner:` or `useOperatorSigner(_:)` (`Ed25519OperatorKey`).
-- **Deprecated:** the 81 methods that wrap one route (`getOrg`, `invite`,
+- **Deprecated:** the 83 methods that wrap one route (`getOrg`, `invite`,
   `createApp`, `listApps`, ...). They keep their signatures and answers and
   name their replacement in the warning.
 - **New dependencies:** `swift-openapi-runtime` 1.9.0 and `swift-http-types`

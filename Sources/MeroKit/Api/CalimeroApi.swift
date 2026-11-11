@@ -58,6 +58,13 @@ enum StepUp {
     /// Whether the request may be sent again after a 503 or a lost
     /// connection (`x-calimero-retry-safe`), and fail over to another node.
     @TaskLocal static var retry = false
+    /// The JSON body's fields the facade call sends as an explicit `null`
+    /// (a `T??` argument given `.some(nil)`), which the generated encoder
+    /// would leave out.
+    @TaskLocal static var nulls: Set<String> = []
+    /// The `Content-Type` of a `*/*` body (a blob upload), for which the
+    /// generated client would send `*/*` itself.
+    @TaskLocal static var contentType: String?
 
     /// `confirm` for a `412 CONFIRM_REQUIRED`: `passkey`'s assertion over
     /// its challenge. A dismissed prompt is ``ConfirmCancelled``.
@@ -131,6 +138,9 @@ struct SealedClientTransport: ClientTransport {
             let name = field.name.canonicalName
             headers[name] = headers[name].map { "\($0), \(field.value)" } ?? field.value
         }
+        if headers["content-type"] == "*/*" {
+            headers["content-type"] = StepUp.contentType ?? "application/octet-stream"
+        }
         let path = String((request.path ?? "/").drop { $0 == "/" })
         let response: SealedResponse
         if Self.plaintext.contains(operationID) {
@@ -179,6 +189,7 @@ struct StepUpMiddleware: ClientMiddleware {
         // Kept, to send again with the answer.
         var bytes: Data?
         if let body { bytes = try await Data(collecting: body, upTo: .max) }
+        for field in StepUp.nulls.sorted() { bytes = try StepUp.adding(field, .null, to: bytes) }
         do {
             return try await next(request, bytes.map { HTTPBody($0) }, baseURL)
         } catch let error as ClientError {
@@ -204,7 +215,9 @@ struct StepUpMiddleware: ClientMiddleware {
 }
 
 /// Holds the bytes of the answer to the request a deprecated method makes,
-/// for its own decoding (``CalimeroClient/answer(as:_:)``).
+/// for its own decoding: `uploadFile`, `listBlobs`, `blobInfo` (a sealed
+/// file's `sha256` and `sealed`, which the document's blob shapes leave out)
+/// and `blobContent` (the type a blob is served as).
 final class AnswerTap: @unchecked Sendable {
     @TaskLocal static var current: AnswerTap?
 
@@ -272,13 +285,17 @@ extension CalimeroClient {
     /// What the facade's methods call.
     nonisolated func perform<T: Sendable>(
         passkey: (any PasskeyProvider)? = nil, operatorSigner: (any OperatorSigner)? = nil, retry: Bool = false,
-        _ body: @Sendable (Client) async throws -> T
+        nulls: Set<String> = [], contentType: String? = nil, _ body: @Sendable (Client) async throws -> T
     ) async throws -> T {
         let api = self.api
         do {
             return try await StepUp.$passkey.withValue(passkey ?? StepUp.passkey) {
                 try await StepUp.$operatorSigner.withValue(operatorSigner ?? StepUp.operatorSigner) {
-                    try await StepUp.$retry.withValue(retry) { try await body(api) }
+                    try await StepUp.$retry.withValue(retry) {
+                        try await StepUp.$nulls.withValue(nulls) {
+                            try await StepUp.$contentType.withValue(contentType) { try await body(api) }
+                        }
+                    }
                 }
             }
         } catch {
@@ -300,7 +317,7 @@ extension CalimeroClient {
 
     /// The bytes the node answered to the one request `operation` makes
     /// through the facade, whether or not the generated types accept them
-    /// (``answer(as:_:)``, ``answerJSON(_:)``).
+    /// (see ``AnswerTap``).
     func answerBytes<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> Data {
         let tap = AnswerTap()
         do {
@@ -323,17 +340,14 @@ extension OpenAPIValueContainer {
 }
 
 extension AppAccess {
-    /// This access as the generated API's `Access`. Built case by case: the
-    /// document's `oneOf` has no discriminator, so decoding it from JSON
-    /// takes the first case whose fields fit (`{ kind }`) and drops `team`
-    /// or `accounts`.
+    /// This access as the generated API's `Access` (discriminated by `kind`).
     public var generated: Components.Schemas.Access {
         switch self {
-        case .owner: return .case1(.init(kind: "owner"))
-        case .org: return .case2(.init(kind: "org"))
-        case .public: return .case3(.init(kind: "public"))
-        case .accounts(let accounts): return .case4(.init(kind: "accounts", accounts: accounts))
-        case .team(let team): return .case5(.init(kind: "team", team: team))
+        case .owner: return .owner(.init(kind: .owner))
+        case .org: return .org(.init(kind: .org))
+        case .public: return ._public(.init(kind: ._public))
+        case .accounts(let accounts): return .accounts(.init(kind: .accounts, accounts: accounts))
+        case .team(let team): return .team(.init(kind: .team, team: team))
         }
     }
 }
@@ -367,5 +381,13 @@ extension ConsentRequest {
     /// This request as the body of `client.consent.pageCreate(body:)`.
     public func generated() throws -> Operations.ConsentPageCreate.Input.Body.JsonPayload {
         try MeroJSON.decode(Operations.ConsentPageCreate.Input.Body.JsonPayload.self, from: CanonicalJSON.data(json))
+    }
+}
+
+extension JSONValue {
+    /// A generated value (a facade method's answer) as JSON, to read as one
+    /// of MeroKit's types: `OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))`.
+    public init(encoding value: some Encodable) throws {
+        self = try MeroJSON.decode(JSONValue.self, from: try MeroJSON.encode(value))
     }
 }

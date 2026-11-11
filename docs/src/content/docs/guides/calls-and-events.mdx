@@ -43,7 +43,7 @@ iterating) to close the stream.
 | `orgs.inviteRedeem(token:)` | `POST /invites/{token}/redeem` |
 | `apps.create(name:package:org:access:)` (`access: AppAccess.team(id).generated`) | `POST /apps` |
 
-`auth.me()` lists the account's organizations; read `OrgInfo(json: try await client.answerJSON { try await client.orgs.get(org: id) })` for the fields the document leaves out (`memberMetadata`, `recovery`, ...).
+`auth.me()` lists the account's organizations; `orgs.get(org:)` answers the organization, its teams, members and their metadata; `OrgInfo(json: try JSONValue(encoding: org))` reads it as MeroKit's type.
 
 An owner who loses every passkey gets the organization back with its recovery
 seed (core rc.9+). The seed never leaves the device: the node stores only its
@@ -65,7 +65,7 @@ seed is refused from then on.
 
 ## Blobs and presence
 
-`uploadBlob(app, data, contentType:)`, `apps.blobDownload(app:id:grant:)`
+`apps.blobUpload(app:body:contentType:)`, `apps.blobDownload(app:id:grant:)`
 (`grant`: no session, a grant one of the app's runs handed out),
 `blobContent(app, id, grant:)` (bytes and content type), `listBlobs`,
 `blobInfo`, `apps.blobDelete(app:id:)` on

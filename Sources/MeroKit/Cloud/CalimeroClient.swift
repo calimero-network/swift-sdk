@@ -425,25 +425,9 @@ public actor CalimeroClient {
         try decode(JSONValue.self, data)
     }
 
-    /// The node's answer to one facade call, read as `type` the way MeroKit
-    /// read it before its API was generated: leniently, a field the
-    /// document does not name (or names but the node left out) included or
-    /// defaulted, whether or not the generated type accepts the answer.
-    /// For the answers whose document shape is narrower than what the node
-    /// sends (`GET /orgs/{org}` and its `memberMetadata`, say):
-    ///
-    /// ```swift
-    /// let org = OrgInfo(json: try await client.answerJSON { try await client.orgs.get(org: id) })
-    /// ```
-    public func answer<T: Decodable, R: Sendable>(
-        as type: T.Type, _ operation: @Sendable () async throws -> R
-    ) async throws -> T {
-        try decode(type, try await answerBytes(operation))
-    }
-
-    /// ``answer(as:_:)`` as JSON.
-    public func answerJSON<R: Sendable>(_ operation: @Sendable () async throws -> R) async throws -> JSONValue {
-        try value(try await answerBytes(operation))
+    /// A generated answer as MeroKit's own type `T`, through its JSON.
+    static func reading<T: Decodable>(_ type: T.Type, _ value: some Encodable) throws -> T {
+        try MeroJSON.decode(type, from: try MeroJSON.encode(value))
     }
 
     /// `value` as generated type `T`, through its JSON.
@@ -570,7 +554,7 @@ public actor CalimeroClient {
     ) async throws -> CalimeroSession {
         let invite = invite.flatMap { $0.isEmpty ? nil : $0 }
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answerBytes { try await self.auth.registerBegin(name: name, origin: origin, invite: invite) }
+            try JSONValue(encoding: try await self.auth.registerBegin(name: name, origin: origin, invite: invite))
         }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("the registration did not begin")
@@ -579,12 +563,10 @@ public actor CalimeroClient {
         let converted: Components.Schemas.Registration = try Self.converted(registration)
         // The node asks the new passkey to sign the account it creates: the
         // step-up middleware answers with it.
-        let session = try decode(
+        let session = try Self.reading(
             CalimeroSession.self,
-            try await answerBytes {
-                try await self.auth.registerFinish(
-                    challengeId: challengeId, registration: converted, invite: invite, passkey: passkey)
-            })
+            try await auth.registerFinish(
+                challengeId: challengeId, registration: converted, invite: invite, passkey: passkey))
         useSession(session)
         return session
     }
@@ -592,10 +574,10 @@ public actor CalimeroClient {
     /// POST a ceremony's `begin`, naming the `origin` sent in an
     /// ``OriginNotRegistered`` the node leaves it out of.
     private func beginCeremony(
-        origin: String?, _ begin: @Sendable () async throws -> Data
+        origin: String?, _ begin: @Sendable () async throws -> JSONValue
     ) async throws -> JSONValue {
         do {
-            return try value(try await begin())
+            return try await begin()
         } catch let error as OriginNotRegistered where error.origin.isEmpty && origin != nil {
             var details = error.details
             details["origin"] = origin.map(JSONValue.string)
@@ -609,7 +591,7 @@ public actor CalimeroClient {
     @discardableResult
     public func signIn(_ passkey: any PasskeyProvider, origin: String? = nil) async throws -> CalimeroSession {
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answerBytes { try await self.auth.loginBegin(origin: origin) }
+            try JSONValue(encoding: try await self.auth.loginBegin(origin: origin))
         }
         guard let challengeId = begin["challengeId"]?.stringValue,
             let challenge = begin["options"]?["challenge"]?.stringValue,
@@ -617,9 +599,8 @@ public actor CalimeroClient {
         else { throw AccountError.protocolViolation("the sign-in did not begin") }
         let assertion = try await passkey.get(challenge: try fromB64url(challenge), rpId: rpId, allowCredentials: nil)
         let converted: Components.Schemas.Assertion = try Self.converted(assertion)
-        let session = try await answer(as: CalimeroSession.self) {
-            try await self.auth.loginFinish(challengeId: challengeId, assertion: converted)
-        }
+        let session = try Self.reading(
+            CalimeroSession.self, try await auth.loginFinish(challengeId: challengeId, assertion: converted))
         useSession(session)
         return session
     }
@@ -648,9 +629,7 @@ public actor CalimeroClient {
         while true {
             do {
                 let token = current.refreshToken
-                let session = try await answer(as: CalimeroSession.self) {
-                    try await self.auth.refresh(refreshToken: token)
-                }
+                let session = try Self.reading(CalimeroSession.self, try await auth.refresh(refreshToken: token))
                 // A sign-in or another session taken while this one was refreshing wins.
                 if self.current == current { useSession(session) }
                 return session
@@ -663,14 +642,14 @@ public actor CalimeroClient {
 
     /// End this session.
     public func signOut() async throws {
-        _ = try await answerBytes { try await self.auth.logout() }
+        _ = try await auth.logout()
         credential = nil
         setCurrent(nil)
     }
 
     /// End every session of the signed-in account, on every device, this one too.
     public func signOutEverywhere() async throws {
-        _ = try await answerBytes { try await self.auth.logoutAll() }
+        _ = try await auth.logoutAll()
         credential = nil
         setCurrent(nil)
     }
@@ -686,38 +665,18 @@ public actor CalimeroClient {
     /// a passkey the account already has (`412 CONFIRM_REQUIRED`, never the
     /// new one), which `approver` gives.
     public func addPasskey(_ passkey: any PasskeyProvider, approver: any PasskeyProvider) async throws -> String {
-        let begin = try await answerJSON { try await self.auth.passkeyAddBegin() }
+        let begin = try JSONValue(encoding: try await auth.passkeyAddBegin())
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("adding a passkey did not begin")
         }
         let created = try await passkey.create(options: options)
         let registration: Components.Schemas.Registration = try Self.converted(created)
-        let finished = try await answerJSON {
-            try await self.auth.passkeyAddFinish(
-                challengeId: challengeId, registration: registration, passkey: approver)
-        }
-        return finished["credentialId"]?.stringValue ?? ""
+        let finished = try await auth.passkeyAddFinish(
+            challengeId: challengeId, registration: registration, passkey: approver)
+        return finished.credentialId
     }
 
     // MARK: - Bundles and blobs
-
-    /// Upload a blob for `app`: `blobId` is base58 (what apps print), `id`
-    /// hex. `contentType` (printable ASCII; the node refuses another with
-    /// `400`) is sent as the upload's `Content-Type`: a component app records
-    /// it and serves downloads with it. A component app holding as many blobs
-    /// as it may answers ``QuotaExceeded``.
-    public func uploadBlob(
-        _ app: String, _ data: Data, contentType: String = "application/octet-stream"
-    ) async throws -> BlobInfo {
-        // The document allows only `application/octet-stream`; another type
-        // (which the node records and serves the blob as) goes as written.
-        guard contentType == "application/octet-stream" else {
-            return try decode(
-                BlobInfo.self,
-                try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
-        }
-        return try await answer(as: BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data) }
-    }
 
     /// Upload a sealed file for component app `app` (core rc.9+,
     /// `POST /apps/{app}/blobs?sealed=true`): sealed under a key of its own
@@ -728,7 +687,8 @@ public actor CalimeroClient {
     /// `size` and `sha256`, and the upload's log `index`. No route serves,
     /// replaces or deletes a sealed file: the app's runs open it by id.
     public func uploadFile(_ app: String, _ data: Data) async throws -> BlobInfo {
-        try await answer(as: BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data, sealed: true) }
+        try decode(
+            BlobInfo.self, try await answerBytes { try await self.apps.blobUpload(app: app, body: data, sealed: true) })
     }
 
     /// ``downloadBlob(_:_:)`` (or, with `grant`,
@@ -752,12 +712,12 @@ public actor CalimeroClient {
 
     /// `app`'s blobs.
     public func listBlobs(_ app: String) async throws -> [BlobInfo] {
-        try await answer(as: BlobList.self) { try await self.apps.blobList(app: app) }.blobs
+        try decode(BlobList.self, try await answerBytes { try await self.apps.blobList(app: app) }).blobs
     }
 
     /// One of `app`'s blobs' id and size; ``NotFound`` if the app has no such blob.
     public func blobInfo(_ app: String, _ id: String) async throws -> BlobInfo {
-        try await answer(as: BlobInfo.self) { try await self.apps.blobInfo(app: app, id: id) }
+        try decode(BlobInfo.self, try await answerBytes { try await self.apps.blobInfo(app: app, id: id) })
     }
 
     // MARK: - Packages
@@ -871,7 +831,7 @@ public actor CalimeroClient {
     /// Committed events from index `from`, then live, until the stream is
     /// cancelled (stop iterating, or cancel the task).
     public nonisolated func events(_ app: String, from: Int = 0) -> AsyncThrowingStream<CloudEvent, Error> {
-        stream { try await self.apps.events(app: app, from: from) }
+        stream { try await self.apps.events(app: app, from: Int64(from)) }
     }
 
     /// A server-sent event stream on `path`, sealed like every other answer.
@@ -910,12 +870,9 @@ public actor CalimeroClient {
     /// approved with `passkey`. A recovery under way is cancelled, and the
     /// old seed's signatures are refused from then on.
     public func setRecoveryKey(_ org: String, publicKey: String?, passkey: any PasskeyProvider) async throws {
-        guard let publicKey else {
-            // Removing it is `publicKey: null`, which the generated body cannot send (it omits a nil).
-            try await postConfirmed("orgs/\(Self.seg(org))/recovery", ["publicKey": .null], passkey: passkey)
-            return
-        }
-        _ = try await answerBytes { try await self.orgs.recoverySet(org: org, publicKey: publicKey, passkey: passkey) }
+        // `nil` removes the key: an explicit `publicKey: null`.
+        let key: String?? = .some(publicKey)
+        _ = try await orgs.recoverySet(org: org, publicKey: key, passkey: passkey)
     }
 
     /// Start handing `org` to the signed-in account with the recovery
@@ -925,12 +882,11 @@ public actor CalimeroClient {
     /// and every member sees it in ``OrgInfo/recovery``. A wrong seed, no
     /// organization or none set is `403 WRONG_RECOVERY_KEY`.
     public func startRecovery(_ org: String, seed: RecoverySeed) async throws -> RecoveryTimes {
-        let account = AccountInfo(json: try await answerJSON { try await self.auth.me() }).accountId
+        let account = try await auth.me().accountId
         let nonce = b64url(randomBytes(16))
         let signature = try seed.sign(org: org, account: account, nonce: nonce)
-        return try await answer(as: RecoveryTimes.self) {
-            try await self.orgs.recoveryStart(org: org, nonce: nonce, signature: signature)
-        }
+        return try Self.reading(
+            RecoveryTimes.self, try await orgs.recoveryStart(org: org, nonce: nonce, signature: signature))
     }
 
     // MARK: - Approvals
@@ -952,36 +908,24 @@ public actor CalimeroClient {
     private func reportPage(_ org: String?, _ page: PageOptions) async throws -> AppsReport {
         _ = try page.query()
         if let org {
-            return try await answer(as: AppsReport.self) {
-                try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
-            }
+            return try Self.reading(
+                AppsReport.self, try await orgs.apps(org: org, after: page.after, limit: page.limit.map { Int64($0) }))
         }
-        return try await answer(as: AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
+        return try Self.reading(
+            AppsReport.self, try await auth.apps(after: page.after, limit: page.limit.map { Int64($0) }))
     }
 
     /// What waits for a decision in a scope (`org`, or the account's own apps with `nil`).
     public func pendingApprovals(org: String? = nil) async throws -> PendingApprovals {
         async let report = appsReportAll(org)
-        async let rules = answer(as: ReleaseRules.self) { try await self.publicApi.releasesPublic() }
-        return pendingApprovalsFrom(try await report, rules: try await rules)
+        async let rules = publicApi.releasesPublic()
+        return pendingApprovalsFrom(try await report, rules: try Self.reading(ReleaseRules.self, try await rules))
     }
 
-    /// Ask the node to ask the user: an approval decided on the node's own
-    /// consent page, never in the app. Send the person to the answer's `url`
-    /// (`MeroKitUI`'s `ConsentPage` opens it in the system browser).
     /// Ask the node to ask the user (`POST /consent/requests`), for
     /// ``openConsentPage(_:options:)``.
     private func startConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
-        // A request the document's `oneOf` does not describe goes as written,
-        // for the node to judge, as it always did.
-        let body: Operations.ConsentPageCreate.Input.Body.JsonPayload
-        do {
-            body = try Self.converted(json: request.json)
-        } catch {
-            return try decode(
-                ConsentStarted.self, try await json("POST", "consent/requests", body: CanonicalJSON.data(request.json)))
-        }
-        return try await answer(as: ConsentStarted.self) { try await self.consent.pageCreate(body: body) }
+        try Self.reading(ConsentStarted.self, try await consent.pageCreate(body: try request.generated()))
     }
 
     /// ``requestConsent(_:)``, then hand the page's URL to `navigate`.
@@ -1033,9 +977,7 @@ public actor CalimeroClient {
         -> ConsentResult
     {
         while true {
-            let result = try await answer(as: ConsentResult.self) {
-                try await self.consent.pageResult(request: requestId)
-            }
+            let result = try Self.reading(ConsentResult.self, try await consent.pageResult(request: requestId))
             if result.status != .pending || Task.isCancelled { return result }
             if let expiresAt, Date().timeIntervalSince1970 >= expiresAt { return result }
             await sleep(interval)
@@ -1052,22 +994,11 @@ public actor CalimeroClient {
         _ org: String, _ team: String, name: String? = nil, join: TeamJoin? = nil, parent: String?? = nil,
         metadata: JSONValue? = nil
     ) async throws {
-        if case .some(.none) = parent {
-            // Moving it to the top is `parent: null`, which the generated body cannot send (it omits a nil).
-            var body: [String: JSONValue] = ["parent": .null]
-            if let name { body["name"] = .string(name) }
-            if let join { body["join"] = .string(join.rawValue) }
-            if let metadata { body["metadata"] = metadata }
-            try await post("orgs/\(Self.seg(org))/teams/\(Self.seg(team))", .object(body))
-            return
-        }
         let join: Components.Schemas.TeamJoin? = try join.map { try Self.converted($0) }
         let metadata = try metadata.map { try OpenAPIValueContainer($0) }
-        let parent = parent.flatMap { $0 }
-        _ = try await answerBytes {
-            try await self.orgs.teamUpdate(
-                org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)
-        }
+        // `.some(nil)` moves it to the top: an explicit `parent: null`.
+        _ = try await orgs.teamUpdate(
+            org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)
     }
 
     // MARK: - Package origins

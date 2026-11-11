@@ -80,7 +80,7 @@ output. MeroKit 1.0 removed the 0.x wrappers (`getOrg`, `invite`,
 `createApp`, ...): [CHANGELOG.md](CHANGELOG.md) maps each to its facade
 method. `call`/`view` (idempotent retries, failover, exact numbers), the
 sign-in ceremonies, the event streams and the escape hatches (`post`,
-`postConfirmed`, `answer(as:_:)`, ...) are hand-written.
+`postConfirmed`, ...) are hand-written.
 
 ## Behaviour
 

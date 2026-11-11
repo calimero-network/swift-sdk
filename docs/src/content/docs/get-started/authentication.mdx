@@ -122,7 +122,5 @@ Release, upgrade and outbound approvals are never made inside an app:
 let request = upgradeConsent(app: app, toVersion: "1.2.0", returnTo: "myapp://consent")
 let started = try await client.consent.pageCreate(body: try request.generated())
 // open started.url in the system browser (MeroClient.requestConsent uses ASWebAuthenticationSession)
-let result = try await client.answer(as: ConsentResult.self) {
-    try await client.consent.pageResult(request: started.requestId)
-}
+let result = try await client.consent.pageResult(request: started.requestId)   // .status: approved, …
 ```

@@ -14,7 +14,10 @@ answer. `confirm` and `operatorProof` are no arguments: the client answers a
 call, else the client's own. An operation the document marks
 `x-calimero-retry-safe` is retried on a 503 or a lost connection, with
 failover (one marked `x-calimero-retry-requires: idempotencyKey` only when
-the call gives one). Refusals throw MeroKit's errors.
+the call gives one). An optional body property the
+document makes nullable is a `T??` argument: `.some(nil)` sends an explicit
+`null` (`orgs.teamUpdate(parent: .some(nil))` moves a team to the top).
+Refusals throw MeroKit's errors.
 
 The Swift names and types are read from the generated Types.swift (so they
 are the generator's, whatever its naming), the tags and step-ups from the
@@ -83,9 +86,23 @@ def init_params(lines, start, indent):
     raise SystemExit(f"no init at indent {indent} after line {start}")
 
 
+def component_structs(lines):
+    """`Components.Schemas` structs: name -> their init's parameters."""
+    out = {}
+    for i, line in enumerate(lines):
+        m = re.match(r"^        public struct (\w+): Codable", line)
+        if m:
+            try:
+                out[m.group(1)] = init_params(lines, i, 12)
+            except SystemExit:
+                pass
+    return out
+
+
 def operations(types):
     """Each generated operation: its id, Swift name, inputs and success answer."""
     lines = types.split("\n")
+    structs = component_structs(lines)
     starts = [i for i, l in enumerate(lines) if re.match(r"^    public enum (\w+) \{$", l)]
     ops = {}
     for n, start in enumerate(starts):
@@ -117,7 +134,12 @@ def operations(types):
                     if typ == f"Operations.{name}.Input.Body.JsonPayload" and payload_at is not None:
                         op["body"] = ("fields", case, init_params(block, payload_at, 20))
                     else:
-                        op["body"] = ("whole", case, typ)
+                        component = re.match(r"^Components\.Schemas\.(\w+)$", typ)
+                        if component and component.group(1) in structs:
+                            # A body that is one shared object (`ConfirmOnly`): its fields, as an inline body's.
+                            op["body"] = ("fields", case, structs[component.group(1)])
+                        else:
+                            op["body"] = ("whole", case, typ)
                     break
         ok_at = next((i for i in range(out_at, len(block))
                       if block[i] == "            public struct Ok: Sendable, Hashable {"), None)
@@ -145,6 +167,22 @@ def method_name(op_id, prefix):
 
 def doc(text):
     return [line.rstrip() for line in text.strip().split("\n")]
+
+
+def nullable_fields(document, spec):
+    """The JSON body's optional properties whose schema admits `null`."""
+    schema = spec.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+    if "$ref" in schema:
+        schema = document["components"]["schemas"][schema["$ref"].split("/")[-1]]
+    required = set(schema.get("required", []))
+    out = set()
+    for name, prop in schema.get("properties", {}).items():
+        kind = prop.get("type")
+        if name not in required and (
+            (isinstance(kind, list) and "null" in kind) or {"type": "null"} in prop.get("anyOf", [])
+        ):
+            out.add(name)
+    return out
 
 
 def taken_names(root):
@@ -226,16 +264,33 @@ def facade(document, ops, taken):
                 arg(p, t, d)
             body_expr = None
             fields_args = []
+            explicit_nulls = []
+            content_type = False
             if op["body"]:
                 kind, case, rest = op["body"]
                 if kind == "fields":
-                    fields = [(p, arg(p, t, d, "body")) for p, t, d in rest if p not in STEP_UP_FIELDS]
+                    nullable = nullable_fields(document, spec)
+                    fields = []
+                    for p, t, d in rest:
+                        if p in STEP_UP_FIELDS:
+                            continue
+                        if p in nullable and t.endswith("?"):
+                            # `T??`: `.some(nil)` sends an explicit `null` (the document gives it a meaning).
+                            label = arg(p, t + "?", d, "body")
+                            explicit_nulls.append((p, label))
+                            fields.append((p, f"{label} ?? nil"))
+                        else:
+                            fields.append((p, arg(p, t, d, "body")))
                     fields_args = fields
                     if fields or not op["bodyOptional"]:
                         body_expr = f".{case}(.init({', '.join(f'{p}: {a}' for p, a in fields)}))"
                 elif rest == "OpenAPIRuntime.HTTPBody":
                     arg("body", "Data", None)
                     body_expr = f".{case}(HTTPBody(body))"
+                    if case == "any":
+                        # `*/*`: the caller names the type (the generator would send `*/*`).
+                        arg("contentType", "Swift.String", '"application/octet-stream"')
+                        content_type = True
                 else:
                     arg("body", rest, None)
                     body_expr = f".{case}(body)"
@@ -276,6 +331,10 @@ def facade(document, ops, taken):
                 w("        @discardableResult")
             w(f"        public func {name}({', '.join(args)}) async throws{returns} {{")
             w(f"            let input = {input_expr}")
+            if explicit_nulls:
+                w("            var nulls: Set<String> = []")
+                for key, label in explicit_nulls:
+                    w(f"            if case .some(.none) = {label} {{ nulls.insert(\"{key}\") }}")
             overrides = []
             if step_up:
                 overrides.append("passkey: passkey")
@@ -283,11 +342,17 @@ def facade(document, ops, taken):
                 overrides.append("operatorSigner: operatorSigner")
             if retry_safe and retry_requires:
                 needed = next((a for p, a in fields_args if p == retry_requires), None)
+                if needed is not None and needed.endswith(" ?? nil"):
+                    needed = needed[: -len(" ?? nil")]
                 if needed is None:
                     raise SystemExit(f"{op_id}: retry requires {retry_requires}, which is no argument")
                 overrides.append(f"retry: {needed} != nil")
             elif retry_safe:
                 overrides.append("retry: true")
+            if explicit_nulls:
+                overrides.append("nulls: nulls")
+            if content_type:
+                overrides.append("contentType: contentType")
             perform = f"client.perform({', '.join(overrides)})" if overrides else "client.perform"
             w(f"            return try await {perform} {{ api in")
             w(f"                {extract}")

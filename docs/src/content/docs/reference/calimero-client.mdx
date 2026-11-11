@@ -18,10 +18,10 @@ Methods marked with a passkey (`passkey:`) are step-ups: the node answers
 | Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `useStepUp`, `useOperatorSigner`, `nodeUrl`, `nodes`, `connect` |
 | Identity | `signUp(_:name:invite:origin:)`, `signIn(_:origin:)`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `addPasskey(_:approver:)` |
 | Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events`, `presenceStream` |
-| Blobs | `uploadBlob(_:_:contentType:)`, `uploadFile(_:_:)`, `blobContent`, `listBlobs`, `blobInfo` |
+| Blobs | `uploadFile(_:_:)`, `blobContent`, `listBlobs`, `blobInfo` |
 | Organizations | `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `updateTeam` |
 | Approvals | `appsReportAll`, `pendingApprovals`, `openConsentPage`, `waitForConsent`, `checkConsentCode`; `pageDeployment(_:)`, `frontendManifest(_:)` |
-| Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed`; `answer(as:_:)`, `answerJSON(_:)` (a facade call's answer read as MeroKit's types) |
+| Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed`; `JSONValue(encoding:)` (a facade answer as JSON, to read as MeroKit's types) |
 
 Every other route is a method of the generated facade, one per operation of
 core's OpenAPI document, grouped by its `x-calimero-group`: `client.auth`
