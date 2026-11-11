@@ -305,7 +305,8 @@ extension CalimeroClient {
     /// heartbeat: an entry not refreshed within 7 s is gone.
     @available(*, deprecated, message: "use client.apps.presencePublish(app:seq:state:)")
     public func publishPresence(_ app: String, seq: Int, state: Data?) async throws {
-        let state = state.map { Hex.encode($0) }
+        // `nil` retracts it: an explicit `state: null`, as before.
+        let state: String?? = .some(state.map { Hex.encode($0) })
         _ = try await answer { try await self.apps.presencePublish(app: app, seq: seq, state: state) }
     }
 

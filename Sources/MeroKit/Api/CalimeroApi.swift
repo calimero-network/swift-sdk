@@ -58,6 +58,10 @@ enum StepUp {
     /// Whether the request may be sent again after a 503 or a lost
     /// connection (`x-calimero-retry-safe`), and fail over to another node.
     @TaskLocal static var retry = false
+    /// The JSON body's fields the facade call sends as an explicit `null`
+    /// (a `T??` argument given `.some(nil)`), which the generated encoder
+    /// would leave out.
+    @TaskLocal static var nulls: Set<String> = []
 
     /// `confirm` for a `412 CONFIRM_REQUIRED`: `passkey`'s assertion over
     /// its challenge. A dismissed prompt is ``ConfirmCancelled``.
@@ -179,6 +183,7 @@ struct StepUpMiddleware: ClientMiddleware {
         // Kept, to send again with the answer.
         var bytes: Data?
         if let body { bytes = try await Data(collecting: body, upTo: .max) }
+        for field in StepUp.nulls.sorted() { bytes = try StepUp.adding(field, .null, to: bytes) }
         do {
             return try await next(request, bytes.map { HTTPBody($0) }, baseURL)
         } catch let error as ClientError {
@@ -272,13 +277,15 @@ extension CalimeroClient {
     /// What the facade's methods call.
     nonisolated func perform<T: Sendable>(
         passkey: (any PasskeyProvider)? = nil, operatorSigner: (any OperatorSigner)? = nil, retry: Bool = false,
-        _ body: @Sendable (Client) async throws -> T
+        nulls: Set<String> = [], _ body: @Sendable (Client) async throws -> T
     ) async throws -> T {
         let api = self.api
         do {
             return try await StepUp.$passkey.withValue(passkey ?? StepUp.passkey) {
                 try await StepUp.$operatorSigner.withValue(operatorSigner ?? StepUp.operatorSigner) {
-                    try await StepUp.$retry.withValue(retry) { try await body(api) }
+                    try await StepUp.$retry.withValue(retry) {
+                        try await StepUp.$nulls.withValue(nulls) { try await body(api) }
+                    }
                 }
             }
         } catch {

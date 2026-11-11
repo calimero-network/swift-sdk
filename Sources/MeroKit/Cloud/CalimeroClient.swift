@@ -902,12 +902,9 @@ public actor CalimeroClient {
     /// approved with `passkey`. A recovery under way is cancelled, and the
     /// old seed's signatures are refused from then on.
     public func setRecoveryKey(_ org: String, publicKey: String?, passkey: any PasskeyProvider) async throws {
-        guard let publicKey else {
-            // Removing it is `publicKey: null`, which the generated body cannot send (it omits a nil).
-            try await postConfirmed("orgs/\(Self.seg(org))/recovery", ["publicKey": .null], passkey: passkey)
-            return
-        }
-        _ = try await answer { try await self.orgs.recoverySet(org: org, publicKey: publicKey, passkey: passkey) }
+        // `nil` removes the key: an explicit `publicKey: null`.
+        let key: String?? = .some(publicKey)
+        _ = try await answer { try await self.orgs.recoverySet(org: org, publicKey: key, passkey: passkey) }
     }
 
     /// Start handing `org` to the signed-in account with the recovery
@@ -1046,18 +1043,9 @@ public actor CalimeroClient {
         _ org: String, _ team: String, name: String? = nil, join: TeamJoin? = nil, parent: String?? = nil,
         metadata: JSONValue? = nil
     ) async throws {
-        if case .some(.none) = parent {
-            // Moving it to the top is `parent: null`, which the generated body cannot send (it omits a nil).
-            var body: [String: JSONValue] = ["parent": .null]
-            if let name { body["name"] = .string(name) }
-            if let join { body["join"] = .string(join.rawValue) }
-            if let metadata { body["metadata"] = metadata }
-            try await post("orgs/\(Self.seg(org))/teams/\(Self.seg(team))", .object(body))
-            return
-        }
         let join: Components.Schemas.TeamJoin? = try join.map { try Self.converted($0) }
         let metadata = try metadata.map { try OpenAPIValueContainer($0) }
-        let parent = parent.flatMap { $0 }
+        // `.some(nil)` moves it to the top: an explicit `parent: null`.
         _ = try await answer {
             try await self.orgs.teamUpdate(
                 org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)
