@@ -486,8 +486,8 @@ public actor CalimeroClient {
         }
     }
 
-    /// `attempt`, again while the node answers 503 or cannot be reached (see ``retried(_:body:once:)``).
-    private func retrying<T>(once: Bool, _ attempt: () async throws -> T) async throws -> T {
+    /// `operation`, again while the node answers 503 or cannot be reached (see ``retried(_:body:once:)``).
+    private func retrying<T>(once: Bool, _ operation: () async throws -> T) async throws -> T {
         let limit = once ? 0 : retry.retries
         var tried = Set<String>()
         while true {
@@ -498,7 +498,7 @@ public actor CalimeroClient {
                 node = nodeUrl
                 tried.insert(node)
                 do {
-                    return try await attempt()
+                    return try await operation()
                 } catch let error as UnavailableError {
                     unavailable = error
                 } catch let error as URLError {
