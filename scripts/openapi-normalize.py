@@ -15,7 +15,13 @@ document's meaning:
 2. `contentEncoding: base64url` is dropped: core keeps it on purpose (the
    value travels as base64url text), but OpenAPIKit knows only RFC 2045's
    encodings and refuses the document. The value stays a string.
-3. Every non-2xx response is dropped. MeroKit's transport throws a refusal as
+3. A discriminated `oneOf` of inline objects (`Access`, the consent request
+   body) has each branch moved to a component of its own,
+   `<Owner><Value>` (`AccessTeam`, `ConsentPageCreateBodyUpgrade`), with a
+   `discriminator.mapping` from its `kind`. Given inline branches the
+   generator emits an enum with no cases at all; given references it emits
+   one case per branch, decoded by `kind`.
+4. Every non-2xx response is dropped. MeroKit's transport throws a refusal as
    its own typed error (`errorFrom`) before the generated client reads it, so
    the per-status types would never be reached. The document keeps them.
 """
@@ -54,6 +60,45 @@ def normalize(node):
             normalize(value)
 
 
+def pascal(text):
+    return "".join(part[:1].upper() + part[1:] for part in text.replace("-", "_").split("_") if part)
+
+
+def hoist_discriminated(document):
+    """Move a discriminated oneOf's inline branches into named components."""
+    components = document.setdefault("components", {}).setdefault("schemas", {})
+
+    def hoist(schema, owner):
+        discriminator = schema.get("discriminator")
+        branches = schema.get("oneOf")
+        if not discriminator or not isinstance(branches, list) or "mapping" in discriminator:
+            return
+        key = discriminator["propertyName"]
+        mapping = {}
+        refs = []
+        for branch in branches:
+            if "$ref" in branch:
+                refs.append(branch)
+                continue
+            values = branch.get("properties", {}).get(key, {}).get("enum") or [branch["properties"][key].get("const")]
+            name = owner + pascal(str(values[0]))
+            components[name] = branch
+            ref = "#/components/schemas/" + name
+            mapping[str(values[0])] = ref
+            refs.append({"$ref": ref})
+        schema["oneOf"] = refs
+        discriminator["mapping"] = mapping
+
+    for name, schema in list(components.items()):
+        hoist(schema, name)
+    for path_item in document.get("paths", {}).values():
+        for operation in path_item.values():
+            if not isinstance(operation, dict):
+                continue
+            for media in operation.get("requestBody", {}).get("content", {}).values():
+                hoist(media.get("schema", {}), pascal(operation.get("operationId", "")) + "Body")
+
+
 def drop_refusals(document):
     for item in document.get("paths", {}).values():
         for operation in item.values():
@@ -69,6 +114,7 @@ def main():
     with open(sys.argv[1], encoding="utf-8") as f:
         document = json.load(f)
     normalize(document)
+    hoist_discriminated(document)
     drop_refusals(document)
     with open(sys.argv[2], "w", encoding="utf-8") as f:
         json.dump(document, f, indent=1)
