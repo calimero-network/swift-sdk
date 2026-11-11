@@ -92,6 +92,17 @@ public final class ConfirmRequired: CalimeroError, @unchecked Sendable {
     }
 }
 
+/// `428 OPERATOR_SIGNATURE_REQUIRED`: an operator decision needs the
+/// operator key's signature over the statement in `details` (`subject`,
+/// `method`, `args`, `nonce`, `cluster`, and its exact bytes, `message`,
+/// base64). The client answers it with an ``OperatorSigner``
+/// (``CalimeroClient/useOperatorSigner(_:)``); it reaches a caller without one.
+public final class OperatorSignatureRequired: CalimeroError, @unchecked Sendable {
+    public init(_ message: String, details: [String: JSONValue] = [:]) {
+        super.init(status: 428, code: "OPERATOR_SIGNATURE_REQUIRED", message: message, details: details)
+    }
+}
+
 /// The user declined the passkey prompt a confirmation asked for. Nothing was
 /// sent. Not a node refusal, so not a ``CalimeroError``. (== mero-js `ConfirmCancelled`.)
 public struct ConfirmCancelled: Error, LocalizedError, Sendable {
@@ -329,6 +340,7 @@ public func errorFrom(status: Int, body: JSONValue?, retryAfter header: String? 
     case "409 RELEASE_DEADLINE": return ReleaseDeadlineError(message, details: details)
     case "409 CONSENT_STALE": return ConsentStale(message, details: details)
     case "412 CONFIRM_REQUIRED": return ConfirmRequired(message, details: details)
+    case "428 OPERATOR_SIGNATURE_REQUIRED": return OperatorSignatureRequired(message, details: details)
     case "413 ARGS_TOO_LARGE": return ArgsTooLarge(message, details: details)
     case "422 APP_ERROR": return AppError(message, details: details)
     case "422 TRAP": return TrapError(message, details: details)

@@ -1,0 +1,9 @@
+# Where openapi/openapi.json came from, and the generator that turns it into
+# Sources/MeroAPI/Generated. Read and rewritten by scripts/generate-openapi.sh.
+#
+# Shell:  . openapi/source  ->  $CORE_REPO, $CORE_REF, $CORE_COMMIT, ...
+CORE_REPO=calimero-network/core
+CORE_REF=master
+CORE_COMMIT=1ce553a5881cf49b46359bed510cd90650333aea
+CORE_PATH=docs/public/openapi.json
+GENERATOR_VERSION=1.10.3
