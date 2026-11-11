@@ -117,8 +117,9 @@ public final class FakeCloud: @unchecked Sendable {
             var teamJSON: [String: JSONValue] = [:]
             for (tid, t) in teams where t.org == org {
                 teamJSON[tid] = [
-                    "teamId": .string(tid), "name": .string(t.name), "join": .string(t.join),
-                    "members": .object(t.members.mapValues { .bool($0 == "lead") }),
+                    "teamId": .string(tid), "name": .string(t.name), "join": .string(t.join), "parent": .null,
+                    "members": .object(t.members.mapValues { .bool($0 == "lead") }), "readOnly": [],
+                    "capabilities": [:], "metadata": .null, "removed": [],
                 ]
             }
             return .json([
