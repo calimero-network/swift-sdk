@@ -115,7 +115,7 @@ public actor CalimeroClient {
     private let policy: CloudPolicy
     private let urlSession: URLSession
     private let retry: CloudRetryOptions
-    private var auth: String?
+    private var credential: String?
     private var current: CalimeroSession?
     private var refreshing: Task<CalimeroSession, Error>?
     private var refreshGeneration = 0
@@ -255,13 +255,13 @@ public actor CalimeroClient {
 
     /// Authenticate every request with an API key (`cal_…`).
     public func useApiKey(_ key: String) {
-        auth = key
+        credential = key
         setCurrent(nil)
     }
 
     /// Authenticate every request with `session` (a stored one, say).
     public func useSession(_ session: CalimeroSession) {
-        auth = session.sessionToken
+        credential = session.sessionToken
         setCurrent(session)
     }
 
@@ -306,7 +306,7 @@ public actor CalimeroClient {
         var request = URLRequest(url: target)
         request.httpMethod = method
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        if let auth { request.setValue("Bearer \(auth)", forHTTPHeaderField: "authorization") }
+        if let credential { request.setValue("Bearer \(credential)", forHTTPHeaderField: "authorization") }
         if let body {
             if headers["content-type"] == nil { request.setValue(contentType, forHTTPHeaderField: "content-type") }
             request.httpBody = body
@@ -343,7 +343,7 @@ public actor CalimeroClient {
         var moved = false
         var redirected = false
         while true {
-            let token = auth
+            let token = credential
             let from = nodeUrl
             let response = try await request(method, path, body: body, contentType: contentType, headers: headers)
             if (200..<300).contains(response.status) { return response }
@@ -362,7 +362,7 @@ public actor CalimeroClient {
             } else if error is LoginRequired, !refreshed, let token, current != nil, !Self.ceremony(path) {
                 refreshed = true
                 // A refresh another request made already answers this one.
-                if auth == token { _ = try await refresh() }
+                if credential == token { _ = try await refresh() }
                 continue
             }
             throw error
@@ -372,7 +372,9 @@ public actor CalimeroClient {
     /// ``send`` for the generated client's transport (``SealedClientTransport``):
     /// `headers` (names lowercased) are the generated request's, the
     /// credential is the client's.
-    func exchange(_ method: String, _ path: String, body: Data?, headers: [String: String]) async throws
+    func exchange(
+        _ method: String, _ path: String, body: Data?, headers: [String: String]
+    ) async throws
         -> SealedResponse
     {
         try await send(method, path, body: body, headers: headers)
@@ -461,6 +463,31 @@ public actor CalimeroClient {
     /// confirmed attempt of ``callConfirmed(_:_:_:passkey:idempotencyKey:)``,
     /// whose challenge is single-use).
     private func retried(_ path: String, body: Data, once: Bool = false) async throws -> Data {
+        try await retrying(once: once) { try await self.json("POST", path, body: body) }
+    }
+
+    /// ``exchange`` for an operation the document marks retry-safe (a view,
+    /// or a call that carries an idempotency key): retried and failed over as
+    /// ``retried(_:body:once:)`` retries, with the whole answer read inside
+    /// each attempt.
+    func retriedExchange(
+        _ method: String, _ path: String, body: Data?, headers: [String: String]
+    ) async throws
+        -> SealedResponse
+    {
+        try await retrying(once: false) {
+            let response = try await self.send(method, path, body: body, headers: headers)
+            let data = try await response.data()
+            let replay = AsyncThrowingStream<Data, Error> {
+                $0.yield(data)
+                $0.finish()
+            }
+            return SealedResponse(status: response.status, headers: response.headers, body: replay)
+        }
+    }
+
+    /// `attempt`, again while the node answers 503 or cannot be reached (see ``retried(_:body:once:)``).
+    private func retrying<T>(once: Bool, _ attempt: () async throws -> T) async throws -> T {
         let limit = once ? 0 : retry.retries
         var tried = Set<String>()
         while true {
@@ -471,7 +498,7 @@ public actor CalimeroClient {
                 node = nodeUrl
                 tried.insert(node)
                 do {
-                    return try await json("POST", path, body: body)
+                    return try await attempt()
                 } catch let error as UnavailableError {
                     unavailable = error
                 } catch let error as URLError {
@@ -535,7 +562,7 @@ public actor CalimeroClient {
     ) async throws -> CalimeroSession {
         let invite = invite.flatMap { $0.isEmpty ? nil : $0 }
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answer { try await self.accounts.registerBegin(name: name, origin: origin, invite: invite) }
+            try await self.answer { try await self.auth.registerBegin(name: name, origin: origin, invite: invite) }
         }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("the registration did not begin")
@@ -547,7 +574,7 @@ public actor CalimeroClient {
         let session = try decode(
             CalimeroSession.self,
             try await answer {
-                try await self.accounts.registerFinish(
+                try await self.auth.registerFinish(
                     challengeId: challengeId, registration: converted, invite: invite, passkey: passkey)
             })
         useSession(session)
@@ -574,7 +601,7 @@ public actor CalimeroClient {
     @discardableResult
     public func signIn(_ passkey: any PasskeyProvider, origin: String? = nil) async throws -> CalimeroSession {
         let begin = try await beginCeremony(origin: origin) {
-            try await self.answer { try await self.accounts.loginBegin(origin: origin) }
+            try await self.answer { try await self.auth.loginBegin(origin: origin) }
         }
         guard let challengeId = begin["challengeId"]?.stringValue,
             let challenge = begin["options"]?["challenge"]?.stringValue,
@@ -583,7 +610,7 @@ public actor CalimeroClient {
         let assertion = try await passkey.get(challenge: try fromB64url(challenge), rpId: rpId, allowCredentials: nil)
         let converted: Components.Schemas.Assertion = try Self.converted(assertion)
         let session = try await legacy(CalimeroSession.self) {
-            try await self.accounts.loginFinish(challengeId: challengeId, assertion: converted)
+            try await self.auth.loginFinish(challengeId: challengeId, assertion: converted)
         }
         useSession(session)
         return session
@@ -614,7 +641,7 @@ public actor CalimeroClient {
             do {
                 let token = current.refreshToken
                 let session = try await legacy(CalimeroSession.self) {
-                    try await self.accounts.refresh(refreshToken: token)
+                    try await self.auth.refresh(refreshToken: token)
                 }
                 // A sign-in or another session taken while this one was refreshing wins.
                 if self.current == current { useSession(session) }
@@ -628,21 +655,21 @@ public actor CalimeroClient {
 
     /// End this session.
     public func signOut() async throws {
-        _ = try await answer { try await self.accounts.logout() }
-        auth = nil
+        _ = try await answer { try await self.auth.logout() }
+        credential = nil
         setCurrent(nil)
     }
 
     /// End every session of the signed-in account, on every device, this one too.
     public func signOutEverywhere() async throws {
-        _ = try await answer { try await self.accounts.logoutAll() }
-        auth = nil
+        _ = try await answer { try await self.auth.logoutAll() }
+        credential = nil
         setCurrent(nil)
     }
 
     /// Forget the credential without telling the node (it is unreachable, say).
     public func forget() {
-        auth = nil
+        credential = nil
         setCurrent(nil)
     }
 
@@ -651,14 +678,14 @@ public actor CalimeroClient {
     /// a passkey the account already has (`412 CONFIRM_REQUIRED`, never the
     /// new one), which `approver` gives.
     public func addPasskey(_ passkey: any PasskeyProvider, approver: any PasskeyProvider) async throws -> String {
-        let begin = try await legacyValue { try await self.accounts.passkeyAddBegin() }
+        let begin = try await legacyValue { try await self.auth.passkeyAddBegin() }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("adding a passkey did not begin")
         }
         let created = try await passkey.create(options: options)
         let registration: Components.Schemas.Registration = try Self.converted(created)
         let finished = try await legacyValue {
-            try await self.accounts.passkeyAddFinish(
+            try await self.auth.passkeyAddFinish(
                 challengeId: challengeId, registration: registration, passkey: approver)
         }
         return finished["credentialId"]?.stringValue ?? ""
@@ -890,7 +917,7 @@ public actor CalimeroClient {
     /// and every member sees it in ``OrgInfo/recovery``. A wrong seed, no
     /// organization or none set is `403 WRONG_RECOVERY_KEY`.
     public func startRecovery(_ org: String, seed: RecoverySeed) async throws -> RecoveryTimes {
-        let account = AccountInfo(json: try await legacyValue { try await self.accounts.me() }).accountId
+        let account = AccountInfo(json: try await legacyValue { try await self.auth.me() }).accountId
         let nonce = b64url(randomBytes(16))
         let signature = try seed.sign(org: org, account: account, nonce: nonce)
         return try await legacy(RecoveryTimes.self) {
@@ -921,22 +948,36 @@ public actor CalimeroClient {
                 try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
             }
         }
-        return try await legacy(AppsReport.self) { try await self.accounts.apps(after: page.after, limit: page.limit) }
+        return try await legacy(AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
     }
 
     /// What waits for a decision in a scope (`org`, or the account's own apps with `nil`).
     public func pendingApprovals(org: String? = nil) async throws -> PendingApprovals {
         async let report = appsReportAll(org)
-        async let rules = legacy(ReleaseRules.self) { try await self.node.releasesPublic() }
+        async let rules = legacy(ReleaseRules.self) { try await self.publicApi.releasesPublic() }
         return pendingApprovalsFrom(try await report, rules: try await rules)
     }
 
     /// Ask the node to ask the user: an approval decided on the node's own
     /// consent page, never in the app. Send the person to the answer's `url`
     /// (`MeroKitUI`'s `ConsentPage` opens it in the system browser).
+    @available(*, deprecated, message: "use client.consent.pageCreate(body:)")
     public func requestConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
-        try decode(
-            ConsentStarted.self, try await json("POST", "consent/requests", body: CanonicalJSON.data(request.json)))
+        try await startConsent(request)
+    }
+
+    /// ``requestConsent(_:)``, for the methods that are not deprecated.
+    private func startConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
+        // A request the document's `oneOf` does not describe goes as written,
+        // for the node to judge, as it always did.
+        let body: Operations.ConsentPageCreate.Input.Body.JsonPayload
+        do {
+            body = try Self.converted(json: request.json)
+        } catch {
+            return try decode(
+                ConsentStarted.self, try await json("POST", "consent/requests", body: CanonicalJSON.data(request.json)))
+        }
+        return try await legacy(ConsentStarted.self) { try await self.consent.pageCreate(body: body) }
     }
 
     /// ``requestConsent(_:)``, then hand the page's URL to `navigate`.
@@ -957,7 +998,7 @@ public actor CalimeroClient {
     /// ``CalimeroError`` (`CONSENT_CODE_MISMATCH`) and does not navigate.
     /// (== mero-js `openConsentPage(request, options)`.)
     public func openConsentPage(_ request: ConsentRequest, options: OpenConsentOptions) async throws -> ConsentStarted {
-        let started = try await requestConsent(request)
+        let started = try await startConsent(request)
         try Self.checkConsentCode(started)
         if let confirm = options.confirm, !(await confirm(started)) { return started }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
@@ -1016,7 +1057,7 @@ public actor CalimeroClient {
         }
         let join: Components.Schemas.TeamJoin? = try join.map { try Self.converted($0) }
         let metadata = try metadata.map { try OpenAPIValueContainer($0) }
-        let parent = parent ?? nil
+        let parent = parent.flatMap { $0 }
         _ = try await answer {
             try await self.orgs.teamUpdate(
                 org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)

@@ -7,11 +7,499 @@ import MeroAPI
 import OpenAPIRuntime
 
 extension CalimeroClient {
-    /// The `Accounts` routes of the node API, one method per operation.
-    public nonisolated var accounts: Accounts { Accounts(client: self) }
+    /// The `apps` routes of the node API, one method per operation.
+    public nonisolated var apps: Apps { Apps(client: self) }
 
-    /// The `Accounts` routes of the node API (``CalimeroClient/accounts``).
-    public struct Accounts: Sendable {
+    /// The `apps` routes of the node API (``CalimeroClient/apps``).
+    public struct Apps: Sendable {
+        let client: CalimeroClient
+
+        /// An app's ABI: `GET /apps/{app}/abi` (`app_abi`).
+        ///
+        /// The ABI its bundle embeds: methods, events, errors and state.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func abi(app: Swift.String) async throws -> Operations.AppAbi.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppAbi.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appAbi(input).ok.body.json
+            }
+        }
+
+        /// Set who may reach an app: `POST /apps/{app}/access` (`app_access`).
+        ///
+        /// **Who:** a passkey session (an API key is refused).
+        @discardableResult
+        public func access(app: Swift.String, access: Components.Schemas.Access) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.AppAccess.Input(path: .init(app: app), body: .json(.init(access: access)))
+            return try await client.perform { api in
+                try await api.appAccess(input).ok.body.json
+            }
+        }
+
+        /// Every replica's receipt-key attestation: `GET /apps/{app}/attestation` (`app_attestation`).
+        ///
+        /// Each replica's `/attestation?purpose=receipts` for `nonce`. It reads the query `/attestation` does, but only `nonce`: `app`, `appHash` and `purpose` are ignored here.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func attestation(app: Swift.String, nonce: Swift.String, queryApp: Swift.String? = nil, appHash: Swift.String? = nil, purpose: Operations.AppAttestation.Input.Query.PurposePayload? = nil) async throws -> Operations.AppAttestation.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppAttestation.Input(path: .init(app: app), query: .init(nonce: nonce, app: queryApp, appHash: appHash, purpose: purpose))
+            return try await client.perform { api in
+                try await api.appAttestation(input).ok.body.json
+            }
+        }
+
+        /// Create an app instance: `POST /apps` (`app_create`).
+        ///
+        /// From a release (`package`, `version`, `service`), a deployment's offer (`deployment`), or an uploaded `bundle`; in an organization (`org`) or the caller's own. `initArgs` go to the app's `init`.
+        ///
+        /// **Who:** an installer (an account holder, or an unscoped API key that is not read-only).
+        @discardableResult
+        public func create(name: Swift.String? = nil, bundle: Swift.String? = nil, package: Swift.String? = nil, version: Swift.String? = nil, service: Swift.String? = nil, org: Swift.String? = nil, access: Components.Schemas.Access? = nil, initArgs: OpenAPIRuntime.OpenAPIValueContainer? = nil, metadata: OpenAPIRuntime.OpenAPIValueContainer? = nil, deployment: Swift.String? = nil) async throws -> Operations.AppCreate.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppCreate.Input(body: .json(.init(name: name, bundle: bundle, package: package, version: version, service: service, org: org, access: access, initArgs: initArgs, metadata: metadata, deployment: deployment)))
+            return try await client.perform { api in
+                try await api.appCreate(input).ok.body.json
+            }
+        }
+
+        /// Delete an app: `DELETE /apps/{app}` (`app_delete`).
+        ///
+        /// The owner or an organization admin.
+        ///
+        /// **Who:** a passkey session (an API key is refused).
+        @discardableResult
+        public func delete(app: Swift.String) async throws -> Operations.AppDelete.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppDelete.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appDelete(input).ok.body.json
+            }
+        }
+
+        /// One app: `GET /apps/{app}` (`app_get`).
+        ///
+        /// `{app}` is an app id or its context id (`hex(SHA-256(app_id))`), here and on every `/apps/{app}` route.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func get(app: Swift.String) async throws -> Components.Schemas.App {
+            let input = Operations.AppGet.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appGet(input).ok.body.json
+            }
+        }
+
+        /// Apps the caller reaches: `GET /apps` (`app_list`).
+        ///
+        /// Anyone may list public apps.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func list(package: Swift.String? = nil, bundle: Swift.String? = nil) async throws -> Operations.AppList.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppList.Input(query: .init(package: package, bundle: bundle))
+            return try await client.perform { api in
+                try await api.appList(input).ok.body.json
+            }
+        }
+
+        /// Set an app's metadata: `POST /apps/{app}/metadata` (`app_metadata`).
+        ///
+        /// The owner or an organization admin; 16 KiB at most.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func metadata(app: Swift.String, metadata: OpenAPIRuntime.OpenAPIValueContainer) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.AppMetadata.Input(path: .init(app: app), body: .json(.init(metadata: metadata)))
+            return try await client.perform { api in
+                try await api.appMetadata(input).ok.body.json
+            }
+        }
+
+        /// Call a method by its path: `POST /apps/{app}/methods/{method}` (`app_method`).
+        ///
+        /// The body of `/intents` or `/views` without `method`, which the path names, as the app's OpenAPI document lists it: a view the running bundle's ABI declares (without `confirm`) is answered as `/views`, anything else as `/intents`, with that route's gate, step-up and limits. Retry-safe as a view always, as a call with `idempotencyKey`.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func method(app: Swift.String, method: Swift.String, args: OpenAPIRuntime.OpenAPIValueContainer? = nil, idempotencyKey: Swift.String? = nil, consistency: Operations.AppMethod.Input.Body.JsonPayload.ConsistencyPayload? = nil, minIndex: Swift.Int? = nil) async throws -> Operations.AppMethod.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppMethod.Input(path: .init(app: app, method: method), body: .json(.init(args: args, idempotencyKey: idempotencyKey, consistency: consistency, minIndex: minIndex)))
+            return try await client.perform(retry: idempotencyKey != nil) { api in
+                try await api.appMethod(input).ok.body.json
+            }
+        }
+
+        /// Move an app to another organization: `POST /apps/{app}/move` (`app_move`).
+        ///
+        /// Its data where it is; its files, runs and quotas go to the target, `org` or app-team access becomes the target's app team of its package. `bringMembers` adds the source's members who reach it, capped at `member`.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func move(app: Swift.String, toOrg: Swift.String, bringMembers: Swift.Bool? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppMove.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppMove.Input(path: .init(app: app), body: .json(.init(toOrg: toOrg, bringMembers: bringMembers)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appMove(input).ok.body.json
+            }
+        }
+
+        /// An app's OpenAPI document: `GET /apps/{app}/openapi.json` (`app_openapi`).
+        ///
+        /// Generated from the ABI of the bundle the app runs, under the access `/abi` has: one `POST /apps/{app}/methods/{method}` per method, with its arguments, result and errors.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func openapi(app: Swift.String) async throws -> Operations.AppOpenapi.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppOpenapi.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appOpenapi(input).ok.body.json
+            }
+        }
+
+        /// One compute run: `GET /apps/{app}/runs/{run}` (`app_run`).
+        ///
+        /// Its record without arguments or keys: method, state, `cancelRequested`, `startTsMs`, attempts, input and output ids (sizes and SHA-256 only for callers who may list the app's files), usage, and `progress` as the leader last polled it.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func run(app: Swift.String, run: Swift.String) async throws -> Operations.AppRun.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppRun.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.appRun(input).ok.body.json
+            }
+        }
+
+        /// An app's compute runs: `GET /apps/{app}/runs` (`app_runs`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func runs(app: Swift.String, limit: Swift.String? = nil, before: Swift.String? = nil) async throws -> Operations.AppRuns.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppRuns.Input(path: .init(app: app), query: .init(limit: limit, before: before))
+            return try await client.perform { api in
+                try await api.appRuns(input).ok.body.json
+            }
+        }
+
+        /// What an app stores: `GET /apps/{app}/storage` (`app_storage`).
+        ///
+        /// Keys, bytes and blobs held, and `lastWriteAt` (Unix seconds of its last committed write, `null` before one).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func storage(app: Swift.String) async throws -> Operations.AppStorage.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppStorage.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appStorage(input).ok.body.json
+            }
+        }
+
+        /// Hand an app to another account: `POST /apps/{app}/transfer` (`app_transfer`).
+        ///
+        /// The owner (for an organization's app, while a member and in the app's team), or an organization admin; an organization's app only to a member.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func transfer(app: Swift.String, to: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
+            let input = Operations.AppTransfer.Input(path: .init(app: app), body: .json(.init(to: to)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appTransfer(input).ok.body.json
+            }
+        }
+
+        /// Upgrade an app instance: `POST /apps/{app}/upgrade` (`app_upgrade`).
+        ///
+        /// To a release (`version`, of the app's own package unless `package` names another) or a `bundle`, code only: the state stays and is read by the new code. Whoever the package's manifest names (`upgrades`: the owner, or its publisher's `MANAGE_APPLICATION` holders), with a step-up over `{ bundle, migrate, manifest }`; an upgrade key signs in place of it. A refused or failed upgrade leaves the app on its release and answers `422 UPGRADE_FAILED` with the app log's error in `details` (`MigrationsNotSupported` when `migrate` is named: there are no migrations in this version).
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func upgrade(app: Swift.String, bundle: Swift.String? = nil, package: Swift.String? = nil, version: Swift.String? = nil, service: Swift.String? = nil, migrate: Swift.String? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppUpgrade.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppUpgrade.Input(path: .init(app: app), body: .json(.init(bundle: bundle, package: package, version: version, service: service, migrate: migrate)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appUpgrade(input).ok.body.json
+            }
+        }
+
+        /// An app's runs per day: `GET /apps/{app}/usage` (`app_usage`).
+        ///
+        /// The owner or an organization admin: `today` and the 30 `days` before it, figures as decimal strings; `wallMs` is information only.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func usage(app: Swift.String) async throws -> Operations.AppUsage.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppUsage.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appUsage(input).ok.body.json
+            }
+        }
+
+        /// An app's cross-app calls: `GET /apps/{app}/xcalls` (`app_xcalls`).
+        ///
+        /// The owner or an organization admin: calls waiting for delivery and dead letters.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func xcalls(app: Swift.String) async throws -> Operations.AppXcalls.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppXcalls.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appXcalls(input).ok.body.json
+            }
+        }
+
+        /// Forget a blob: `DELETE /apps/{app}/blobs/{id}` (`blob_delete`).
+        ///
+        /// The owner or an organization admin.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobDelete(app: Swift.String, id: Swift.String) async throws -> Operations.BlobDelete.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobDelete.Input(path: .init(app: app, id: id))
+            return try await client.perform { api in
+                try await api.blobDelete(input).ok.body.json
+            }
+        }
+
+        /// Download a blob: `GET /apps/{app}/blobs/{id}` (`blob_download`).
+        ///
+        /// `{id}` is base58 or hex; `grant` is a link the app made (`BlobRef::grant`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobDownload(app: Swift.String, id: Swift.String, grant: Swift.String? = nil) async throws -> Data {
+            let input = Operations.BlobDownload.Input(path: .init(app: app, id: id), query: .init(grant: grant))
+            return try await client.perform { api in
+                try await Data(collecting: api.blobDownload(input).ok.body.any, upTo: .max)
+            }
+        }
+
+        /// A blob's size: `GET /apps/{app}/blobs/{id}/info` (`blob_info`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobInfo(app: Swift.String, id: Swift.String) async throws -> Operations.BlobInfo.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobInfo.Input(path: .init(app: app, id: id))
+            return try await client.perform { api in
+                try await api.blobInfo(input).ok.body.json
+            }
+        }
+
+        /// List an app's blobs: `GET /apps/{app}/blobs` (`blob_list`).
+        ///
+        /// Plain blobs only.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobList(app: Swift.String) async throws -> Operations.BlobList.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobList.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.blobList(input).ok.body.json
+            }
+        }
+
+        /// Invalidate a blob's grants: `POST /apps/{app}/blobs/{id}/revoke` (`blob_revoke`).
+        ///
+        /// The grants made so far for a published blob; the owner or an organization admin.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobRevoke(app: Swift.String, id: Swift.String) async throws -> Operations.BlobRevoke.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobRevoke.Input(path: .init(app: app, id: id))
+            return try await client.perform { api in
+                try await api.blobRevoke(input).ok.body.json
+            }
+        }
+
+        /// Upload a blob: `POST /apps/{app}/blobs` (`blob_upload`).
+        ///
+        /// A plain blob (`sealed=true` is refused: sealed files go through `/files`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func blobUpload(app: Swift.String, body: Data, sealed: Swift.Bool? = nil) async throws -> Operations.BlobUpload.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobUpload.Input(path: .init(app: app), query: .init(sealed: sealed), body: .binary(HTTPBody(body)))
+            return try await client.perform { api in
+                try await api.blobUpload(input).ok.body.json
+            }
+        }
+
+        /// An app's events as server-sent events: `GET /apps/{app}/events` (`events`).
+        ///
+        /// Committed events from index `from`, then live ones, each to its audience.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func events(app: Swift.String, from: Swift.Int? = nil) async throws -> HTTPBody {
+            let input = Operations.Events.Input(path: .init(app: app), query: .init(from: from))
+            return try await client.perform { api in
+                try await api.events(input).ok.body.textEventStream
+            }
+        }
+
+        /// One sealed file: `GET /apps/{app}/files/{id}` (`file_info`).
+        ///
+        /// Its plaintext size and SHA-256, never its key.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func fileInfo(app: Swift.String, id: Swift.String) async throws -> Operations.FileInfo.Output.Ok.Body.JsonPayload {
+            let input = Operations.FileInfo.Input(path: .init(app: app, id: id))
+            return try await client.perform { api in
+                try await api.fileInfo(input).ok.body.json
+            }
+        }
+
+        /// List an app's sealed files: `GET /apps/{app}/files` (`files_list`).
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func filesList(app: Swift.String) async throws -> Operations.FilesList.Output.Ok.Body.JsonPayload {
+            let input = Operations.FilesList.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.filesList(input).ok.body.json
+            }
+        }
+
+        /// Upload a sealed file: `POST /apps/{app}/files` (`files_upload`).
+        ///
+        /// Up to 16 MiB in one request; the owner and the organization's members.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func filesUpload(app: Swift.String, body: Data) async throws -> Operations.FilesUpload.Output.Ok.Body.JsonPayload {
+            let input = Operations.FilesUpload.Input(path: .init(app: app), body: .binary(HTTPBody(body)))
+            return try await client.perform { api in
+                try await api.filesUpload(input).ok.body.json
+            }
+        }
+
+        /// Call a method: `POST /apps/{app}/intents` (`intents`).
+        ///
+        /// A logged call: the result, the events of the call the caller receives, and the answering node's receipt. A `confirm` method answers `412` first. An app error is `422 APP_ERROR` with `details { index, code, fields }`; a trap `422 TRAP`.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func intents(app: Swift.String, method: Swift.String, args: OpenAPIRuntime.OpenAPIValueContainer? = nil, idempotencyKey: Swift.String? = nil) async throws -> Operations.Intents.Output.Ok.Body.JsonPayload {
+            let input = Operations.Intents.Input(path: .init(app: app), body: .json(.init(method: method, args: args, idempotencyKey: idempotencyKey)))
+            return try await client.perform(retry: idempotencyKey != nil) { api in
+                try await api.intents(input).ok.body.json
+            }
+        }
+
+        /// Who is present: `GET /apps/{app}/presence` (`presence_get`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func presenceGet(app: Swift.String) async throws -> Operations.PresenceGet.Output.Ok.Body.JsonPayload {
+            let input = Operations.PresenceGet.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.presenceGet(input).ok.body.json
+            }
+        }
+
+        /// Publish presence: `POST /apps/{app}/presence` (`presence_publish`).
+        ///
+        /// The caller's presence state, in sequence; not logged.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func presencePublish(app: Swift.String, seq: Swift.Int, state: Swift.String? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.PresencePublish.Input(path: .init(app: app), body: .json(.init(seq: seq, state: state)))
+            return try await client.perform { api in
+                try await api.presencePublish(input).ok.body.json
+            }
+        }
+
+        /// Presence as server-sent events: `GET /apps/{app}/presence/stream` (`presence_stream`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func presenceStream(app: Swift.String) async throws -> HTTPBody {
+            let input = Operations.PresenceStream.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.presenceStream(input).ok.body.textEventStream
+            }
+        }
+
+        /// Abort an upload: `DELETE /apps/{app}/files/uploads/{upload}` (`upload_abort`).
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func uploadAbort(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadAbort.Output.Ok.Body.JsonPayload {
+            let input = Operations.UploadAbort.Input(path: .init(app: app, upload: upload))
+            return try await client.perform { api in
+                try await api.uploadAbort(input).ok.body.json
+            }
+        }
+
+        /// Begin a file upload: `POST /apps/{app}/files/uploads` (`upload_begin`).
+        ///
+        /// A session for a file of `size` bytes, sent in parts of `partBytes`.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func uploadBegin(app: Swift.String, size: Swift.Int) async throws -> Operations.UploadBegin.Output.Ok.Body.JsonPayload {
+            let input = Operations.UploadBegin.Input(path: .init(app: app), body: .json(.init(size: size)))
+            return try await client.perform { api in
+                try await api.uploadBegin(input).ok.body.json
+            }
+        }
+
+        /// Commit an upload: `POST /apps/{app}/files/uploads/{upload}/complete` (`upload_complete`).
+        ///
+        /// Charges and commits the file; a retry answers the same file.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func uploadComplete(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadComplete.Output.Ok.Body.JsonPayload {
+            let input = Operations.UploadComplete.Input(path: .init(app: app, upload: upload))
+            return try await client.perform { api in
+                try await api.uploadComplete(input).ok.body.json
+            }
+        }
+
+        /// Send one part: `PUT /apps/{app}/files/uploads/{upload}/parts/{k}` (`upload_part`).
+        ///
+        /// Part `k` (from 0), raw bytes; a part out of order answers the next one expected in `details.next`.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func uploadPart(app: Swift.String, upload: Swift.String, k: Swift.String, body: Data) async throws -> Operations.UploadPart.Output.Ok.Body.JsonPayload {
+            let input = Operations.UploadPart.Input(path: .init(app: app, upload: upload, k: k), body: .binary(HTTPBody(body)))
+            return try await client.perform { api in
+                try await api.uploadPart(input).ok.body.json
+            }
+        }
+
+        /// Where an upload is: `GET /apps/{app}/files/uploads/{upload}` (`upload_status`).
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func uploadStatus(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadStatus.Output.Ok.Body.JsonPayload {
+            let input = Operations.UploadStatus.Input(path: .init(app: app, upload: upload))
+            return try await client.perform { api in
+                try await api.uploadStatus(input).ok.body.json
+            }
+        }
+
+        /// Read with a view method: `POST /apps/{app}/views` (`views`).
+        ///
+        /// Read on a caught-up replica (`consistency: "strong"`, the default; any value but `"stale"` reads as it), or (`"stale"`) on the one answering; `minIndex` waits until the replica applied it (`503 NOT_CAUGHT_UP`).
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func views(app: Swift.String, method: Swift.String, args: OpenAPIRuntime.OpenAPIValueContainer? = nil, consistency: Operations.Views.Input.Body.JsonPayload.ConsistencyPayload? = nil, minIndex: Swift.Int? = nil) async throws -> Operations.Views.Output.Ok.Body.JsonPayload {
+            let input = Operations.Views.Input(path: .init(app: app), body: .json(.init(method: method, args: args, consistency: consistency, minIndex: minIndex)))
+            return try await client.perform(retry: true) { api in
+                try await api.views(input).ok.body.json
+            }
+        }
+    }
+}
+
+extension CalimeroClient {
+    /// The `auth` routes of the node API, one method per operation.
+    public nonisolated var auth: Auth { Auth(client: self) }
+
+    /// The `auth` routes of the node API (``CalimeroClient/auth``).
+    public struct Auth: Sendable {
         let client: CalimeroClient
 
         /// The account's own apps: `GET /auth/apps` (`account_apps`).
@@ -422,471 +910,45 @@ extension CalimeroClient {
 }
 
 extension CalimeroClient {
-    /// The `Apps` routes of the node API, one method per operation.
-    public nonisolated var apps: Apps { Apps(client: self) }
+    /// The `consent` routes of the node API, one method per operation.
+    public nonisolated var consent: Consent { Consent(client: self) }
 
-    /// The `Apps` routes of the node API (``CalimeroClient/apps``).
-    public struct Apps: Sendable {
+    /// The `consent` routes of the node API (``CalimeroClient/consent``).
+    public struct Consent: Sendable {
         let client: CalimeroClient
 
-        /// An app's ABI: `GET /apps/{app}/abi` (`app_abi`).
+        /// Ask the account's owner to approve: `POST /consent/requests` (`consent_page_create`).
         ///
-        /// The ABI its bundle embeds: methods, events, errors and state.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func abi(app: Swift.String) async throws -> Operations.AppAbi.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppAbi.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.appAbi(input).ok.body.json
-            }
-        }
-
-        /// Set who may reach an app: `POST /apps/{app}/access` (`app_access`).
+        /// From an app's frontend: a release approval, an upgrade of its instance, or outbound prefixes, approved on the node's own consent page (`url`), which takes the passkey. 64 KiB at most.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
-        public func access(app: Swift.String, access: Components.Schemas.Access) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.AppAccess.Input(path: .init(app: app), body: .json(.init(access: access)))
+        public func pageCreate(body: Operations.ConsentPageCreate.Input.Body.JsonPayload) async throws -> Operations.ConsentPageCreate.Output.Ok.Body.JsonPayload {
+            let input = Operations.ConsentPageCreate.Input(body: .json(body))
             return try await client.perform { api in
-                try await api.appAccess(input).ok.body.json
+                try await api.consentPageCreate(input).ok.body.json
             }
         }
 
-        /// Every replica's receipt-key attestation: `GET /apps/{app}/attestation` (`app_attestation`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func attestation(app: Swift.String, nonce: Swift.String, queryApp: Swift.String? = nil, appHash: Swift.String? = nil, purpose: Operations.AppAttestation.Input.Query.PurposePayload? = nil) async throws -> Operations.AppAttestation.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppAttestation.Input(path: .init(app: app), query: .init(nonce: nonce, app: queryApp, appHash: appHash, purpose: purpose))
-            return try await client.perform { api in
-                try await api.appAttestation(input).ok.body.json
-            }
-        }
-
-        /// Create an app instance: `POST /apps` (`app_create`).
-        ///
-        /// From a release (`package`, `version`, `service`), a deployment's offer (`deployment`), or an uploaded `bundle`; in an organization (`org`) or the caller's own. `initArgs` go to the app's `init`.
-        ///
-        /// **Who:** an installer (an account holder, or an unscoped API key that is not read-only).
-        @discardableResult
-        public func create(name: Swift.String? = nil, bundle: Swift.String? = nil, package: Swift.String? = nil, version: Swift.String? = nil, service: Swift.String? = nil, org: Swift.String? = nil, access: Components.Schemas.Access? = nil, initArgs: OpenAPIRuntime.OpenAPIValueContainer? = nil, metadata: OpenAPIRuntime.OpenAPIValueContainer? = nil, deployment: Swift.String? = nil) async throws -> Operations.AppCreate.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppCreate.Input(body: .json(.init(name: name, bundle: bundle, package: package, version: version, service: service, org: org, access: access, initArgs: initArgs, metadata: metadata, deployment: deployment)))
-            return try await client.perform { api in
-                try await api.appCreate(input).ok.body.json
-            }
-        }
-
-        /// Delete an app: `DELETE /apps/{app}` (`app_delete`).
-        ///
-        /// The owner or an organization admin.
+        /// What became of a consent request: `GET /consent/{request}/result` (`consent_page_result`).
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
-        public func delete(app: Swift.String) async throws -> Operations.AppDelete.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppDelete.Input(path: .init(app: app))
+        public func pageResult(request: Swift.String) async throws -> Operations.ConsentPageResult.Output.Ok.Body.JsonPayload {
+            let input = Operations.ConsentPageResult.Input(path: .init(request: request))
             return try await client.perform { api in
-                try await api.appDelete(input).ok.body.json
-            }
-        }
-
-        /// One app: `GET /apps/{app}` (`app_get`).
-        ///
-        /// `{app}` is an app id or its context id (`hex(SHA-256(app_id))`), here and on every `/apps/{app}` route.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func get(app: Swift.String) async throws -> Components.Schemas.App {
-            let input = Operations.AppGet.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.appGet(input).ok.body.json
-            }
-        }
-
-        /// Apps the caller reaches: `GET /apps` (`app_list`).
-        ///
-        /// Anyone may list public apps.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func list(package: Swift.String? = nil, bundle: Swift.String? = nil) async throws -> Operations.AppList.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppList.Input(query: .init(package: package, bundle: bundle))
-            return try await client.perform { api in
-                try await api.appList(input).ok.body.json
-            }
-        }
-
-        /// Set an app's metadata: `POST /apps/{app}/metadata` (`app_metadata`).
-        ///
-        /// The owner or an organization admin; 16 KiB at most.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func metadata(app: Swift.String, metadata: OpenAPIRuntime.OpenAPIValueContainer) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.AppMetadata.Input(path: .init(app: app), body: .json(.init(metadata: metadata)))
-            return try await client.perform { api in
-                try await api.appMetadata(input).ok.body.json
-            }
-        }
-
-        /// Move an app to another organization: `POST /apps/{app}/move` (`app_move`).
-        ///
-        /// Its data where it is; its files, runs and quotas go to the target, `org` or app-team access becomes the target's app team of its package. `bringMembers` adds the source's members who reach it, capped at `member`.
-        ///
-        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
-        @discardableResult
-        public func move(app: Swift.String, toOrg: Swift.String, bringMembers: Swift.Bool? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppMove.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppMove.Input(path: .init(app: app), body: .json(.init(toOrg: toOrg, bringMembers: bringMembers)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.appMove(input).ok.body.json
-            }
-        }
-
-        /// One compute run: `GET /apps/{app}/runs/{run}` (`app_run`).
-        ///
-        /// Its record without arguments or keys: method, state, `cancelRequested`, `startTsMs`, attempts, input and output ids (sizes and SHA-256 only for callers who may list the app's files), usage, and `progress` as the leader last polled it.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func run(app: Swift.String, run: Swift.String) async throws -> Operations.AppRun.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppRun.Input(path: .init(app: app, run: run))
-            return try await client.perform { api in
-                try await api.appRun(input).ok.body.json
-            }
-        }
-
-        /// An app's compute runs: `GET /apps/{app}/runs` (`app_runs`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func runs(app: Swift.String, limit: Swift.String? = nil, before: Swift.String? = nil) async throws -> Operations.AppRuns.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppRuns.Input(path: .init(app: app), query: .init(limit: limit, before: before))
-            return try await client.perform { api in
-                try await api.appRuns(input).ok.body.json
-            }
-        }
-
-        /// What an app stores: `GET /apps/{app}/storage` (`app_storage`).
-        ///
-        /// Keys, bytes and blobs held, and `lastWriteAt` (Unix seconds of its last committed write, `null` before one).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func storage(app: Swift.String) async throws -> Operations.AppStorage.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppStorage.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.appStorage(input).ok.body.json
-            }
-        }
-
-        /// Hand an app to another account: `POST /apps/{app}/transfer` (`app_transfer`).
-        ///
-        /// The owner (for an organization's app, while a member and in the app's team), or an organization admin; an organization's app only to a member.
-        ///
-        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
-        @discardableResult
-        public func transfer(app: Swift.String, to: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
-            let input = Operations.AppTransfer.Input(path: .init(app: app), body: .json(.init(to: to)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.appTransfer(input).ok.body.json
-            }
-        }
-
-        /// Upgrade an app instance: `POST /apps/{app}/upgrade` (`app_upgrade`).
-        ///
-        /// To a release (`version`, of the app's own package unless `package` names another) or a `bundle`, code only: the state stays and is read by the new code. Whoever the package's manifest names (`upgrades`: the owner, or its publisher's `MANAGE_APPLICATION` holders), with a step-up over `{ bundle, migrate, manifest }`; an upgrade key signs in place of it. A refused or failed upgrade leaves the app on its release and answers `422 UPGRADE_FAILED` with the app log's error in `details` (`MigrationsNotSupported` when `migrate` is named: there are no migrations in this version).
-        ///
-        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
-        @discardableResult
-        public func upgrade(app: Swift.String, bundle: Swift.String? = nil, package: Swift.String? = nil, version: Swift.String? = nil, service: Swift.String? = nil, migrate: Swift.String? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppUpgrade.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppUpgrade.Input(path: .init(app: app), body: .json(.init(bundle: bundle, package: package, version: version, service: service, migrate: migrate)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.appUpgrade(input).ok.body.json
-            }
-        }
-
-        /// An app's runs per day: `GET /apps/{app}/usage` (`app_usage`).
-        ///
-        /// The owner or an organization admin: `today` and the 30 `days` before it, figures as decimal strings; `wallMs` is information only.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func usage(app: Swift.String) async throws -> Operations.AppUsage.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppUsage.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.appUsage(input).ok.body.json
-            }
-        }
-
-        /// An app's cross-app calls: `GET /apps/{app}/xcalls` (`app_xcalls`).
-        ///
-        /// The owner or an organization admin: calls waiting for delivery and dead letters.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func xcalls(app: Swift.String) async throws -> Operations.AppXcalls.Output.Ok.Body.JsonPayload {
-            let input = Operations.AppXcalls.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.appXcalls(input).ok.body.json
-            }
-        }
-
-        /// Forget a blob: `DELETE /apps/{app}/blobs/{id}` (`blob_delete`).
-        ///
-        /// The owner or an organization admin.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobDelete(app: Swift.String, id: Swift.String) async throws -> Operations.BlobDelete.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobDelete.Input(path: .init(app: app, id: id))
-            return try await client.perform { api in
-                try await api.blobDelete(input).ok.body.json
-            }
-        }
-
-        /// Download a blob: `GET /apps/{app}/blobs/{id}` (`blob_download`).
-        ///
-        /// `{id}` is base58 or hex; `grant` is a link the app made (`BlobRef::grant`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobDownload(app: Swift.String, id: Swift.String, grant: Swift.String? = nil) async throws -> Data {
-            let input = Operations.BlobDownload.Input(path: .init(app: app, id: id), query: .init(grant: grant))
-            return try await client.perform { api in
-                try await Data(collecting: api.blobDownload(input).ok.body.binary, upTo: .max)
-            }
-        }
-
-        /// A blob's size: `GET /apps/{app}/blobs/{id}/info` (`blob_info`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobInfo(app: Swift.String, id: Swift.String) async throws -> Operations.BlobInfo.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobInfo.Input(path: .init(app: app, id: id))
-            return try await client.perform { api in
-                try await api.blobInfo(input).ok.body.json
-            }
-        }
-
-        /// List an app's blobs: `GET /apps/{app}/blobs` (`blob_list`).
-        ///
-        /// Plain blobs only.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobList(app: Swift.String) async throws -> Operations.BlobList.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobList.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.blobList(input).ok.body.json
-            }
-        }
-
-        /// Invalidate a blob's grants: `POST /apps/{app}/blobs/{id}/revoke` (`blob_revoke`).
-        ///
-        /// The grants made so far for a published blob; the owner or an organization admin.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobRevoke(app: Swift.String, id: Swift.String) async throws -> Operations.BlobRevoke.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobRevoke.Input(path: .init(app: app, id: id))
-            return try await client.perform { api in
-                try await api.blobRevoke(input).ok.body.json
-            }
-        }
-
-        /// Upload a blob: `POST /apps/{app}/blobs` (`blob_upload`).
-        ///
-        /// A plain blob (`sealed=true` is refused: sealed files go through `/files`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func blobUpload(app: Swift.String, body: Data, sealed: Swift.Bool? = nil) async throws -> Operations.BlobUpload.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobUpload.Input(path: .init(app: app), query: .init(sealed: sealed), body: .binary(HTTPBody(body)))
-            return try await client.perform { api in
-                try await api.blobUpload(input).ok.body.json
-            }
-        }
-
-        /// An app's events as server-sent events: `GET /apps/{app}/events` (`events`).
-        ///
-        /// Committed events from index `from`, then live ones, each to its audience.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func events(app: Swift.String, from: Swift.Int? = nil) async throws -> HTTPBody {
-            let input = Operations.Events.Input(path: .init(app: app), query: .init(from: from))
-            return try await client.perform { api in
-                try await api.events(input).ok.body.textEventStream
-            }
-        }
-
-        /// One sealed file: `GET /apps/{app}/files/{id}` (`file_info`).
-        ///
-        /// Its plaintext size and SHA-256, never its key.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func fileInfo(app: Swift.String, id: Swift.String) async throws -> Operations.FileInfo.Output.Ok.Body.JsonPayload {
-            let input = Operations.FileInfo.Input(path: .init(app: app, id: id))
-            return try await client.perform { api in
-                try await api.fileInfo(input).ok.body.json
-            }
-        }
-
-        /// List an app's sealed files: `GET /apps/{app}/files` (`files_list`).
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func filesList(app: Swift.String) async throws -> Operations.FilesList.Output.Ok.Body.JsonPayload {
-            let input = Operations.FilesList.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.filesList(input).ok.body.json
-            }
-        }
-
-        /// Upload a sealed file: `POST /apps/{app}/files` (`files_upload`).
-        ///
-        /// Up to 16 MiB in one request; the owner and the organization's members.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func filesUpload(app: Swift.String, body: Data) async throws -> Operations.FilesUpload.Output.Ok.Body.JsonPayload {
-            let input = Operations.FilesUpload.Input(path: .init(app: app), body: .binary(HTTPBody(body)))
-            return try await client.perform { api in
-                try await api.filesUpload(input).ok.body.json
-            }
-        }
-
-        /// Call a method: `POST /apps/{app}/intents` (`intents`).
-        ///
-        /// A logged call: the result, the events of the call the caller receives, and the answering node's receipt. A `confirm` method answers `412` first. An app error is `422 APP_ERROR` with `details { index, code, fields }`; a trap `422 TRAP`.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func intents(app: Swift.String, method: Swift.String, args: OpenAPIRuntime.OpenAPIValueContainer? = nil, idempotencyKey: Swift.String? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.Intents.Output.Ok.Body.JsonPayload {
-            let input = Operations.Intents.Input(path: .init(app: app), body: .json(.init(method: method, args: args, idempotencyKey: idempotencyKey)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.intents(input).ok.body.json
-            }
-        }
-
-        /// Who is present: `GET /apps/{app}/presence` (`presence_get`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func presenceGet(app: Swift.String) async throws -> Operations.PresenceGet.Output.Ok.Body.JsonPayload {
-            let input = Operations.PresenceGet.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.presenceGet(input).ok.body.json
-            }
-        }
-
-        /// Publish presence: `POST /apps/{app}/presence` (`presence_publish`).
-        ///
-        /// The caller's presence state, in sequence; not logged.
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func presencePublish(app: Swift.String, seq: Swift.Int, state: Swift.String? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.PresencePublish.Input(path: .init(app: app), body: .json(.init(seq: seq, state: state)))
-            return try await client.perform { api in
-                try await api.presencePublish(input).ok.body.json
-            }
-        }
-
-        /// Presence as server-sent events: `GET /apps/{app}/presence/stream` (`presence_stream`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func presenceStream(app: Swift.String) async throws -> HTTPBody {
-            let input = Operations.PresenceStream.Input(path: .init(app: app))
-            return try await client.perform { api in
-                try await api.presenceStream(input).ok.body.textEventStream
-            }
-        }
-
-        /// Abort an upload: `DELETE /apps/{app}/files/uploads/{upload}` (`upload_abort`).
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func uploadAbort(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadAbort.Output.Ok.Body.JsonPayload {
-            let input = Operations.UploadAbort.Input(path: .init(app: app, upload: upload))
-            return try await client.perform { api in
-                try await api.uploadAbort(input).ok.body.json
-            }
-        }
-
-        /// Begin a file upload: `POST /apps/{app}/files/uploads` (`upload_begin`).
-        ///
-        /// A session for a file of `size` bytes, sent in parts of `partBytes`.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func uploadBegin(app: Swift.String, size: Swift.Int) async throws -> Operations.UploadBegin.Output.Ok.Body.JsonPayload {
-            let input = Operations.UploadBegin.Input(path: .init(app: app), body: .json(.init(size: size)))
-            return try await client.perform { api in
-                try await api.uploadBegin(input).ok.body.json
-            }
-        }
-
-        /// Commit an upload: `POST /apps/{app}/files/uploads/{upload}/complete` (`upload_complete`).
-        ///
-        /// Charges and commits the file; a retry answers the same file.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func uploadComplete(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadComplete.Output.Ok.Body.JsonPayload {
-            let input = Operations.UploadComplete.Input(path: .init(app: app, upload: upload))
-            return try await client.perform { api in
-                try await api.uploadComplete(input).ok.body.json
-            }
-        }
-
-        /// Send one part: `PUT /apps/{app}/files/uploads/{upload}/parts/{k}` (`upload_part`).
-        ///
-        /// Part `k` (from 0), raw bytes; a part out of order answers the next one expected in `details.next`.
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func uploadPart(app: Swift.String, upload: Swift.String, k: Swift.String, body: Data) async throws -> Operations.UploadPart.Output.Ok.Body.JsonPayload {
-            let input = Operations.UploadPart.Input(path: .init(app: app, upload: upload, k: k), body: .binary(HTTPBody(body)))
-            return try await client.perform { api in
-                try await api.uploadPart(input).ok.body.json
-            }
-        }
-
-        /// Where an upload is: `GET /apps/{app}/files/uploads/{upload}` (`upload_status`).
-        ///
-        /// **Who:** signed in (a session or an API key).
-        @discardableResult
-        public func uploadStatus(app: Swift.String, upload: Swift.String) async throws -> Operations.UploadStatus.Output.Ok.Body.JsonPayload {
-            let input = Operations.UploadStatus.Input(path: .init(app: app, upload: upload))
-            return try await client.perform { api in
-                try await api.uploadStatus(input).ok.body.json
-            }
-        }
-
-        /// Read with a view method: `POST /apps/{app}/views` (`views`).
-        ///
-        /// Read on a caught-up replica, or (`consistency: "stale"`) on the one answering; `minIndex` waits until the replica applied it (`503 NOT_CAUGHT_UP`).
-        ///
-        /// **Who:** whoever the app's access admits (a public app: anyone).
-        @discardableResult
-        public func views(app: Swift.String, method: Swift.String, args: OpenAPIRuntime.OpenAPIValueContainer? = nil, consistency: OpenAPIRuntime.OpenAPIValueContainer? = nil, minIndex: Swift.Int? = nil) async throws -> Operations.Views.Output.Ok.Body.JsonPayload {
-            let input = Operations.Views.Input(path: .init(app: app), body: .json(.init(method: method, args: args, consistency: consistency, minIndex: minIndex)))
-            return try await client.perform { api in
-                try await api.views(input).ok.body.json
+                try await api.consentPageResult(input).ok.body.json
             }
         }
     }
 }
 
 extension CalimeroClient {
-    /// The `Sign-up and deployments` routes of the node API, one method per operation.
-    public nonisolated var cluster: Cluster { Cluster(client: self) }
+    /// The `deployments` routes of the node API, one method per operation.
+    public nonisolated var deploymentsApi: Deployments { Deployments(client: self) }
 
-    /// The `Sign-up and deployments` routes of the node API (``CalimeroClient/cluster``).
-    public struct Cluster: Sendable {
+    /// The `deployments` routes of the node API (``CalimeroClient/deploymentsApi``).
+    public struct Deployments: Sendable {
         let client: CalimeroClient
 
         /// Grant a deployer: `POST /deployers` (`deployer_grant`).
@@ -930,7 +992,7 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func deploymentCreate(name: Swift.String, owner: Components.Schemas.Deployer, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentCreate.Output.Ok.Body.JsonPayload {
+        public func create(name: Swift.String, owner: Components.Schemas.Deployer, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentCreate.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentCreate.Input(body: .json(.init(name: name, owner: owner)))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentCreate(input).ok.body.json
@@ -941,7 +1003,7 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func deploymentDelete(id: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentDelete.Output.Ok.Body.JsonPayload {
+        public func delete(id: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentDelete.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentDelete.Input(path: .init(id: id))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentDelete(input).ok.body.json
@@ -952,7 +1014,7 @@ extension CalimeroClient {
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
-        public func deploymentGet(id: Swift.String) async throws -> Operations.DeploymentGet.Output.Ok.Body.JsonPayload {
+        public func get(id: Swift.String) async throws -> Operations.DeploymentGet.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentGet.Input(path: .init(id: id))
             return try await client.perform { api in
                 try await api.deploymentGet(input).ok.body.json
@@ -963,7 +1025,7 @@ extension CalimeroClient {
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
-        public func deploymentList() async throws -> Operations.DeploymentList.Output.Ok.Body.JsonPayload {
+        public func list() async throws -> Operations.DeploymentList.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentList.Input()
             return try await client.perform { api in
                 try await api.deploymentList(input).ok.body.json
@@ -974,7 +1036,7 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func deploymentOffer(id: Swift.String, app: Swift.String, package: Swift.String, version: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentOffer.Output.Ok.Body.JsonPayload {
+        public func offer(id: Swift.String, app: Swift.String, package: Swift.String, version: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentOffer.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentOffer.Input(path: .init(id: id), body: .json(.init(app: app, package: package, version: version)))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentOffer(input).ok.body.json
@@ -985,7 +1047,7 @@ extension CalimeroClient {
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
-        public func deploymentOrgs(id: Swift.String) async throws -> Operations.DeploymentOrgs.Output.Ok.Body.JsonPayload {
+        public func orgs(id: Swift.String) async throws -> Operations.DeploymentOrgs.Output.Ok.Body.JsonPayload {
             let input = Operations.DeploymentOrgs.Input(path: .init(id: id))
             return try await client.perform { api in
                 try await api.deploymentOrgs(input).ok.body.json
@@ -996,7 +1058,7 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func deploymentWithdraw(id: Swift.String, app: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
+        public func withdraw(id: Swift.String, app: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
             let input = Operations.DeploymentWithdraw.Input(path: .init(id: id, app: app))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentWithdraw(input).ok.body.json
@@ -1065,106 +1127,10 @@ extension CalimeroClient {
 }
 
 extension CalimeroClient {
-    /// The `Consent` routes of the node API, one method per operation.
-    public nonisolated var consent: Consent { Consent(client: self) }
-
-    /// The `Consent` routes of the node API (``CalimeroClient/consent``).
-    public struct Consent: Sendable {
-        let client: CalimeroClient
-
-        /// Ask the account's owner to approve: `POST /consent/requests` (`consent_page_create`).
-        ///
-        /// From an app's frontend: a release approval, an upgrade of its instance, or outbound prefixes, approved on the node's own consent page (`url`), which takes the passkey. 64 KiB at most.
-        ///
-        /// **Who:** a passkey session (an API key is refused).
-        @discardableResult
-        public func pageCreate(body: Swift.String) async throws -> Operations.ConsentPageCreate.Output.Ok.Body.JsonPayload {
-            let input = Operations.ConsentPageCreate.Input(body: .json(body))
-            return try await client.perform { api in
-                try await api.consentPageCreate(input).ok.body.json
-            }
-        }
-
-        /// What became of a consent request: `GET /consent/{request}/result` (`consent_page_result`).
-        ///
-        /// **Who:** a passkey session (an API key is refused).
-        @discardableResult
-        public func pageResult(request: Swift.String) async throws -> Operations.ConsentPageResult.Output.Ok.Body.JsonPayload {
-            let input = Operations.ConsentPageResult.Input(path: .init(request: request))
-            return try await client.perform { api in
-                try await api.consentPageResult(input).ok.body.json
-            }
-        }
-    }
-}
-
-extension CalimeroClient {
-    /// The `Public` routes of the node API, one method per operation.
-    public nonisolated var node: Node { Node(client: self) }
-
-    /// The `Public` routes of the node API (``CalimeroClient/node``).
-    public struct Node: Sendable {
-        let client: CalimeroClient
-
-        /// The node's attestation: `GET /attestation` (`attestation`).
-        ///
-        /// In the clear. A TDX quote binding the node's transport key (or, with `purpose=receipts`, its receipt key and the governance; with `purpose=kms`, what it verified of its KMS) to `nonce`; `app`/`appHash` bind an app's bundle hash. A client checks it before it seals anything to the key.
-        ///
-        /// **Who:** anyone.
-        @discardableResult
-        public func attestation(nonce: Swift.String, app: Swift.String? = nil, appHash: Swift.String? = nil, purpose: Operations.Attestation.Input.Query.PurposePayload? = nil) async throws -> Components.Schemas.AttestationDoc {
-            let input = Operations.Attestation.Input(query: .init(nonce: nonce, app: app, appHash: appHash, purpose: purpose))
-            return try await client.perform { api in
-                try await api.attestation(input).ok.body.json
-            }
-        }
-
-        /// Node health: `GET /health` (`health`).
-        ///
-        /// In the clear. The node's id, the system group's leader, its release and the cluster's rollback epoch.
-        ///
-        /// **Who:** anyone.
-        @discardableResult
-        public func health() async throws -> Operations.Health.Output.Ok.Body.JsonPayload {
-            let input = Operations.Health.Input()
-            return try await client.perform { api in
-                try await api.health(input).ok.body.json
-            }
-        }
-
-        /// A signing key's organization: `GET /publishers/{signer}` (`publisher_binding`).
-        ///
-        /// The organization a package signing key (`did:key`) is bound to, if any.
-        ///
-        /// **Who:** anyone.
-        @discardableResult
-        public func publisherBinding(signer: Swift.String) async throws -> Operations.PublisherBinding.Output.Ok.Body.JsonPayload {
-            let input = Operations.PublisherBinding.Input(path: .init(signer: signer))
-            return try await client.perform { api in
-                try await api.publisherBinding(input).ok.body.json
-            }
-        }
-
-        /// The cluster's releases: `GET /releases` (`releases_public`).
-        ///
-        /// The mero-tee releases the cluster's nodes run and the deadlines set on them.
-        ///
-        /// **Who:** anyone.
-        @discardableResult
-        public func releasesPublic() async throws -> Operations.ReleasesPublic.Output.Ok.Body.JsonPayload {
-            let input = Operations.ReleasesPublic.Input()
-            return try await client.perform { api in
-                try await api.releasesPublic(input).ok.body.json
-            }
-        }
-    }
-}
-
-extension CalimeroClient {
-    /// The `Ops` routes of the node API, one method per operation.
+    /// The `ops` routes of the node API, one method per operation.
     public nonisolated var ops: Ops { Ops(client: self) }
 
-    /// The `Ops` routes of the node API (``CalimeroClient/ops``).
+    /// The `ops` routes of the node API (``CalimeroClient/ops``).
     public struct Ops: Sendable {
         let client: CalimeroClient
 
@@ -1219,10 +1185,10 @@ extension CalimeroClient {
 }
 
 extension CalimeroClient {
-    /// The `Organizations` routes of the node API, one method per operation.
+    /// The `orgs` routes of the node API, one method per operation.
     public nonisolated var orgs: Orgs { Orgs(client: self) }
 
-    /// The `Organizations` routes of the node API (``CalimeroClient/orgs``).
+    /// The `orgs` routes of the node API (``CalimeroClient/orgs``).
     public struct Orgs: Sendable {
         let client: CalimeroClient
 
@@ -1711,11 +1677,11 @@ extension CalimeroClient {
 }
 
 extension CalimeroClient {
-    /// The `Packages` routes of the node API, one method per operation.
-    public nonisolated var registry: Registry { Registry(client: self) }
+    /// The `packages` routes of the node API, one method per operation.
+    public nonisolated var packagesApi: Packages { Packages(client: self) }
 
-    /// The `Packages` routes of the node API (``CalimeroClient/registry``).
-    public struct Registry: Sendable {
+    /// The `packages` routes of the node API (``CalimeroClient/packagesApi``).
+    public struct Packages: Sendable {
         let client: CalimeroClient
 
         /// Upload a raw component: `POST /bundles` (`bundle_put`).
@@ -1839,6 +1805,68 @@ extension CalimeroClient {
             let input = Operations.PackageVersionUninstall.Input(path: .init(package: package, version: version))
             return try await client.perform { api in
                 try await api.packageVersionUninstall(input).ok.body.json
+            }
+        }
+    }
+}
+
+extension CalimeroClient {
+    /// The `public` routes of the node API, one method per operation.
+    public nonisolated var publicApi: Public { Public(client: self) }
+
+    /// The `public` routes of the node API (``CalimeroClient/publicApi``).
+    public struct Public: Sendable {
+        let client: CalimeroClient
+
+        /// The node's attestation: `GET /attestation` (`attestation`).
+        ///
+        /// In the clear. A TDX quote binding the node's transport key (or, with `purpose=receipts`, its receipt key and the governance; with `purpose=kms`, what it verified of its KMS; with `purpose=orchestrator`, the cluster identity this replica holds) to `nonce`; `app`/`appHash` bind an app's bundle hash. A client checks it before it seals anything to the key.
+        ///
+        /// **Who:** anyone.
+        @discardableResult
+        public func attestation(nonce: Swift.String, app: Swift.String? = nil, appHash: Swift.String? = nil, purpose: Operations.Attestation.Input.Query.PurposePayload? = nil) async throws -> Components.Schemas.AttestationDoc {
+            let input = Operations.Attestation.Input(query: .init(nonce: nonce, app: app, appHash: appHash, purpose: purpose))
+            return try await client.perform { api in
+                try await api.attestation(input).ok.body.json
+            }
+        }
+
+        /// Node health: `GET /health` (`health`).
+        ///
+        /// In the clear. The node's id, the system group's leader, its release, the newest cluster version it supports (`clusterVersion`) and the cluster's rollback epoch.
+        ///
+        /// **Who:** anyone.
+        @discardableResult
+        public func health() async throws -> Operations.Health.Output.Ok.Body.JsonPayload {
+            let input = Operations.Health.Input()
+            return try await client.perform { api in
+                try await api.health(input).ok.body.json
+            }
+        }
+
+        /// A signing key's organization: `GET /publishers/{signer}` (`publisher_binding`).
+        ///
+        /// The organization a package signing key (`did:key`) is bound to, if any.
+        ///
+        /// **Who:** anyone.
+        @discardableResult
+        public func publisherBinding(signer: Swift.String) async throws -> Operations.PublisherBinding.Output.Ok.Body.JsonPayload {
+            let input = Operations.PublisherBinding.Input(path: .init(signer: signer))
+            return try await client.perform { api in
+                try await api.publisherBinding(input).ok.body.json
+            }
+        }
+
+        /// The cluster's releases: `GET /releases` (`releases_public`).
+        ///
+        /// The mero-tee releases the cluster's nodes run and the deadlines set on them.
+        ///
+        /// **Who:** anyone.
+        @discardableResult
+        public func releasesPublic() async throws -> Operations.ReleasesPublic.Output.Ok.Body.JsonPayload {
+            let input = Operations.ReleasesPublic.Input()
+            return try await client.perform { api in
+                try await api.releasesPublic(input).ok.body.json
             }
         }
     }

@@ -4,6 +4,6 @@
 # Shell:  . openapi/source  ->  $CORE_REPO, $CORE_REF, $CORE_COMMIT, ...
 CORE_REPO=calimero-network/core
 CORE_REF=docs/openapi
-CORE_COMMIT=5639a7ede34d91f7ed8727d8dfcdacd0b62575ce
+CORE_COMMIT=26b3ff55456ca04b7749ca0f260fe7703f507fb1
 CORE_PATH=docs/public/openapi.json
 GENERATOR_VERSION=1.10.3

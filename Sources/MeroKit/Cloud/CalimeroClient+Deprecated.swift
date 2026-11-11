@@ -13,54 +13,54 @@ extension CalimeroClient {
 
     /// Who may create an account on the cluster (`GET /sign-up`, core
     /// rc.9+); needs no session.
-    @available(*, deprecated, message: "use client.cluster.signUpPublic()")
+    @available(*, deprecated, message: "use client.deploymentsApi.signUpPublic()")
     public func signUpPolicy() async throws -> SignUpPolicy {
-        try await legacy(SignUpPolicy.self) { try await self.cluster.signUpPublic() }
+        try await legacy(SignUpPolicy.self) { try await self.deploymentsApi.signUpPublic() }
     }
 
     /// `GET /auth/me`: the account, its passkeys and its organizations.
-    @available(*, deprecated, message: "use client.accounts.me()")
+    @available(*, deprecated, message: "use client.auth.me()")
     public func me() async throws -> AccountInfo {
-        AccountInfo(json: try await legacyValue { try await self.accounts.me() })
+        AccountInfo(json: try await legacyValue { try await self.auth.me() })
     }
 
     /// Remove one of the account's passkeys (not the last), approved with `passkey` (one it has).
-    @available(*, deprecated, message: "use client.accounts.passkeyRemove(cred:passkey:)")
+    @available(*, deprecated, message: "use client.auth.passkeyRemove(cred:passkey:)")
     public func removePasskey(_ credentialId: String, passkey: any PasskeyProvider) async throws {
-        _ = try await answer { try await self.accounts.passkeyRemove(cred: credentialId, passkey: passkey) }
+        _ = try await answer { try await self.auth.passkeyRemove(cred: credentialId, passkey: passkey) }
     }
 
     /// Name one of the account's passkeys; `""` clears the name.
-    @available(*, deprecated, message: "use client.accounts.passkeyLabel(cred:label:)")
+    @available(*, deprecated, message: "use client.auth.passkeyLabel(cred:label:)")
     public func labelPasskey(_ credentialId: String, label: String) async throws {
-        _ = try await answer { try await self.accounts.passkeyLabel(cred: credentialId, label: label) }
+        _ = try await answer { try await self.auth.passkeyLabel(cred: credentialId, label: label) }
     }
 
     /// What this account uses, with the cluster's quotas.
-    @available(*, deprecated, message: "use client.accounts.usage()")
+    @available(*, deprecated, message: "use client.auth.usage()")
     public func usage() async throws -> JSONValue {
-        try await legacyValue { try await self.accounts.usage() }
+        try await legacyValue { try await self.auth.usage() }
     }
 
     /// The node's attestation document, unverified: for display only. Every
     /// request this client sends is sealed to a key it verified itself first.
-    @available(*, deprecated, message: "use client.node.attestation(nonce:)")
+    @available(*, deprecated, message: "use client.publicApi.attestation(nonce:)")
     public func attestation() async throws -> AttestationDoc {
         let nonce = Hex.encode(randomBytes(32))
-        return try await legacy(AttestationDoc.self) { try await self.node.attestation(nonce: nonce) }
+        return try await legacy(AttestationDoc.self) { try await self.publicApi.attestation(nonce: nonce) }
     }
 
     /// The account's API keys (never the keys themselves).
-    @available(*, deprecated, message: "use client.accounts.apikeyList()")
+    @available(*, deprecated, message: "use client.auth.apikeyList()")
     public func listApiKeys() async throws -> [JSONValue] {
-        try await legacyValue { try await self.accounts.apikeyList() }["keys"]?.arrayValue ?? []
+        try await legacyValue { try await self.auth.apikeyList() }["keys"]?.arrayValue ?? []
     }
 
     /// Revoke one of the account's API keys, approved with its `passkey`
     /// (`412 CONFIRM_REQUIRED`, core rc.9+).
-    @available(*, deprecated, message: "use client.accounts.apikeyRevoke(key:passkey:)")
+    @available(*, deprecated, message: "use client.auth.apikeyRevoke(key:passkey:)")
     public func revokeApiKey(_ keyId: String, passkey: any PasskeyProvider) async throws {
-        _ = try await answer { try await self.accounts.apikeyRevoke(key: keyId, passkey: passkey) }
+        _ = try await answer { try await self.auth.apikeyRevoke(key: keyId, passkey: passkey) }
     }
 
     /// Create an API key for an agent or server, approved with the account's
@@ -73,7 +73,7 @@ extension CalimeroClient {
     /// ``upgradeApp(_:version:package:service:bundle:migrate:passkey:)`` and
     /// no passkey, and every other request with it is refused `403
     /// UPGRADE_KEY_ONLY`. It takes no other scope field.
-    @available(*, deprecated, message: "use client.accounts.apikeyCreate")
+    @available(*, deprecated, message: "use client.auth.apikeyCreate")
     public func createApiKey(
         label: String? = nil, apps: [String]? = nil, methods: [String]? = nil, readOnly: Bool? = nil,
         allowConfirm: Bool? = nil, ttlSecs: Int? = nil, upgrades: UpgradeKeyScope? = nil,
@@ -83,7 +83,7 @@ extension CalimeroClient {
             Operations.ApikeyCreate.Input.Body.JsonPayload.UpgradesPayload(app: $0.app, package: $0.package)
         }
         let answer = try await legacyValue {
-            try await self.accounts.apikeyCreate(
+            try await self.auth.apikeyCreate(
                 label: label, apps: apps, methods: methods, readOnly: readOnly, allowConfirm: allowConfirm,
                 ttlSecs: ttlSecs, upgrades: scope, passkey: passkey)
         }
@@ -93,9 +93,9 @@ extension CalimeroClient {
     // MARK: - Bundles and blobs
 
     /// Upload a raw WASM bundle (development clusters only); answers its hash.
-    @available(*, deprecated, message: "use client.registry.bundlePut(body:)")
+    @available(*, deprecated, message: "use client.packagesApi.bundlePut(body:)")
     public func uploadBundle(_ wasm: Data) async throws -> String {
-        try await legacyValue { try await self.registry.bundlePut(body: wasm) }["hash"]?.stringValue ?? ""
+        try await legacyValue { try await self.packagesApi.bundlePut(body: wasm) }["hash"]?.stringValue ?? ""
     }
 
     /// One of `app`'s blobs, by id (base58 or hex).
@@ -122,39 +122,41 @@ extension CalimeroClient {
     // MARK: - Packages
 
     /// Install a signed `.mpk` package file (development clusters only).
-    @available(*, deprecated, message: "use client.registry.upload(body:)")
+    @available(*, deprecated, message: "use client.packagesApi.upload(body:)")
     public func uploadPackage(_ mpk: Data) async throws -> PackageInstalled {
-        try await legacy(PackageInstalled.self) { try await self.registry.upload(body: mpk) }
+        try await legacy(PackageInstalled.self) { try await self.packagesApi.upload(body: mpk) }
     }
 
     /// Install `package@version` from the cluster's registry.
-    @available(*, deprecated, message: "use client.registry.install(package:version:)")
+    @available(*, deprecated, message: "use client.packagesApi.install(package:version:)")
     public func installPackage(_ package: String, version: String) async throws -> PackageInstalled {
-        try await legacy(PackageInstalled.self) { try await self.registry.install(package: package, version: version) }
+        try await legacy(PackageInstalled.self) {
+            try await self.packagesApi.install(package: package, version: version)
+        }
     }
 
     /// Installed packages and their versions.
-    @available(*, deprecated, message: "use client.registry.list()")
+    @available(*, deprecated, message: "use client.packagesApi.list()")
     public func packages() async throws -> [PackageInfo] {
-        try await legacy(PackageList.self) { try await self.registry.list() }.packages
+        try await legacy(PackageList.self) { try await self.packagesApi.list() }.packages
     }
 
     /// One installed package and its versions.
-    @available(*, deprecated, message: "use client.registry.get(package:)")
+    @available(*, deprecated, message: "use client.packagesApi.get(package:)")
     public func package(_ package: String) async throws -> PackageInfo {
-        try await legacy(PackageInfo.self) { try await self.registry.get(package: package) }
+        try await legacy(PackageInfo.self) { try await self.packagesApi.get(package: package) }
     }
 
     /// Uninstall one version, or the whole package. Refused while an app runs it.
     @discardableResult
-    @available(*, deprecated, message: "use client.registry.uninstall or client.registry.versionUninstall")
+    @available(*, deprecated, message: "use client.packagesApi.uninstall or client.packagesApi.versionUninstall")
     public func uninstallPackage(_ package: String, version: String? = nil) async throws -> JSONValue {
         if let version {
             return try await legacyValue {
-                try await self.registry.versionUninstall(package: package, version: version)
+                try await self.packagesApi.versionUninstall(package: package, version: version)
             }
         }
-        return try await legacyValue { try await self.registry.uninstall(package: package) }
+        return try await legacyValue { try await self.packagesApi.uninstall(package: package) }
     }
 
     // MARK: - App instances
@@ -250,23 +252,30 @@ extension CalimeroClient {
         _ name: String, bundle: AppSource, org: String? = nil, access: AppAccess? = nil,
         confirmMethods: [String]? = nil, initArgs: JSONValue? = nil
     ) async throws -> String {
-        let source: (hash: String?, package: String?, version: String?, service: String?, deployment: String?)
+        var hash: String?
+        var release: (package: String, version: String?)?
+        var service: String?
+        var deployment: String?
         switch bundle {
-        case .bundle(let value): source = (value, nil, nil, nil, nil)
-        case .package(let id, let v, let s, let d): source = (nil, id, v, s, d)
+        case .bundle(let value): hash = value
+        case .package(let id, let v, let s, let d):
+            release = (id, v)
+            service = s
+            deployment = d
         }
-        let hash = source.hash
-        let package = source.package
-        let version = source.version
-        let service = source.service
-        let deployment = source.deployment
+        // Copies the @Sendable request below may capture.
+        let bundleHash = hash
+        let package = release?.package
+        let version = release?.version
+        let serviceName = service
+        let deploymentId = deployment
         let answer: JSONValue
         if let confirmMethods {
             // `confirmMethods` is not in the document's `POST /apps` body: sent as written.
             var body: [String: JSONValue] = ["name": .string(name)]
             for (key, value) in [
-                ("bundle", hash), ("package", package), ("version", version), ("service", service),
-                ("deployment", deployment), ("org", org),
+                ("bundle", bundleHash), ("package", package), ("version", version), ("service", serviceName),
+                ("deployment", deploymentId), ("org", org),
             ] {
                 if let value { body[key] = .string(value) }
             }
@@ -279,8 +288,8 @@ extension CalimeroClient {
             let initArgs = try initArgs.map { try OpenAPIValueContainer($0) }
             answer = try await legacyValue {
                 try await self.apps.create(
-                    name: name, bundle: hash, package: package, version: version, service: service, org: org,
-                    access: access, initArgs: initArgs, deployment: deployment)
+                    name: name, bundle: bundleHash, package: package, version: version, service: serviceName,
+                    org: org, access: access, initArgs: initArgs, deployment: deploymentId)
             }
         }
         guard let appId = answer["appId"]?.stringValue else {
@@ -309,27 +318,27 @@ extension CalimeroClient {
     // MARK: - Aliases
 
     /// Name an app for this account.
-    @available(*, deprecated, message: "use client.accounts.aliasSet(alias:app:)")
+    @available(*, deprecated, message: "use client.auth.aliasSet(alias:app:)")
     public func setAlias(_ alias: String, app: String) async throws {
-        _ = try await answer { try await self.accounts.aliasSet(alias: alias, app: app) }
+        _ = try await answer { try await self.auth.aliasSet(alias: alias, app: app) }
     }
 
     /// This account's aliases, alias → app id.
-    @available(*, deprecated, message: "use client.accounts.aliasList()")
+    @available(*, deprecated, message: "use client.auth.aliasList()")
     public func aliases() async throws -> [String: String] {
-        (try await legacyValue { try await self.accounts.aliasList() }["aliases"]?.objectValue ?? [:])
+        (try await legacyValue { try await self.auth.aliasList() }["aliases"]?.objectValue ?? [:])
             .compactMapValues(\.stringValue)
     }
 
     /// The app an alias names.
-    @available(*, deprecated, message: "use client.accounts.aliasGet(alias:)")
+    @available(*, deprecated, message: "use client.auth.aliasGet(alias:)")
     public func alias(_ alias: String) async throws -> String {
-        try await legacyValue { try await self.accounts.aliasGet(alias: alias) }["appId"]?.stringValue ?? ""
+        try await legacyValue { try await self.auth.aliasGet(alias: alias) }["appId"]?.stringValue ?? ""
     }
 
-    @available(*, deprecated, message: "use client.accounts.aliasDelete(alias:)")
+    @available(*, deprecated, message: "use client.auth.aliasDelete(alias:)")
     public func deleteAlias(_ alias: String) async throws {
-        _ = try await answer { try await self.accounts.aliasDelete(alias: alias) }
+        _ = try await answer { try await self.auth.aliasDelete(alias: alias) }
     }
 
     // MARK: - Organizations
@@ -419,7 +428,7 @@ extension CalimeroClient {
     /// (`org` `nil`); `approved: false` withdraws it. Refused to a session
     /// opened on an app's frontend: ask with ``requestConsent(_:)`` instead.
     @discardableResult
-    @available(*, deprecated, message: "use client.orgs.releaseApproval or client.accounts.releaseApproval")
+    @available(*, deprecated, message: "use client.orgs.releaseApproval or client.auth.releaseApproval")
     public func approveRelease(
         _ org: String?, version: String, passkey: any PasskeyProvider, approved: Bool = true
     )
@@ -431,7 +440,7 @@ extension CalimeroClient {
             }
         }
         return try await legacyValue {
-            try await self.accounts.releaseApproval(version: version, approved: approved, passkey: passkey)
+            try await self.auth.releaseApproval(version: version, approved: approved, passkey: passkey)
         }
     }
 
@@ -439,7 +448,7 @@ extension CalimeroClient {
     /// to; `prefixes` `nil` approves every prefix the package's latest
     /// release declares; `replace` sets exactly `prefixes`.
     @discardableResult
-    @available(*, deprecated, message: "use client.orgs.outboundApproval or client.accounts.outboundApproval")
+    @available(*, deprecated, message: "use client.orgs.outboundApproval or client.auth.outboundApproval")
     public func approveOutbound(
         _ org: String?, package: String, passkey: any PasskeyProvider, prefixes: [String]? = nil, replace: Bool = false
     ) async throws -> JSONValue {
@@ -452,7 +461,7 @@ extension CalimeroClient {
             }
         }
         return try await legacyValue {
-            try await self.accounts.outboundApproval(
+            try await self.auth.outboundApproval(
                 package: package, prefixes: selection, replace: replace, passkey: passkey)
         }
     }
@@ -460,7 +469,7 @@ extension CalimeroClient {
     // MARK: - Approvals
 
     /// One page of the report of a scope's apps.
-    @available(*, deprecated, message: "use client.orgs.apps(org:after:limit:) or client.accounts.apps(after:limit:)")
+    @available(*, deprecated, message: "use client.orgs.apps(org:after:limit:) or client.auth.apps(after:limit:)")
     public func appsReport(_ org: String?, page: PageOptions = PageOptions()) async throws -> AppsReport {
         _ = try page.query()  // refuses a `limit` outside 1 to 100 before sending
         if let org {
@@ -468,13 +477,13 @@ extension CalimeroClient {
                 try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
             }
         }
-        return try await legacy(AppsReport.self) { try await self.accounts.apps(after: page.after, limit: page.limit) }
+        return try await legacy(AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
     }
 
     /// `GET /releases`: the cluster's governance and every release deadline.
-    @available(*, deprecated, message: "use client.node.releasesPublic()")
+    @available(*, deprecated, message: "use client.publicApi.releasesPublic()")
     public func releaseRules() async throws -> ReleaseRules {
-        try await legacy(ReleaseRules.self) { try await self.node.releasesPublic() }
+        try await legacy(ReleaseRules.self) { try await self.publicApi.releasesPublic() }
     }
 
     /// The decision on a consent request.
@@ -484,9 +493,9 @@ extension CalimeroClient {
     }
 
     /// `GET /publishers/{signerId}`.
-    @available(*, deprecated, message: "use client.node.publisherBinding(signer:)")
+    @available(*, deprecated, message: "use client.publicApi.publisherBinding(signer:)")
     public func publisherBinding(_ signerId: String) async throws -> PublisherBindingInfo {
-        try await legacy(PublisherBindingInfo.self) { try await self.node.publisherBinding(signer: signerId) }
+        try await legacy(PublisherBindingInfo.self) { try await self.publicApi.publisherBinding(signer: signerId) }
     }
 
     /// Bind a package signing key to `org` as its publisher, with `passkey`.
@@ -649,9 +658,9 @@ extension CalimeroClient {
     /// frontend they host themselves signs people in with passkeys: a session
     /// opened on one is bound to the package. ``NotFound`` for an unknown
     /// package; `403` to anyone not managing it. (== mero-js `packageOrigins.list`.)
-    @available(*, deprecated, message: "use client.registry.originsList(package:)")
+    @available(*, deprecated, message: "use client.packagesApi.originsList(package:)")
     public func packageOrigins(_ package: String) async throws -> [PackageOrigin] {
-        try await legacy(PackageOriginList.self) { try await self.registry.originsList(package: package) }.origins
+        try await legacy(PackageOriginList.self) { try await self.packagesApi.originsList(package: package) }.origins
     }
 
     /// Register `origin` (`scheme://host[:port]`) for `package`, approved
@@ -660,22 +669,22 @@ extension CalimeroClient {
     /// ``BadOrigin`` (`BAD_ORIGIN`, `BAD_RP_ID`), ``OriginTaken``,
     /// ``QuotaExceeded``. (== mero-js `packageOrigins.add`.)
     @discardableResult
-    @available(*, deprecated, message: "use client.registry.originsAdd(package:origin:rpId:served:passkey:)")
+    @available(*, deprecated, message: "use client.packagesApi.originsAdd(package:origin:rpId:served:passkey:)")
     public func addPackageOrigin(
         _ package: String, origin: String, passkey: any PasskeyProvider, rpId: String? = nil
     ) async throws -> PackageOrigin {
         try await legacy(PackageOrigin.self) {
-            try await self.registry.originsAdd(package: package, origin: origin, rpId: rpId, passkey: passkey)
+            try await self.packagesApi.originsAdd(package: package, origin: origin, rpId: rpId, passkey: passkey)
         }
     }
 
     /// Remove `origin` from `package`, approved with `passkey`
     /// (`__remove_origin`). Sessions opened there stop working (`401`).
     /// ``NotFound`` if it was not registered. (== mero-js `packageOrigins.remove`.)
-    @available(*, deprecated, message: "use client.registry.originsRemove(package:origin:passkey:)")
+    @available(*, deprecated, message: "use client.packagesApi.originsRemove(package:origin:passkey:)")
     public func removePackageOrigin(_ package: String, origin: String, passkey: any PasskeyProvider) async throws {
         _ = try await answer {
-            try await self.registry.originsRemove(package: package, origin: origin, passkey: passkey)
+            try await self.packagesApi.originsRemove(package: package, origin: origin, passkey: passkey)
         }
     }
 
@@ -687,37 +696,37 @@ extension CalimeroClient {
     /// governance says `deployers: owner`; elsewhere the operator grants with
     /// its key, and this is refused `403`.
     @discardableResult
-    @available(*, deprecated, message: "use client.cluster.deployerGrant(deployer:until:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.deployerGrant(deployer:until:passkey:)")
     public func grantDeployer(
         _ deployer: Deployer, passkey: any PasskeyProvider, until: Date? = nil
     ) async throws -> JSONValue {
         let converted: Components.Schemas.Deployer = try Self.converted(json: deployer.json)
         let until = until.map { ISO8601DateFormatter().string(from: $0) }
         return try await legacyValue {
-            try await self.cluster.deployerGrant(deployer: converted, until: until, passkey: passkey)
+            try await self.deploymentsApi.deployerGrant(deployer: converted, until: until, passkey: passkey)
         }
     }
 
     /// Who may install apps on the cluster: its deployments rule, who grants
     /// deployers, its owner and every grant. For the cluster's owner, or the
     /// operator (its token, ``useApiKey(_:)``).
-    @available(*, deprecated, message: "use client.cluster.deployerList()")
+    @available(*, deprecated, message: "use client.deploymentsApi.deployerList()")
     public func deployers() async throws -> DeployersInfo {
-        try await legacy(DeployersInfo.self) { try await self.cluster.deployerList() }
+        try await legacy(DeployersInfo.self) { try await self.deploymentsApi.deployerList() }
     }
 
     /// End a deployer's grant, as the cluster's owner, approved with
     /// `passkey`. Apps it installed, and the apps running them, stay.
-    @available(*, deprecated, message: "use client.cluster.deployerRevoke(key:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.deployerRevoke(key:passkey:)")
     public func revokeDeployer(_ deployer: Deployer, passkey: any PasskeyProvider) async throws {
         let key = deployer.key
-        _ = try await answer { try await self.cluster.deployerRevoke(key: key, passkey: passkey) }
+        _ = try await answer { try await self.deploymentsApi.deployerRevoke(key: key, passkey: passkey) }
     }
 
     /// ``revokeDeployer(_:passkey:)`` by its key, `account:{id}` or `org:{id}`.
-    @available(*, deprecated, message: "use client.cluster.deployerRevoke(key:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.deployerRevoke(key:passkey:)")
     public func revokeDeployer(key: String, passkey: any PasskeyProvider) async throws {
-        _ = try await answer { try await self.cluster.deployerRevoke(key: key, passkey: passkey) }
+        _ = try await answer { try await self.deploymentsApi.deployerRevoke(key: key, passkey: passkey) }
     }
 
     // MARK: - Deployments
@@ -727,11 +736,11 @@ extension CalimeroClient {
     /// apps it offers, named `name` (1 to 64 characters, one line) for
     /// customers. Approved with `passkey`; where deployments are `granted`
     /// the caller needs a deployer grant. Answers the deployment's id.
-    @available(*, deprecated, message: "use client.cluster.deploymentCreate(name:owner:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.create(name:owner:passkey:)")
     public func createDeployment(_ name: String, owner: Deployer, passkey: any PasskeyProvider) async throws -> String {
         let owner: Components.Schemas.Deployer = try Self.converted(json: owner.json)
         let answer = try await legacyValue {
-            try await self.cluster.deploymentCreate(name: name, owner: owner, passkey: passkey)
+            try await self.deploymentsApi.create(name: name, owner: owner, passkey: passkey)
         }
         guard let id = answer["id"]?.stringValue else { throw AccountError.protocolViolation("no deployment id") }
         return id
@@ -739,50 +748,50 @@ extension CalimeroClient {
 
     /// The deployments the caller manages: its account's, and its
     /// organizations' where it holds `MANAGE_APPLICATION`.
-    @available(*, deprecated, message: "use client.cluster.deploymentList()")
+    @available(*, deprecated, message: "use client.deploymentsApi.list()")
     public func deployments() async throws -> [DeploymentInfo] {
-        try await legacy(DeploymentList.self) { try await self.cluster.deploymentList() }.deployments
+        try await legacy(DeploymentList.self) { try await self.deploymentsApi.list() }.deployments
     }
 
     /// A deployment as anyone may read it: its name, its owner's kind and
     /// name, and the apps it offers. Public.
-    @available(*, deprecated, message: "use client.cluster.deploymentGet(id:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.get(id:)")
     public func deployment(_ id: String) async throws -> PublicDeployment {
-        try await legacy(PublicDeployment.self) { try await self.cluster.deploymentGet(id: id) }
+        try await legacy(PublicDeployment.self) { try await self.deploymentsApi.get(id: id) }
     }
 
     /// Delete a deployment that offers nothing and has no instances, approved with `passkey`.
-    @available(*, deprecated, message: "use client.cluster.deploymentDelete(id:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.delete(id:passkey:)")
     public func deleteDeployment(_ id: String, passkey: any PasskeyProvider) async throws {
-        _ = try await answer { try await self.cluster.deploymentDelete(id: id, passkey: passkey) }
+        _ = try await answer { try await self.deploymentsApi.delete(id: id, passkey: passkey) }
     }
 
     /// Offer `package@version` (installed, and seen by the caller) as `app`
     /// (1 to 64 letters, digits, `.`, `_`, `-`) in deployment `id`, or move
     /// an offered app to another release of its package. Approved with `passkey`.
     @discardableResult
-    @available(*, deprecated, message: "use client.cluster.deploymentOffer(id:app:package:version:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.offer(id:app:package:version:passkey:)")
     public func offerApp(
         _ id: String, app: String, package: String, version: String, passkey: any PasskeyProvider
     ) async throws -> JSONValue {
         try await legacyValue {
-            try await self.cluster.deploymentOffer(
+            try await self.deploymentsApi.offer(
                 id: id, app: app, package: package, version: version, passkey: passkey)
         }
     }
 
     /// Withdraw `app` from deployment `id`, approved with `passkey`; refused
     /// while an instance created from the deployment still runs it.
-    @available(*, deprecated, message: "use client.cluster.deploymentWithdraw(id:app:passkey:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.withdraw(id:app:passkey:)")
     public func withdrawApp(_ id: String, app: String, passkey: any PasskeyProvider) async throws {
-        _ = try await answer { try await self.cluster.deploymentWithdraw(id: id, app: app, passkey: passkey) }
+        _ = try await answer { try await self.deploymentsApi.withdraw(id: id, app: app, passkey: passkey) }
     }
 
     /// The organizations with instances created from deployment `id`, for
     /// its managers: each one's id, name, instance count, apps and releases,
     /// and first instance. Never members, teams or app data.
-    @available(*, deprecated, message: "use client.cluster.deploymentOrgs(id:)")
+    @available(*, deprecated, message: "use client.deploymentsApi.orgs(id:)")
     public func deploymentOrgs(_ id: String) async throws -> DeploymentOrgs {
-        try await legacy(DeploymentOrgs.self) { try await self.cluster.deploymentOrgs(id: id) }
+        try await legacy(DeploymentOrgs.self) { try await self.deploymentsApi.orgs(id: id) }
     }
 }

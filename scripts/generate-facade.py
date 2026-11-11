@@ -9,29 +9,25 @@ on a group named after the operation's first tag (`client.orgs`,
 query parameters as labelled arguments, the typed success value as the
 answer. `confirm` and `operatorProof` are no arguments: the client answers a
 `412 CONFIRM_REQUIRED` and a `428 OPERATOR_SIGNATURE_REQUIRED` itself
-(`StepUpMiddleware`), with the `passkey:` or `operatorSigner:` given to the
-call, else the client's own. Refusals throw MeroKit's errors.
+(`StepUpMiddleware`; the document's `x-calimero-step-up` and
+`x-calimero-operator`), with the `passkey:` or `operatorSigner:` given to the
+call, else the client's own. An operation the document marks
+`x-calimero-retry-safe` is retried on a 503 or a lost connection, with
+failover (one marked `x-calimero-retry-requires: idempotencyKey` only when
+the call gives one). Refusals throw MeroKit's errors.
 
 The Swift names and types are read from the generated Types.swift (so they
 are the generator's, whatever its naming), the tags and step-ups from the
 document. Called by scripts/generate-openapi.sh; never edit the output.
 """
 import json
+import os
 import re
 import sys
 
-# Tag -> (group property, group type, operationId prefix dropped from method names).
-# The names avoid CalimeroClient's own members (`packages()`, `deployments()`, ...).
-GROUPS = {
-    "Accounts": ("accounts", "Accounts", "account"),
-    "Apps": ("apps", "Apps", "app"),
-    "Consent": ("consent", "Consent", "consent"),
-    "Organizations": ("orgs", "Orgs", "org"),
-    "Packages": ("registry", "Registry", "package"),
-    "Public": ("node", "Node", None),
-    "Sign-up and deployments": ("cluster", "Cluster", None),
-    "Ops": ("ops", "Ops", "ops"),
-}
+# The operationId prefix a group's method names drop (`org_get` -> `client.orgs.get`).
+PREFIXES = {"apps": "app", "auth": "account", "consent": "consent", "deployments": "deployment",
+            "orgs": "org", "ops": "ops", "packages": "package"}
 STEP_UP_FIELDS = ("confirm", "operatorProof")
 SWIFT_KEYWORDS = {"default", "public", "private", "internal", "func", "var", "let", "in", "is", "as", "operator",
                   "protocol", "struct", "class", "enum", "case", "import", "return", "self", "Self", "static",
@@ -116,9 +112,9 @@ def operations(types):
                 m = re.match(r"^                case (\w+)\((.+)\)$", block[i])
                 if m:
                     case, typ = m.groups()
-                    if typ == f"Operations.{name}.Input.Body.JsonPayload":
-                        payload_at = next(j for j in range(body_at, out_at)
-                                          if block[j].startswith("                public struct JsonPayload:"))
+                    payload_at = next((j for j in range(body_at, out_at)
+                                       if block[j].startswith("                public struct JsonPayload:")), None)
+                    if typ == f"Operations.{name}.Input.Body.JsonPayload" and payload_at is not None:
                         op["body"] = ("fields", case, init_params(block, payload_at, 20))
                     else:
                         op["body"] = ("whole", case, typ)
@@ -151,16 +147,31 @@ def doc(text):
     return [line.rstrip() for line in text.strip().split("\n")]
 
 
-def facade(document, ops):
+def taken_names(root):
+    """The member names CalimeroClient already declares (in its own files), which a group may not take."""
+    names = set()
+    for file in ("Cloud/CalimeroClient.swift", "Cloud/CalimeroClient+Deprecated.swift", "Api/CalimeroApi.swift"):
+        with open(os.path.join(root, "Sources", "MeroKit", file), encoding="utf-8") as f:
+            text = f.read()
+        names.update(re.findall(r"^    (?:public |private |)(?:nonisolated )?(?:static )?(?:func|var|let) (\w+)", text, re.M))
+    return names
+
+
+def group_names(group, taken):
+    prop = group if group not in taken and group not in SWIFT_KEYWORDS else group + "Api"
+    return prop, group[:1].upper() + group[1:]
+
+
+def facade(document, ops, taken):
     by_group = {}
     for path, items in document["paths"].items():
         for verb, spec in items.items():
             if not isinstance(spec, dict) or spec.get("operationId") not in ops:
                 continue
-            tag = spec["tags"][0]
-            if tag not in GROUPS:
-                raise SystemExit(f"{spec['operationId']}: tag {tag} has no group in GROUPS")
-            by_group.setdefault(tag, []).append((verb.upper(), path, spec))
+            group = spec.get("x-calimero-group")
+            if not group:
+                raise SystemExit(f"{spec['operationId']}: no x-calimero-group")
+            by_group.setdefault(group, []).append((verb.upper(), path, spec))
     out = []
     w = out.append
     w("// swift-format-ignore-file")
@@ -171,8 +182,9 @@ def facade(document, ops):
     w("import MeroAPI")
     w("import OpenAPIRuntime")
     w("")
-    for tag in sorted(by_group, key=lambda t: GROUPS[t][0]):
-        prop, typ, prefix = GROUPS[tag]
+    for tag in sorted(by_group):
+        prop, typ = group_names(tag, taken)
+        prefix = PREFIXES.get(tag)
         w("extension CalimeroClient {")
         w(f"    /// The `{tag}` routes of the node API, one method per operation.")
         w(f"    public nonisolated var {prop}: {typ} {{ {typ}(client: self) }}")
@@ -188,8 +200,10 @@ def facade(document, ops):
             if name in names:
                 raise SystemExit(f"{op_id}: {typ}.{name} is taken")
             names.add(name)
-            step_up = "412" in spec["responses"]
-            operator = "428" in spec["responses"]
+            step_up = bool(spec.get("x-calimero-step-up"))
+            operator = bool(spec.get("x-calimero-operator"))
+            retry_safe = bool(spec.get("x-calimero-retry-safe"))
+            retry_requires = spec.get("x-calimero-retry-requires")
             args, call = [], []
             labels = set()
 
@@ -208,10 +222,12 @@ def facade(document, ops):
             for p, t, d in op["path"]:
                 arg(p, t, d)
             body_expr = None
+            fields_args = []
             if op["body"]:
                 kind, case, rest = op["body"]
                 if kind == "fields":
                     fields = [(p, arg(p, t, d, "body")) for p, t, d in rest if p not in STEP_UP_FIELDS]
+                    fields_args = fields
                     if fields or not op["bodyOptional"]:
                         body_expr = f".{case}(.init({', '.join(f'{p}: {a}' for p, a in fields)}))"
                 elif rest == "OpenAPIRuntime.HTTPBody":
@@ -262,6 +278,13 @@ def facade(document, ops):
                 overrides.append("passkey: passkey")
             if operator:
                 overrides.append("operatorSigner: operatorSigner")
+            if retry_safe and retry_requires:
+                needed = next((a for p, a in fields_args if p == retry_requires), None)
+                if needed is None:
+                    raise SystemExit(f"{op_id}: retry requires {retry_requires}, which is no argument")
+                overrides.append(f"retry: {needed} != nil")
+            elif retry_safe:
+                overrides.append("retry: true")
             perform = f"client.perform({', '.join(overrides)})" if overrides else "client.perform"
             w(f"            return try await {perform} {{ api in")
             w(f"                {extract}")
@@ -280,8 +303,9 @@ def main():
         document = json.load(f)
     with open(sys.argv[2], encoding="utf-8") as f:
         ops = operations(f.read())
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(sys.argv[3], "w", encoding="utf-8") as f:
-        f.write(facade(document, ops))
+        f.write(facade(document, ops, taken_names(root)))
 
 
 if __name__ == "__main__":

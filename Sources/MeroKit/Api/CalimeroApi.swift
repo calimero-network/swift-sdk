@@ -55,6 +55,9 @@ enum StepUp {
     @TaskLocal static var passkey: (any PasskeyProvider)?
     /// The operator signer the facade call named, over the client's.
     @TaskLocal static var operatorSigner: (any OperatorSigner)?
+    /// Whether the request may be sent again after a 503 or a lost
+    /// connection (`x-calimero-retry-safe`), and fail over to another node.
+    @TaskLocal static var retry = false
 
     /// `confirm` for a `412 CONFIRM_REQUIRED`: `passkey`'s assertion over
     /// its challenge. A dismissed prompt is ``ConfirmCancelled``.
@@ -77,7 +80,9 @@ enum StepUp {
 
     /// `operatorProof` for a `428 OPERATOR_SIGNATURE_REQUIRED`: the
     /// operator's signature over the statement, with its nonce.
-    static func operatorProof(_ required: OperatorSignatureRequired, signer: any OperatorSigner) async throws
+    static func operatorProof(
+        _ required: OperatorSignatureRequired, signer: any OperatorSigner
+    ) async throws
         -> JSONValue
     {
         guard let nonce = required.details["nonce"]?.stringValue,
@@ -130,6 +135,8 @@ struct SealedClientTransport: ClientTransport {
         let response: SealedResponse
         if Self.plaintext.contains(operationID) {
             response = try await client.plain(request.method.rawValue, path)
+        } else if StepUp.retry {
+            response = try await client.retriedExchange(request.method.rawValue, path, body: data, headers: headers)
         } else {
             response = try await client.exchange(request.method.rawValue, path, body: data, headers: headers)
         }
@@ -190,7 +197,8 @@ struct StepUpMiddleware: ClientMiddleware {
             }
             var retry = request
             retry.headerFields[.contentType] = "application/json; charset=utf-8"
-            return try await next(retry, HTTPBody(answered), baseURL)
+            // The answer goes once: its challenge (or nonce) is single-use.
+            return try await StepUp.$retry.withValue(false) { try await next(retry, HTTPBody(answered), baseURL) }
         }
     }
 }
@@ -246,7 +254,7 @@ extension CalimeroClient {
     /// node list. Refusals throw `ClientError` around MeroKit's typed error
     /// (`underlyingError`); a `412` or `428` is answered with the client's
     /// ``useStepUp(_:)`` passkey or ``useOperatorSigner(_:)`` signer.
-    /// The facade (``orgs``, ``apps``, ``accounts``, ...) wraps it one method
+    /// The facade (``orgs``, ``apps``, ``auth``, ...) wraps it one method
     /// per operation and throws the typed error itself; prefer it.
     public nonisolated var api: Client {
         Client(
@@ -263,14 +271,14 @@ extension CalimeroClient {
     /// answers, throwing MeroKit's typed errors rather than `ClientError`.
     /// What the facade's methods call.
     nonisolated func perform<T: Sendable>(
-        passkey: (any PasskeyProvider)? = nil, operatorSigner: (any OperatorSigner)? = nil,
+        passkey: (any PasskeyProvider)? = nil, operatorSigner: (any OperatorSigner)? = nil, retry: Bool = false,
         _ body: @Sendable (Client) async throws -> T
     ) async throws -> T {
         let api = self.api
         do {
             return try await StepUp.$passkey.withValue(passkey ?? StepUp.passkey) {
                 try await StepUp.$operatorSigner.withValue(operatorSigner ?? StepUp.operatorSigner) {
-                    try await body(api)
+                    try await StepUp.$retry.withValue(retry) { try await body(api) }
                 }
             }
         } catch {

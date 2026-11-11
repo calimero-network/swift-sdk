@@ -48,10 +48,12 @@ for try await event in cloud.events(app) { print(event.kind) }      // sealed SS
 
 ## The node API, generated
 
-Every route of the node API is a method of `CalimeroClient`, grouped by the
-OpenAPI document's tags: `accounts`, `apps`, `orgs`, `registry` (packages),
-`cluster` (sign-up, deployers, deployments), `consent`, `node` (public) and
-`ops`. Each takes the path parameters, the JSON body's fields and the query
+Every route of the node API is a method of `CalimeroClient`, grouped as the
+OpenAPI document groups them (`x-calimero-group`): `auth`, `apps`, `orgs`,
+`consent`, `ops`, and `packagesApi`, `deploymentsApi` (sign-up, deployers,
+deployments) and `publicApi`, which take an `Api` suffix because
+`CalimeroClient` already has `packages()` and `deployments()` and `public` is
+a keyword. Each takes the path parameters, the JSON body's fields and the query
 as labelled arguments and answers the typed success value (`import MeroAPI`
 to name it); a refusal throws the same typed errors as below.
 
@@ -63,6 +65,8 @@ try await cloud.orgs.delete(org: orgId)
 await cloud.useOperatorSigner(try Ed25519OperatorKey(raw: seed))   // answers a 428
 ```
 
+Operations the document marks `x-calimero-retry-safe` (views, and calls
+with an `idempotencyKey`) are retried on a 503 and fail over as `call` does.
 A `412 CONFIRM_REQUIRED` is answered with the call's `passkey:`, else the
 client's (`useStepUp`); a `428 OPERATOR_SIGNATURE_REQUIRED` with the call's
 `operatorSigner:`, else the client's (`useOperatorSigner`). `client.api` is

@@ -5,9 +5,10 @@ Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.
 ## Unreleased: the node API is generated from core's OpenAPI document
 
 `CalimeroClient` gains a facade with one method per route of core's OpenAPI
-document (`openapi/openapi.json`, core `docs/openapi`), grouped by tag:
-`client.orgs.inviteCreate(org:role:...)`, `client.apps.get(app:)`,
-`client.accounts.me()`, ... It is generated (`scripts/generate-openapi.sh`)
+document (`openapi/openapi.json`, core `docs/openapi`), grouped by its
+`x-calimero-group`: `client.orgs.inviteCreate(org:role:...)`,
+`client.apps.get(app:)`, `client.auth.me()`, `client.packagesApi.list()`, ...
+Retry-safe operations retry and fail over like `call`. It is generated (`scripts/generate-openapi.sh`)
 over swift-openapi-generator's client (the new `MeroAPI` product, whose types
 the facade answers) and checked in; CI fails when it is stale. Requests still
 go through the attested sealed channel; refusals throw the same typed errors.
