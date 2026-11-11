@@ -575,10 +575,12 @@ final class CalimeroClientTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        let uploaded = try await cloud.uploadBlob("a1", Data([1, 2, 3]), contentType: "image/png")
+        let uploaded = try await cloud.answer(as: BlobInfo.self) {
+            try await cloud.apps.blobUpload(app: "a1", body: Data([1, 2, 3]), contentType: "image/png")
+        }
         XCTAssertEqual(uploaded.size, 3)
         XCTAssertEqual(node.requests[0].headers["content-type"], "image/png")
-        _ = try await cloud.uploadBlob("a1", Data([4]))
+        _ = try await cloud.answerJSON { try await cloud.apps.blobUpload(app: "a1", body: Data([4])) }
         XCTAssertEqual(node.requests[1].headers["content-type"], "application/octet-stream")
         let content = try await cloud.blobContent("a1", "B1")
         XCTAssertEqual(content, BlobContent(data: Data([1, 2, 3]), contentType: "image/png"))
