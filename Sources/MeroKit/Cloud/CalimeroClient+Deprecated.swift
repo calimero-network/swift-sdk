@@ -182,7 +182,7 @@ extension CalimeroClient {
     /// Who may reach the app.
     @available(*, deprecated, message: "use client.apps.access(app:access:)")
     public func setAccess(_ app: String, _ access: AppAccess) async throws {
-        let access: Components.Schemas.Access = try Self.converted(json: access.json)
+        let access = access.generated
         _ = try await answer { try await self.apps.access(app: app, access: access) }
     }
 
@@ -284,7 +284,7 @@ extension CalimeroClient {
             if let initArgs { body["initArgs"] = initArgs }
             answer = try await post("apps", .object(body))
         } else {
-            let access: Components.Schemas.Access? = try access.map { try Self.converted(json: $0.json) }
+            let access = access?.generated
             let initArgs = try initArgs.map { try OpenAPIValueContainer($0) }
             answer = try await legacyValue {
                 try await self.apps.create(
