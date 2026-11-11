@@ -17,7 +17,7 @@ go through the attested sealed channel; refusals throw the same typed errors.
   call's `passkey:` or the client's `useStepUp(_:)` passkey; a `428
   OPERATOR_SIGNATURE_REQUIRED` (new: `OperatorSignatureRequired`) with the
   call's `operatorSigner:` or `useOperatorSigner(_:)` (`Ed25519OperatorKey`).
-- **Deprecated:** the 81 methods that wrap one route (`getOrg`, `invite`,
+- **Deprecated:** the 83 methods that wrap one route (`getOrg`, `invite`,
   `createApp`, `listApps`, ...). They keep their signatures and answers and
   name their replacement in the warning.
 - **New dependencies:** `swift-openapi-runtime` 1.9.0 and `swift-http-types`

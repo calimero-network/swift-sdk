@@ -262,6 +262,7 @@ def facade(document, ops, taken):
             body_expr = None
             fields_args = []
             explicit_nulls = []
+            content_type = False
             if op["body"]:
                 kind, case, rest = op["body"]
                 if kind == "fields":
@@ -283,6 +284,10 @@ def facade(document, ops, taken):
                 elif rest == "OpenAPIRuntime.HTTPBody":
                     arg("body", "Data", None)
                     body_expr = f".{case}(HTTPBody(body))"
+                    if case == "any":
+                        # `*/*`: the caller names the type (the generator would send `*/*`).
+                        arg("contentType", "Swift.String", '"application/octet-stream"')
+                        content_type = True
                 else:
                     arg("body", rest, None)
                     body_expr = f".{case}(body)"
@@ -343,6 +348,8 @@ def facade(document, ops, taken):
                 overrides.append("retry: true")
             if explicit_nulls:
                 overrides.append("nulls: nulls")
+            if content_type:
+                overrides.append("contentType: contentType")
             perform = f"client.perform({', '.join(overrides)})" if overrides else "client.perform"
             w(f"            return try await {perform} {{ api in")
             w(f"                {extract}")

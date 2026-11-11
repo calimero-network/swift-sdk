@@ -698,17 +698,13 @@ public actor CalimeroClient {
     /// `400`) is sent as the upload's `Content-Type`: a component app records
     /// it and serves downloads with it. A component app holding as many blobs
     /// as it may answers ``QuotaExceeded``.
+    @available(*, deprecated, message: "use client.apps.blobUpload(app:body:contentType:)")
     public func uploadBlob(
         _ app: String, _ data: Data, contentType: String = "application/octet-stream"
     ) async throws -> BlobInfo {
-        // The document allows only `application/octet-stream`; another type
-        // (which the node records and serves the blob as) goes as written.
-        guard contentType == "application/octet-stream" else {
-            return try decode(
-                BlobInfo.self,
-                try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
+        try await legacy(BlobInfo.self) {
+            try await self.apps.blobUpload(app: app, body: data, contentType: contentType)
         }
-        return try await legacy(BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data) }
     }
 
     /// Upload a sealed file for component app `app` (core rc.9+,

@@ -62,6 +62,9 @@ enum StepUp {
     /// (a `T??` argument given `.some(nil)`), which the generated encoder
     /// would leave out.
     @TaskLocal static var nulls: Set<String> = []
+    /// The `Content-Type` of a `*/*` body (a blob upload), for which the
+    /// generated client would send `*/*` itself.
+    @TaskLocal static var contentType: String?
 
     /// `confirm` for a `412 CONFIRM_REQUIRED`: `passkey`'s assertion over
     /// its challenge. A dismissed prompt is ``ConfirmCancelled``.
@@ -134,6 +137,9 @@ struct SealedClientTransport: ClientTransport {
         for field in request.headerFields where field.name != .authorization && field.name != .contentLength {
             let name = field.name.canonicalName
             headers[name] = headers[name].map { "\($0), \(field.value)" } ?? field.value
+        }
+        if headers["content-type"] == "*/*" {
+            headers["content-type"] = StepUp.contentType ?? "application/octet-stream"
         }
         let path = String((request.path ?? "/").drop { $0 == "/" })
         let response: SealedResponse
@@ -277,14 +283,16 @@ extension CalimeroClient {
     /// What the facade's methods call.
     nonisolated func perform<T: Sendable>(
         passkey: (any PasskeyProvider)? = nil, operatorSigner: (any OperatorSigner)? = nil, retry: Bool = false,
-        nulls: Set<String> = [], _ body: @Sendable (Client) async throws -> T
+        nulls: Set<String> = [], contentType: String? = nil, _ body: @Sendable (Client) async throws -> T
     ) async throws -> T {
         let api = self.api
         do {
             return try await StepUp.$passkey.withValue(passkey ?? StepUp.passkey) {
                 try await StepUp.$operatorSigner.withValue(operatorSigner ?? StepUp.operatorSigner) {
                     try await StepUp.$retry.withValue(retry) {
-                        try await StepUp.$nulls.withValue(nulls) { try await body(api) }
+                        try await StepUp.$nulls.withValue(nulls) {
+                            try await StepUp.$contentType.withValue(contentType) { try await body(api) }
+                        }
                     }
                 }
             }
