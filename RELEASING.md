@@ -16,21 +16,49 @@ dependencies: [
 SPM reads the Git tags of this repo and picks the best match for `from:` /
 `.upToNextMajor(...)` etc. So “releasing a version” == **pushing a tag**.
 
-## Cutting a release (the SwiftPM way)
+## Cutting a release: merge to `master`
 
-1. Make sure `master` is green (build + test + lint + UI tests).
-2. Tag with a `v`-prefixed semver and push the tag:
+Releases are automatic. Every push to `master` runs
+[`release-on-merge.yml`](.github/workflows/release-on-merge.yml), which runs
+semantic-release ([`.releaserc.json`](.releaserc.json)) over the conventional
+commits since the last `v*` tag:
 
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
+| Commit (the squash-merge title) | Release |
+| --- | --- |
+| `feat: …` | minor |
+| `fix:`, `chore:`, `docs:`, `refactor:`, `perf:` | patch |
+| `ci:`, `test:`, `build:` | none |
+| `feat!: …`, or a `BREAKING-CHANGE:` footer | major |
 
-3. `.github/workflows/release.yml` fires on `v*` tags: it re-runs `swift build -c
-   release` + `swift test`, then cuts a **GitHub Release** with generated notes.
+Only the hyphenated `BREAKING-CHANGE` keyword counts: a body line that happens
+to start with "breaking change" does not make a major (see the comment in
+`.releaserc.json`).
 
-That’s it — consumers can now resolve `0.1.0`. (A GitHub Release is optional for
-SPM resolution but nice for humans/changelogs; the tag is what SPM needs.)
+When there is a release, it pushes the tag `v<version>` and creates the GitHub
+Release with notes made from those commits, as the organization's GitHub App
+(`vars.ACTIONS_APP_ID`, `secrets.ACTIONS_APP_PRIVATE_KEY`; the App must be
+installed on this repository). A tag pushed with GITHUB_TOKEN would not start
+other workflows. [`release.yml`](.github/workflows/release.yml) then builds and
+tests the tag (`swift build -c release`, `swift test`); it creates a GitHub
+Release only for a tag pushed by hand, so a release never gets two.
+
+To release by hand anyway (a hotfix tag, say), push a `v`-prefixed semver tag;
+`release.yml` verifies it and cuts the GitHub Release:
+
+```bash
+git tag v0.7.1
+git push origin v0.7.1
+```
+
+### CHANGELOG.md
+
+[CHANGELOG.md](CHANGELOG.md) stays hand-written and is not touched by the
+release: each change adds its own section in its pull request, headed
+`## Unreleased: <what changed>`. The released version of each change is the
+first `v*` tag after its merge, and the generated GitHub Release lists the
+commits per version. (A release commit written back to `master` would need the
+App to bypass branch protection, and the sections are prose a generated
+changelog would duplicate.)
 
 ### Release notes for a core bump
 
@@ -65,7 +93,10 @@ default**. If we later publish to a registry, the release flow becomes
 
 ## CocoaPods (optional, for non-SPM consumers)
 
-A `MeroKit.podspec` is provided. To publish to the CocoaPods trunk after tagging:
+Not part of the automatic release: since 0.7.0 MeroKit depends on
+swift-openapi-runtime and swift-http-types, which `MeroKit.podspec` cannot
+express (they are not on the CocoaPods trunk), so the pod does not build as it
+stands. Before that, the podspec was published by hand after tagging:
 
 ```bash
 pod spec lint MeroKit.podspec
