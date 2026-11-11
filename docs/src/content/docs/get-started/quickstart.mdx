@@ -31,8 +31,8 @@ let client = CalimeroClient(CalimeroClientOptions(
     policy: .development))                 // trusts mock attestation: development only
 
 try await client.signUp(SoftPasskey(), name: "ada")   // a software passkey for rp `localhost`
-let bundle = try await client.uploadBundle(wasm)      // dev clusters only
-let app = try await client.createApp("kv", bundle: .bundle(bundle), initArgs: [:])
+let bundle = try await client.packages.bundlePut(body: wasm).hash   // dev clusters only
+let app = try await client.apps.create(name: "kv", bundle: bundle).appId
 _ = try await client.call(app, "set", ["key": "a", "value": "1"])
 let value = try await client.view(app, "get", ["key": "a"]).result
 for try await event in client.events(app) { print(event.kind, event.data) }
@@ -45,7 +45,7 @@ let client = try await CalimeroClient.connect(
     CalimeroConnectOptions(cluster: "eu-shared-1", policy: .production, zone: "europe-west4-a"))
 // or one node you know: CalimeroClient(CalimeroClientOptions(baseUrl: nodeURL, policy: .production))
 try await client.signIn(PlatformPasskey())   // MeroKitUI: the device's passkey
-let app = try await client.createApp("chat", bundle: .package("com.calimero.chat"), org: orgId)
+let app = try await client.apps.create(name: "chat", package: "com.calimero.chat", org: orgId).appId
 ```
 
 `.production` trusts real TDX quotes only, from a signed mero-tee release at

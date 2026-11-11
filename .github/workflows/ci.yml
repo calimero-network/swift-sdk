@@ -7,6 +7,9 @@ on:
   pull_request:
     branches:
       - master
+      # A PR stacked on a feature branch (feat/openapi-remove-deprecated on
+      # feat/openapi-client) is checked too.
+      - 'feat/**'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}

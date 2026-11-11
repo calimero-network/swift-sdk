@@ -15,17 +15,22 @@ Methods marked with a passkey (`passkey:`) are step-ups: the node answers
 
 | Group | Methods |
 | --- | --- |
-| Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `nodeUrl`, `nodes`, `connect` |
-| Identity | `signUp(_:name:invite:origin:)`, `signIn(_:origin:)`, `signUpPolicy`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `me`, `addPasskey(_:approver:)`, `removePasskey(_:passkey:)`, `labelPasskey`, `usage`, `attestation`, `listApiKeys`, `createApiKey(…, upgrades:, passkey:)`, `revokeApiKey(_:passkey:)` |
-| Package origins | `packageOrigins`, `addPackageOrigin(_:origin:passkey:rpId:)`, `removePackageOrigin(_:origin:passkey:)` |
-| Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed` |
-| Bundles, blobs | `uploadBundle`, `uploadBlob(_:_:contentType:)`, `uploadFile(_:_:)`, `downloadBlob`, `downloadBlobGranted`, `blobContent`, `listBlobs`, `blobInfo`, `deleteBlob` |
-| Packages | `uploadPackage`, `installPackage`, `packages`, `package`, `uninstallPackage` |
-| App instances | `listApps`, `getApp`, `createApp`, `deleteApp`, `setAccess`, `setAppMetadata`, `appStorage`, `appAbi`, `appXcalls`, `transferApp`, `upgradeApp` |
-| Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events` |
-| Presence, aliases | `publishPresence`, `presence`, `presenceStream`, `setAlias`, `aliases`, `alias`, `deleteAlias` |
-| Organizations | `createOrg(_:recoveryKey:)`, `getOrg`, `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `cancelRecovery(_:passkey:)`, `finishRecovery(_:passkey:)` (`RecoverySeed`), `deleteOrg`, `setOrgMetadata`, `setMemberMetadata`, `upgradeOrg`, `upgradeRun`, `retryUpgradeRun`, `setMember(…, passkey:)`, `removeMember(…, passkey:)`, `setCapabilities(…, passkey:)`, `createTeam`, `getTeam`, `updateTeam`, `deleteTeam`, `setTeamMember(…, passkey:)`, `removeTeamMember(…, passkey:)`, `invite(…, passkey:)`, `redeemInvite` |
-| Approvals | `approveRelease`, `approveOutbound`, `appsReport`, `appsReportAll`, `releaseRules`, `pendingApprovals`, `requestConsent`, `openConsentPage`, `consentResult`, `waitForConsent`, `publisherBinding`, `bindPublisher`, `upgradePublished` |
-| Deployments | `createDeployment`, `deployments`, `deployment`, `deleteDeployment`, `offerApp`, `withdrawApp`, `deploymentOrgs`; `createApp(bundle: .package(…, deployment:))`; `pageDeployment(_:)`, `frontendManifest(_:)` |
-| Deployers | `grantDeployer`, `deployers`, `revokeDeployer` |
-| Operator | `opsApps`, `opsOrgs`, `setReleaseDeadline`, `liftReleaseDeadline` |
+| Credentials | `useApiKey`, `useSession`, `session`, `onSessionChange`, `useStepUp`, `useOperatorSigner`, `nodeUrl`, `nodes`, `connect` |
+| Identity | `signUp(_:name:invite:origin:)`, `signIn(_:origin:)`, `refresh`, `signOut`, `signOutEverywhere`, `forget`, `addPasskey(_:approver:)` |
+| Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events`, `presenceStream` |
+| Blobs | `uploadFile(_:_:)`, `blobContent`, `listBlobs`, `blobInfo` |
+| Organizations | `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `updateTeam` |
+| Approvals | `appsReportAll`, `pendingApprovals`, `openConsentPage`, `waitForConsent`, `checkConsentCode`; `pageDeployment(_:)`, `frontendManifest(_:)` |
+| Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed`; `JSONValue(encoding:)` (a facade answer as JSON, to read as MeroKit's types) |
+
+Every other route is a method of the generated facade, one per operation of
+core's OpenAPI document, grouped by its `x-calimero-group`: `client.auth`
+(`me`, `usage`, `apikeyCreate`, `aliasList`, ...), `client.apps` (`create`,
+`get`, `list`, `blobDownload`, `presencePublish`, ...), `client.orgs` (`create`,
+`get`, `teamCreate`, `inviteCreate`, `setMember`, ...), `client.consent`
+(`pageCreate`, `pageResult`), `client.ops`, `client.packages`,
+`client.deployments` (sign-up, deployers, deployments) and
+`client.publicApi` (`attestation`, `releasesPublic`, `publisherBinding`).
+`import MeroAPI` to name the types they answer. A step-up method takes
+`passkey:` (else the client's `useStepUp` passkey); an operator decision takes
+`operatorSigner:` (else `useOperatorSigner`).

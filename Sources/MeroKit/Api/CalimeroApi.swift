@@ -215,7 +215,9 @@ struct StepUpMiddleware: ClientMiddleware {
 }
 
 /// Holds the bytes of the answer to the request a deprecated method makes,
-/// for its own decoding (``CalimeroClient/answer(_:)``).
+/// for its own decoding: `uploadFile`, `listBlobs`, `blobInfo` (a sealed
+/// file's `sha256` and `sealed`, which the document's blob shapes leave out)
+/// and `blobContent` (the type a blob is served as).
 final class AnswerTap: @unchecked Sendable {
     @TaskLocal static var current: AnswerTap?
 
@@ -314,9 +316,9 @@ extension CalimeroClient {
     }
 
     /// The bytes the node answered to the one request `operation` makes
-    /// through the facade: what the deprecated methods decode into their own
-    /// (lenient) types, whether or not the generated types accept it.
-    func answer<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> Data {
+    /// through the facade, whether or not the generated types accept them
+    /// (see ``AnswerTap``).
+    func answerBytes<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> Data {
         let tap = AnswerTap()
         do {
             _ = try await AnswerTap.$current.withValue(tap) { try await operation() }
@@ -332,7 +334,7 @@ extension CalimeroClient {
 
 extension OpenAPIValueContainer {
     /// `value` as the generated client's free-form JSON.
-    init(_ value: JSONValue) throws {
+    public init(_ value: JSONValue) throws {
         self = try MeroJSON.decode(OpenAPIValueContainer.self, from: CanonicalJSON.data(value))
     }
 }
@@ -347,5 +349,54 @@ extension AppAccess {
         case .accounts(let accounts): return .accounts(.init(kind: .accounts, accounts: accounts))
         case .team(let team): return .team(.init(kind: .team, team: team))
         }
+    }
+}
+
+extension Deployer {
+    /// This deployer as the generated API's `Deployer`.
+    public var generated: Components.Schemas.Deployer {
+        switch self {
+        case .account(let id): return .case1(.init(account: id))
+        case .org(let id): return .case2(.init(org: id))
+        }
+    }
+}
+
+extension OrgRole {
+    /// This role as the generated API's `OrgRole`.
+    public var generated: Components.Schemas.OrgRole { Components.Schemas.OrgRole(rawValue: rawValue) ?? .member }
+}
+
+extension TeamRole {
+    /// This role as the generated API's `TeamRole`.
+    public var generated: Components.Schemas.TeamRole { Components.Schemas.TeamRole(rawValue: rawValue) ?? .member }
+}
+
+extension TeamJoin {
+    /// This rule as the generated API's `TeamJoin`.
+    public var generated: Components.Schemas.TeamJoin { Components.Schemas.TeamJoin(rawValue: rawValue) ?? .invite }
+}
+
+extension ConsentRequest {
+    /// This request as the body of `client.consent.pageCreate(body:)`.
+    public func generated() throws -> Operations.ConsentPageCreate.Input.Body.JsonPayload {
+        try MeroJSON.decode(Operations.ConsentPageCreate.Input.Body.JsonPayload.self, from: CanonicalJSON.data(json))
+    }
+}
+
+extension JSONValue {
+    /// A generated value (a facade method's answer) as JSON, to read as one
+    /// of MeroKit's types: `OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))`.
+    public init(encoding value: some Encodable) throws {
+        self = try MeroJSON.decode(JSONValue.self, from: try MeroJSON.encode(value))
+    }
+}
+
+extension MeroJSON {
+    /// A generated value (a facade method's answer) as one of MeroKit's
+    /// `Decodable` types, through its JSON:
+    /// `try MeroJSON.convert(try await client.consent.pageResult(request: id), to: ConsentResult.self)`.
+    public static func convert<T: Decodable>(_ value: some Encodable, to type: T.Type) throws -> T {
+        try decode(type, from: try encode(value))
     }
 }

@@ -96,7 +96,8 @@ public final class FakeCloud: @unchecked Sendable {
         case on("GET", "auth/me") != nil:
             let mine = orgs.filter { $0.value.members[Self.me] != nil }.sorted { $0.key < $1.key }
             return .json([
-                "accountId": .string(Self.me),
+                "accountId": .string(Self.me), "name": "dev", "passkeys": [], "via": "session", "passkeyId": .null,
+                "approvedReleases": [], "outboundApprovals": [:],
                 "orgs": .array(
                     mine.map {
                         [
@@ -116,14 +117,16 @@ public final class FakeCloud: @unchecked Sendable {
             var teamJSON: [String: JSONValue] = [:]
             for (tid, t) in teams where t.org == org {
                 teamJSON[tid] = [
-                    "teamId": .string(tid), "name": .string(t.name), "join": .string(t.join),
-                    "members": .object(t.members.mapValues { .bool($0 == "lead") }),
+                    "teamId": .string(tid), "name": .string(t.name), "join": .string(t.join), "parent": .null,
+                    "members": .object(t.members.mapValues { .bool($0 == "lead") }), "readOnly": [],
+                    "capabilities": [:], "metadata": .null, "removed": [],
                 ]
             }
             return .json([
                 "orgId": .string(org), "name": .string(o.name), "metadata": o.metadata,
                 "members": .object(o.members.mapValues { .string($0) }), "teams": .object(teamJSON),
-                "memberMetadata": .object(o.memberMeta),
+                "memberMetadata": .object(o.memberMeta), "defaultCapabilities": 4, "capabilities": [:],
+                "approvedReleases": [], "outboundApprovals": [:], "upgradeRuns": [:],
             ])
         case on("POST", "orgs/*/metadata") != nil:
             w = on("POST", "orgs/*/metadata")!
@@ -160,14 +163,16 @@ public final class FakeCloud: @unchecked Sendable {
             let team = w[1]
             guard let t = teams[team] else { return .error(404, "NOT_FOUND") }
             return .json([
-                "teamId": .string(team), "name": .string(t.name), "join": .string(t.join),
+                "teamId": .string(team), "name": .string(t.name), "join": .string(t.join), "parent": .null,
+                "metadata": .null, "children": [], "myRole": .string(t.members[Self.me] ?? "member"),
+                "member": .bool(t.members[Self.me] != nil),
                 "members": .array(
                     t.members.map { entry -> JSONValue in
                         ["account": .string(entry.key), "role": .string(entry.value), "capabilities": 0]
                     }),
                 "apps": .array(
                     apps.filter { $0.value.team == team }.sorted { $0.key < $1.key }.map {
-                        ["appId": .string($0.key), "name": .string($0.value.name)]
+                        ["appId": .string($0.key), "name": .string($0.value.name), "contextId": .string($0.key)]
                     }),
             ])
         case on("POST", "orgs/*/invites") != nil:
@@ -179,7 +184,7 @@ public final class FakeCloud: @unchecked Sendable {
             let token = w[0]
             let org = String(token.dropFirst(4))
             orgs[org]?.members[Self.me] = "member"
-            return .json(["orgId": .string(org)])
+            return .json(["org": .string(org), "orgId": .string(org)])
         case on("POST", "apps") != nil:
             let app = id("app")
             let access = body["access"]
@@ -187,24 +192,22 @@ public final class FakeCloud: @unchecked Sendable {
                 body["name"]?.stringValue ?? "", body["org"]?.stringValue,
                 access?["kind"] == "team" ? access?["team"]?.stringValue : nil, body["package"]?.stringValue ?? ""
             )
-            return .json(["appId": .string(app)])
+            return .json(["appId": .string(app), "contextId": .string(app), "group": 1, "replicas": [1]])
         case on("GET", "apps") != nil:
             let package = request.path.contains("package=") ? request.path.components(separatedBy: "package=")[1] : nil
             return .json([
                 "apps": .array(
                     apps.filter { package == nil || $0.value.package == package }.sorted { $0.key < $1.key }.map {
-                        [
-                            "appId": .string($0.key), "name": .string($0.value.name), "owner": .string(Self.me),
-                            "org": $0.value.org.map { .string($0) } ?? .null, "bundle": "b",
-                            "package": .string($0.value.package),
-                        ]
+                        Self.app(
+                            $0.key, name: $0.value.name, org: $0.value.org, team: $0.value.team,
+                            package: $0.value.package)
                     })
             ])
         case on("GET", "apps/*") != nil:
             w = on("GET", "apps/*")!
             let app = w[0]
             guard let a = apps[app] else { return .error(404, "NOT_FOUND") }
-            return .json(["appId": .string(app), "name": .string(a.name)])
+            return .json(Self.app(app, name: a.name, org: a.org, team: a.team, package: a.package))
         default:
             return .error(404, "NOT_FOUND", message: "no route \(request.method) \(request.path)")
         }
@@ -212,3 +215,16 @@ public final class FakeCloud: @unchecked Sendable {
 }
 
 // swiftlint:enable large_tuple cyclomatic_complexity function_body_length
+
+extension FakeCloud {
+    /// An app instance as `GET /apps` and `GET /apps/{app}` answer it (the document's `App`).
+    static func app(_ id: String, name: String, org: String?, team: String?, package: String) -> JSONValue {
+        [
+            "appId": .string(id), "name": .string(name), "group": 1, "bundle": "b", "owner": .string(me),
+            "org": org.map { .string($0) } ?? .null,
+            "access": team.map { ["kind": "team", "team": .string($0)] } ?? ["kind": "org"],
+            "confirmMethods": [], "replicas": [1], "createdAt": 1, "initArgs": [:], "metadata": .null,
+            "release": ["package": .string(package), "version": "1.0.0"], "package": .string(package),
+        ]
+    }
+}

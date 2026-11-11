@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MeroAPI
 import MeroKitTestSupport
 import XCTest
 
@@ -80,7 +81,7 @@ final class CoreRc10ParityTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        let policy = try await cloud.signUpPolicy()
+        let policy = try await cloud.answer(as: SignUpPolicy.self) { try await cloud.deployments.signUpPublic() }
         XCTAssertEqual(
             policy, SignUpPolicy(policy: .invite, orgInvites: true, signUpInvites: true, inviteRequired: true))
         XCTAssertNil(node.requests[0].bearer)
@@ -142,7 +143,8 @@ final class CoreRc10ParityTests: XCTestCase {
         FakeCloudNode { _ in
             .json(["accountId": "acc_1", "via": "session", "app": "com.example.chat", "origin": "https://c.example"])
         }.install()
-        let me = try await client().me()
+        let cloud = client()
+        let me = AccountInfo(json: try await cloud.answerJSON { try await cloud.auth.me() })
         XCTAssertEqual(me.via, "session")
         XCTAssertEqual(me.app, "com.example.chat")
         XCTAssertEqual(me.origin, "https://c.example")
@@ -156,9 +158,9 @@ final class CoreRc10ParityTests: XCTestCase {
         node.install()
         let cloud = client()
         let passkey = SoftPasskey()
-        try await cloud.revokeApiKey("k0", passkey: passkey)
-        let key = try await cloud.createApiKey(
-            label: "ci", ttlSecs: 86_400, upgrades: UpgradeKeyScope(app: "app1"), passkey: passkey)
+        _ = try await cloud.answerJSON { try await cloud.auth.apikeyRevoke(key: "k0", passkey: passkey) }
+        let key = try await cloud.auth.apikeyCreate(
+            label: "ci", ttlSecs: 86_400, upgrades: .init(app: "app1"), passkey: passkey)
         XCTAssertEqual(key.key, "cal_up")
         XCTAssertEqual(
             node.requests.map { "\($0.method) \($0.path)" },
@@ -187,13 +189,21 @@ final class CoreRc10ParityTests: XCTestCase {
         node.install()
         let cloud = client()
         let passkey = SoftPasskey()
-        let added = try await cloud.addPackageOrigin(
-            "com.example.chat", origin: "https://chat.example.com", passkey: passkey, rpId: "chat.example.com")
+        let added = try await cloud.answer(as: PackageOrigin.self) {
+            try await cloud.packages.originsAdd(
+                package: "com.example.chat", origin: "https://chat.example.com", rpId: "chat.example.com",
+                passkey: passkey)
+        }
         XCTAssertEqual(added.rpId, "chat.example.com")
         XCTAssertEqual(added.package, "com.example.chat")
-        let listed = try await cloud.packageOrigins("com.example.chat")
+        let listed = try await cloud.answer(as: OriginListing.self) {
+            try await cloud.packages.originsList(package: "com.example.chat")
+        }.origins
         XCTAssertEqual(listed, [added])
-        try await cloud.removePackageOrigin("com.example.chat", origin: "https://chat.example.com", passkey: passkey)
+        _ = try await cloud.answerJSON {
+            try await cloud.packages.originsRemove(
+                package: "com.example.chat", origin: "https://chat.example.com", passkey: passkey)
+        }
 
         let routes = node.requests.map { "\($0.method) \($0.path)" }
         XCTAssertEqual(
@@ -223,7 +233,11 @@ final class CoreRc10ParityTests: XCTestCase {
         let node = FakeCloudNode { request in
             switch request.path {
             case "/orgs": return .json(["orgId": "o1"])
-            case "/auth/me": return .json(["accountId": "acc_new"])
+            case "/auth/me":
+                return .json([
+                    "accountId": "acc_new", "name": "new", "passkeys": [], "orgs": [], "via": "session",
+                    "passkeyId": .null, "approvedReleases": [], "outboundApprovals": [:],
+                ])
             case "/orgs/o1/recovery/start": return .json(["startedAt": 100, "readyAt": 259_300])
             case "/orgs/o1/recovery/finish":
                 if request.json?["confirm"] == nil { return .error(412, "CONFIRM_REQUIRED", details: Self.stepUp) }
@@ -236,7 +250,7 @@ final class CoreRc10ParityTests: XCTestCase {
         node.install()
         let cloud = client()
         let passkey = SoftPasskey()
-        let org = try await cloud.createOrg("Acme", recoveryKey: seed.publicKey)
+        let org = try await cloud.orgs.create(name: "Acme", recoveryKey: seed.publicKey).orgId
         XCTAssertEqual(org, "o1")
         XCTAssertEqual(node.requests[0].json?["recoveryKey"], .string(seed.publicKey))
         try await cloud.setRecoveryKey("o1", publicKey: nil, passkey: passkey)
@@ -254,9 +268,9 @@ final class CoreRc10ParityTests: XCTestCase {
                 signature, for: RecoverySeed.message(org: "o1", account: "acc_new", nonce: nonce)),
             "the seed signs the organization, this account and the nonce")
 
-        try await cloud.cancelRecovery("o1", passkey: passkey)
+        _ = try await cloud.answerJSON { try await cloud.orgs.recoveryCancel(org: "o1", passkey: passkey) }
         do {
-            try await cloud.finishRecovery("o1", passkey: passkey)
+            _ = try await cloud.orgs.recoveryFinish(org: "o1", passkey: passkey)
             XCTFail("expected RecoveryNotReady")
         } catch let error as RecoveryNotReady {
             XCTAssertEqual(error.readyAt, 259_300)
@@ -323,4 +337,9 @@ final class CoreRc10ParityTests: XCTestCase {
         XCTAssertEqual(node.requests[0].path, "/apps/app1/blobs?sealed=true")
         XCTAssertEqual(node.requests[0].body, Data("hello".utf8))
     }
+}
+
+/// `GET /package-origins/{package}`'s answer, read as ``PackageOrigin``s.
+private struct OriginListing: Decodable {
+    let origins: [PackageOrigin]
 }

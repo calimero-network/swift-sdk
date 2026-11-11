@@ -1,4 +1,5 @@
 import Foundation
+import MeroAPI
 import MeroKitTestSupport
 import XCTest
 
@@ -78,7 +79,7 @@ final class CalimeroClientTests: XCTestCase {
         let cloud = client()
         let session = try await cloud.signUp(SoftPasskey(), name: "ada")
         XCTAssertEqual(session.accountId, "acc_1")
-        let me = try await cloud.me()
+        let me = AccountInfo(json: try await cloud.answerJSON { try await cloud.auth.me() })
         XCTAssertEqual(me.accountId, "acc_1")
 
         XCTAssertEqual(node.attests, 1)
@@ -109,7 +110,7 @@ final class CalimeroClientTests: XCTestCase {
         let node = FakeCloudNode { _ in .json([:]) }
         node.install()
         do {
-            _ = try await client(allowMock: false).me()
+            _ = try await client(allowMock: false).auth.me()
             XCTFail("a mock quote must be refused")
         } catch let error as TeeTrustError {
             XCTAssertTrue(error.message.contains("mock quote refused"), error.message)
@@ -228,7 +229,7 @@ final class CalimeroClientTests: XCTestCase {
         await cloud.useSession(
             CalimeroSession(accountId: "a", sessionToken: "v2.x", expiresAt: 0, refreshToken: "rt_x"))
         do {
-            _ = try await cloud.me()
+            _ = try await cloud.answerJSON { try await cloud.auth.me() }
             XCTFail("expected LoginRequired")
         } catch is LoginRequired {}
         XCTAssertEqual(node.requests.map(\.path), ["/auth/me", "/auth/refresh"])
@@ -249,7 +250,8 @@ final class CalimeroClientTests: XCTestCase {
     func testAWrongNodeWithNoOtherNodeReachesTheCaller() async throws {
         FakeCloudNode { _ in .error(421, "WRONG_NODE") }.install()
         do {
-            _ = try await client().me()
+            let cloud = client()
+            _ = try await cloud.answerJSON { try await cloud.auth.me() }
             XCTFail("expected WrongNode")
         } catch is WrongNode {}
     }
@@ -296,7 +298,7 @@ final class CalimeroClientTests: XCTestCase {
             .error(412, "CONFIRM_REQUIRED", details: ["challengeId": "c", "challenge": "AAAA", "rpId": "localhost"])
         }.install()
         do {
-            try await client().deleteOrg("o1", passkey: Declining())
+            _ = try await client().orgs.delete(org: "o1", passkey: Declining())
             XCTFail("expected ConfirmCancelled")
         } catch is ConfirmCancelled {}
     }
@@ -340,19 +342,21 @@ final class CalimeroClientTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        let org = try await cloud.createOrg("Acme")
+        let org = try await cloud.orgs.create(name: "Acme").orgId
         XCTAssertEqual(org, "o1")
-        let team = try await cloud.createTeam("o1", name: "General", join: .everyone)
+        let team = try await cloud.orgs.teamCreate(org: "o1", name: "General", join: .everyone).teamId
         XCTAssertEqual(team, "t1")
-        let app = try await cloud.createApp(
-            "chat", bundle: .package("com.calimero.chat"), org: "o1", access: .team("t1"), initArgs: [:])
+        let app = try await cloud.answerJSON {
+            try await cloud.apps.create(
+                name: "chat", package: "com.calimero.chat", org: "o1", access: AppAccess.team("t1").generated)
+        }["appId"]
         XCTAssertEqual(app, "a1")
         let created = try XCTUnwrap(node.requests.last?.json)
         XCTAssertEqual(created["package"], "com.calimero.chat")
         XCTAssertEqual(created["access"], ["kind": "team", "team": "t1"])
-        let token = try await cloud.invite("o1", passkey: SoftPasskey())
+        let token = try await cloud.orgs.inviteCreate(org: "o1", role: .member, passkey: SoftPasskey()).token
         XCTAssertEqual(token, "inv_x")
-        _ = try await cloud.redeemInvite("inv_x")
+        _ = try await cloud.answerJSON { try await cloud.orgs.inviteRedeem(token: "inv_x") }
         let started = try await cloud.openConsentPage(
             upgradeConsent(app: "a1", toVersion: "1.1.0", returnTo: "chat://consent")
         ) { url in
@@ -426,16 +430,17 @@ final class CalimeroClientTests: XCTestCase {
         node.install()
         let cloud = client()
         let passkey = SoftPasskey()
-        try await cloud.setMember("o1", account: "acc_2", role: .admin, passkey: passkey)
-        try await cloud.removeMember("o1", account: "acc_2", passkey: passkey)
-        try await cloud.setCapabilities("o1", OrgCapabilities(rawValue: 1), passkey: passkey, account: "acc_2")
-        try await cloud.setTeamMember("o1", "t1", account: "acc_2", passkey: passkey, role: .lead)
-        try await cloud.removeTeamMember("o1", "t1", account: "acc_2", passkey: passkey)
-        let token = try await cloud.invite("o1", role: .member, passkey: passkey, teams: ["t1"], uses: 2)
-        XCTAssertEqual(token, "inv_1")
-        let key = try await cloud.createApiKey(label: "ci", readOnly: true, passkey: passkey)
+        _ = try await cloud.orgs.setMember(org: "o1", account: "acc_2", role: .admin, passkey: passkey)
+        _ = try await cloud.orgs.removeMember(org: "o1", account: "acc_2", passkey: passkey)
+        _ = try await cloud.orgs.capabilities(org: "o1", account: "acc_2", capabilities: 1, passkey: passkey)
+        _ = try await cloud.orgs.teamSetMember(org: "o1", team: "t1", account: "acc_2", role: .lead, passkey: passkey)
+        _ = try await cloud.orgs.teamRemoveMember(org: "o1", team: "t1", account: "acc_2", passkey: passkey)
+        let token = try await cloud.orgs.inviteCreate(
+            org: "o1", role: .member, teams: ["t1"], uses: 2, passkey: passkey)
+        XCTAssertEqual(token.token, "inv_1")
+        let key = try await cloud.auth.apikeyCreate(label: "ci", readOnly: true, passkey: passkey)
         XCTAssertEqual(key.key, "cal_x")
-        try await cloud.removePasskey("cred1", passkey: passkey)
+        _ = try await cloud.auth.passkeyRemove(cred: "cred1", passkey: passkey)
         let added = try await cloud.addPasskey(SoftPasskey(), approver: passkey)
         XCTAssertEqual(added, "cred2")
 
@@ -468,7 +473,8 @@ final class CalimeroClientTests: XCTestCase {
     func testRedeemingAnInviteNeedsNoApproval() async throws {
         let node = FakeCloudNode { _ in .json(["orgId": "o1"]) }
         node.install()
-        let answer = try await client().redeemInvite("inv_1")
+        let cloud = client()
+        let answer = try await cloud.answerJSON { try await cloud.orgs.inviteRedeem(token: "inv_1") }
         XCTAssertEqual(answer["orgId"], "o1")
         XCTAssertEqual(node.requests.count, 1)
     }
@@ -495,7 +501,7 @@ final class CalimeroClientTests: XCTestCase {
                 session: MockURLProtocol.makeSession(), random: { 0.99 }))
         let nodes = await cloud.nodes
         XCTAssertEqual(nodes, ["https://a.test", "https://b.test"], "zone first; bad URLs and weights dropped")
-        let me = try await cloud.me()
+        let me = AccountInfo(json: try await cloud.answerJSON { try await cloud.auth.me() })
         XCTAssertEqual(me.accountId, "acc")
         XCTAssertEqual(first.requests.count, 1)
         XCTAssertEqual(listings.count, 1)
@@ -569,14 +575,16 @@ final class CalimeroClientTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        let uploaded = try await cloud.uploadBlob("a1", Data([1, 2, 3]), contentType: "image/png")
+        let uploaded = try await cloud.answer(as: BlobInfo.self) {
+            try await cloud.apps.blobUpload(app: "a1", body: Data([1, 2, 3]), contentType: "image/png")
+        }
         XCTAssertEqual(uploaded.size, 3)
         XCTAssertEqual(node.requests[0].headers["content-type"], "image/png")
-        _ = try await cloud.uploadBlob("a1", Data([4]))
+        _ = try await cloud.answerJSON { try await cloud.apps.blobUpload(app: "a1", body: Data([4])) }
         XCTAssertEqual(node.requests[1].headers["content-type"], "application/octet-stream")
         let content = try await cloud.blobContent("a1", "B1")
         XCTAssertEqual(content, BlobContent(data: Data([1, 2, 3]), contentType: "image/png"))
-        let granted = try await cloud.downloadBlobGranted("a1", "B1", grant: "g+/=1")
+        let granted = try await cloud.apps.blobDownload(app: "a1", id: "B1", grant: "g+/=1")
         XCTAssertEqual(granted, Data([1, 2, 3]))
         XCTAssertEqual(node.requests.last?.path, "/apps/a1/blobs/B1?grant=g%2B%2F%3D1")
         XCTAssertNil(node.requests.last?.bearer)
@@ -643,17 +651,30 @@ final class CalimeroClientTests: XCTestCase {
         node.install()
         let cloud = client()
         let passkey = SoftPasskey()
-        let xcalls = try await cloud.appXcalls("a1")
+        let xcalls = try await cloud.answer(as: AppXcalls.self) { try await cloud.apps.xcalls(app: "a1") }
         XCTAssertEqual(xcalls.pending, 2)
         XCTAssertEqual(xcalls.deadLetters.first?.app, "a2")
 
-        let id = try await cloud.createDeployment("Shop", owner: .org("o1"), passkey: passkey)
+        let created = try await cloud.answerJSON {
+            try await cloud.deployments.create(name: "Shop", owner: Deployer.org("o1").generated, passkey: passkey)
+        }
+        let id = try XCTUnwrap(created["id"]?.stringValue)
         XCTAssertEqual(id, "dep1")
-        try await cloud.offerApp(id, app: "shop", package: "com.x", version: "1.0.0", passkey: passkey)
-        try await cloud.withdrawApp(id, app: "shop", passkey: passkey)
-        try await cloud.deleteDeployment(id, passkey: passkey)
-        try await cloud.grantDeployer(.account("acc_2"), passkey: passkey, until: Date(timeIntervalSince1970: 0))
-        try await cloud.revokeDeployer(.org("o1"), passkey: passkey)
+        _ = try await cloud.answerJSON {
+            try await cloud.deployments.offer(
+                id: id, app: "shop", package: "com.x", version: "1.0.0", passkey: passkey)
+        }
+        _ = try await cloud.answerJSON {
+            try await cloud.deployments.withdraw(id: id, app: "shop", passkey: passkey)
+        }
+        _ = try await cloud.answerJSON { try await cloud.deployments.delete(id: id, passkey: passkey) }
+        _ = try await cloud.answerJSON {
+            try await cloud.deployments.deployerGrant(
+                deployer: Deployer.account("acc_2").generated, until: "1970-01-01T00:00:00Z", passkey: passkey)
+        }
+        _ = try await cloud.answerJSON {
+            try await cloud.deployments.deployerRevoke(key: Deployer.org("o1").key, passkey: passkey)
+        }
         let confirmed = node.requests.filter { $0.json?["confirm"] != nil }.map { "\($0.method) \($0.path)" }
         XCTAssertEqual(
             confirmed,
@@ -669,19 +690,20 @@ final class CalimeroClientTests: XCTestCase {
         XCTAssertEqual(grant["deployer"], ["account": "acc_2"])
         XCTAssertEqual(grant["until"], "1970-01-01T00:00:00Z")
 
-        let mine = try await cloud.deployments()
+        let mine = try await cloud.answer(as: DeploymentListing.self) { try await cloud.deployments.list() }
+            .deployments
         XCTAssertEqual(mine.first?.owner, .org("o1"))
-        let shown = try await cloud.deployment("dep1")
+        let shown = try await cloud.answer(as: PublicDeployment.self) { try await cloud.deployments.get(id: "dep1") }
         XCTAssertEqual(shown.owner.name, "Acme")
-        let orgs = try await cloud.deploymentOrgs("dep1")
+        let orgs = try await cloud.answer(as: DeploymentOrgs.self) { try await cloud.deployments.orgs(id: "dep1") }
         XCTAssertEqual(orgs.orgs.first?.instances, 3)
         XCTAssertEqual(orgs.outsideOrgs, 1)
-        let deployers = try await cloud.deployers()
+        let deployers = try await cloud.answer(as: DeployersInfo.self) { try await cloud.deployments.deployerList() }
         XCTAssertEqual(deployers.deployments, .granted)
         XCTAssertEqual(deployers.grants.first?.deployer, .org("o1"))
         XCTAssertEqual(deployerKey(.account("a")), "account:a")
 
-        _ = try await cloud.createApp("shop", bundle: .package("com.x", deployment: "dep1"))
+        _ = try await cloud.answerJSON { try await cloud.apps.create(package: "com.x", deployment: "dep1") }
         XCTAssertEqual(node.requests.last?.json?["deployment"], "dep1")
         XCTAssertEqual(pageDeployment(URL(string: "https://x.test/1.0.0/?deployment=dep1")), "dep1")
         XCTAssertNil(pageDeployment(URL(string: "https://x.test/1.0.0/")))
@@ -725,4 +747,9 @@ final class CalimeroClientTests: XCTestCase {
         XCTAssertEqual(shown.get, "GBS-YKH")
         XCTAssertEqual(opened.count, 0)
     }
+}
+
+/// `GET /deployments`' answer, read as ``DeploymentInfo``s.
+private struct DeploymentListing: Decodable {
+    let deployments: [DeploymentInfo]
 }
