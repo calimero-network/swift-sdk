@@ -60,6 +60,13 @@ public final class ServedPageHandoff: @unchecked Sendable {
     public static let approveInfo = "calimero.native-approve.v1"
     public static let approveFragment = "native-approve"
 
+    /// The served page as a consent page's `returnTo`: it passes the answer on
+    /// to the app (`callback?request_id=…&result=…`).
+    public static func consentReturnTo(origin: URL, version: String) -> String {
+        let base = origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
+        return "\(base)/\(version)/?native-consent=1"
+    }
+
     private let privateKey: P256.KeyAgreement.PrivateKey
     public let state: String
     private let lock = NSLock()

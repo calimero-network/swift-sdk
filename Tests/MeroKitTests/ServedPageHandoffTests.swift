@@ -129,3 +129,12 @@ final class ServedPageApprovalTests: XCTestCase {
             url.fragment, "native-approve&state=\(h.state)&key=\(h.publicKey)&challenge=AAAA&rpId=calimero.network")
     }
 }
+
+final class ServedConsentReturnTests: XCTestCase {
+    func testTheConsentPageReturnsToTheServedPageWithoutAFragment() {
+        let to = ServedPageHandoff.consentReturnTo(
+            origin: URL(string: "https://x.apps.calimero.network/")!, version: "3.1.72")
+        XCTAssertEqual(to, "https://x.apps.calimero.network/3.1.72/?native-consent=1")
+        XCTAssertNil(URL(string: to)?.fragment)
+    }
+}

@@ -62,4 +62,18 @@ extension MeroClient {
             origin: AppHost.origin(package: package, cluster: cluster, domain: appsDomain), callback: callback,
             opener: opener, session: urlSession)
     }
+
+    /// Where the node's consent page sends a package-bound session back: the
+    /// package's served page (`{origin}/{version}/?native-consent=1`), which
+    /// passes the answer on to the app's own scheme. The node takes only the
+    /// package's own https origin as `returnTo`, never an app scheme.
+    /// `nil` on a development node, where the app's callback is used as it is.
+    public func servedConsentReturnTo(cluster: String? = nil, appsDomain: String = AppHost.defaultDomain) async throws
+        -> String?
+    {
+        guard !allowMock, let package = config.packageName else { return nil }
+        let origin = AppHost.origin(package: package, cluster: cluster, domain: appsDomain)
+        let version = try await AppHost.latestVersion(origin: origin, session: urlSession)
+        return ServedPageHandoff.consentReturnTo(origin: origin, version: version)
+    }
 }
