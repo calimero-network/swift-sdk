@@ -659,7 +659,9 @@ final class CalimeroClientTests: XCTestCase {
             confirmed,
             [
                 "POST /deployments", "POST /deployments/dep1/apps", "DELETE /deployments/dep1/apps/shop",
-                "DELETE /deployments/dep1", "POST /deployers", "DELETE /deployers/org:o1",
+                "DELETE /deployments/dep1", "POST /deployers",
+                // The generated client percent-encodes a path parameter's `:` (the node decodes it).
+                "DELETE /deployers/org%3Ao1",
             ])
         let create = try XCTUnwrap(node.requests.last { $0.path == "/deployments" }?.json)
         XCTAssertEqual(create["owner"], ["org": "o1"])

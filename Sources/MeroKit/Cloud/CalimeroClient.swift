@@ -1,4 +1,6 @@
 import Foundation
+import MeroAPI
+import OpenAPIRuntime
 
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -118,6 +120,8 @@ public actor CalimeroClient {
     private var refreshing: Task<CalimeroSession, Error>?
     private var refreshGeneration = 0
     private var sessionObserver: (@Sendable (CalimeroSession?) -> Void)?
+    private var stepUpPasskey: (any PasskeyProvider)?
+    private var operatorKey: (any OperatorSigner)?
     private let sleep: @Sendable (Double) async -> Void
 
     public init(_ options: CalimeroClientOptions) {
@@ -261,6 +265,26 @@ public actor CalimeroClient {
         setCurrent(session)
     }
 
+    /// The passkey that approves a `412 CONFIRM_REQUIRED` for a request sent
+    /// through the facade (``orgs``, ``apps``, ...) or ``api`` without a
+    /// `passkey:` of its own; `nil` (the default) lets the refusal through as
+    /// ``ConfirmRequired``.
+    public func useStepUp(_ passkey: (any PasskeyProvider)?) {
+        stepUpPasskey = passkey
+    }
+
+    /// The operator key that signs a `428 OPERATOR_SIGNATURE_REQUIRED`
+    /// statement for a request without an `operatorSigner:` of its own;
+    /// `nil` (the default) lets the refusal through as ``OperatorSignatureRequired``.
+    public func useOperatorSigner(_ signer: (any OperatorSigner)?) {
+        operatorKey = signer
+    }
+
+    /// What answers a step-up when the request names nothing itself.
+    var stepUpDefaults: (passkey: (any PasskeyProvider)?, signer: (any OperatorSigner)?) {
+        (stepUpPasskey, operatorKey)
+    }
+
     /// The session in use, or `nil` (signed out, or an API key).
     public var session: CalimeroSession? { current }
 
@@ -274,16 +298,17 @@ public actor CalimeroClient {
     /// One request to the node in use, with the credential held now; the
     /// response whatever its status.
     private func request(
-        _ method: String, _ path: String, body: Data?, contentType: String
+        _ method: String, _ path: String, body: Data?, contentType: String, headers: [String: String] = [:]
     ) async throws -> SealedResponse {
         if let source, Date() >= source.due { reread() }
         let url = nodeUrl
         guard let target = URL(string: "\(url)/\(path)") else { throw AccountError.invalidInput("bad path \(path)") }
         var request = URLRequest(url: target)
         request.httpMethod = method
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         if let auth { request.setValue("Bearer \(auth)", forHTTPHeaderField: "authorization") }
         if let body {
-            request.setValue(contentType, forHTTPHeaderField: "content-type")
+            if headers["content-type"] == nil { request.setValue(contentType, forHTTPHeaderField: "content-type") }
             request.httpBody = body
         }
         do {
@@ -311,7 +336,8 @@ public actor CalimeroClient {
     /// release or a follower: a successful response, or the refusal as a
     /// typed error. (== mero-js `send`.)
     private func send(
-        _ method: String, _ path: String, body: Data? = nil, contentType: String = "application/json"
+        _ method: String, _ path: String, body: Data? = nil, contentType: String = "application/json",
+        headers: [String: String] = [:]
     ) async throws -> SealedResponse {
         var refreshed = false
         var moved = false
@@ -319,7 +345,7 @@ public actor CalimeroClient {
         while true {
             let token = auth
             let from = nodeUrl
-            let response = try await request(method, path, body: body, contentType: contentType)
+            let response = try await request(method, path, body: body, contentType: contentType, headers: headers)
             if (200..<300).contains(response.status) { return response }
             let error = errorFrom(
                 status: response.status, data: (try? await response.data()) ?? Data(),
@@ -343,7 +369,40 @@ public actor CalimeroClient {
         }
     }
 
-    private func json(
+    /// ``send`` for the generated client's transport (``SealedClientTransport``):
+    /// `headers` (names lowercased) are the generated request's, the
+    /// credential is the client's.
+    func exchange(_ method: String, _ path: String, body: Data?, headers: [String: String]) async throws
+        -> SealedResponse
+    {
+        try await send(method, path, body: body, headers: headers)
+    }
+
+    /// A route the node serves in the clear (`/health`, `/attestation`),
+    /// fetched from the node in use without the sealed channel: what it
+    /// answers is for display, never trusted. A refusal throws.
+    func plain(_ method: String, _ path: String) async throws -> SealedResponse {
+        guard let url = URL(string: "\(nodeUrl)/\(path)") else { throw AccountError.invalidInput("bad path \(path)") }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        let (data, response) = try await urlSession.data(for: request)
+        let http = response as? HTTPURLResponse
+        let status = http?.statusCode ?? 0
+        guard (200..<300).contains(status) else {
+            throw errorFrom(status: status, data: data, retryAfter: http?.value(forHTTPHeaderField: "retry-after"))
+        }
+        var headers: [String: String] = [:]
+        for (name, value) in http?.allHeaderFields ?? [:] {
+            if let name = name as? String, let value = value as? String { headers[name.lowercased()] = value }
+        }
+        let body = AsyncThrowingStream<Data, Error> {
+            $0.yield(data)
+            $0.finish()
+        }
+        return SealedResponse(status: status, headers: headers, body: body)
+    }
+
+    func json(
         _ method: String, _ path: String, body: Data? = nil, contentType: String = "application/json"
     )
         async throws -> Data
@@ -352,7 +411,7 @@ public actor CalimeroClient {
         return try await response.data()
     }
 
-    private func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
+    func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
         do {
             return try MeroJSON.decode(type, from: data.isEmpty ? Data("{}".utf8) : data)
         } catch {
@@ -360,8 +419,31 @@ public actor CalimeroClient {
         }
     }
 
-    private func value(_ data: Data) throws -> JSONValue {
+    func value(_ data: Data) throws -> JSONValue {
         try decode(JSONValue.self, data)
+    }
+
+    /// The node's answer to one facade call, decoded as the deprecated
+    /// methods always read it (leniently, as `T`), not as the generated type.
+    func legacy<T: Decodable, R: Sendable>(
+        _ type: T.Type, _ operation: @Sendable () async throws -> R
+    ) async throws -> T {
+        try decode(type, try await answer(operation))
+    }
+
+    /// ``legacy(_:_:)`` as JSON.
+    func legacyValue<R: Sendable>(_ operation: @Sendable () async throws -> R) async throws -> JSONValue {
+        try value(try await answer(operation))
+    }
+
+    /// `value` as generated type `T`, through its JSON.
+    static func converted<T: Decodable>(_ value: some Encodable) throws -> T {
+        try MeroJSON.decode(T.self, from: try MeroJSON.encode(value))
+    }
+
+    /// `value` as generated type `T`.
+    static func converted<T: Decodable>(json value: JSONValue) throws -> T {
+        try MeroJSON.decode(T.self, from: CanonicalJSON.data(value))
     }
 
     /// ``json`` for a call or a view: while the node answers 503 or cannot be
@@ -451,38 +533,34 @@ public actor CalimeroClient {
     public func signUp(
         _ passkey: any PasskeyProvider, name: String, invite: String? = nil, origin: String? = nil
     ) async throws -> CalimeroSession {
-        var extra: [String: JSONValue] = [:]
-        if let invite, !invite.isEmpty { extra["invite"] = .string(invite) }
-        var beginBody = extra
-        beginBody["name"] = .string(name)
-        if let origin { beginBody["origin"] = .string(origin) }
-        let begin = try await beginCeremony("auth/passkey/register/begin", .object(beginBody), origin: origin)
+        let invite = invite.flatMap { $0.isEmpty ? nil : $0 }
+        let begin = try await beginCeremony(origin: origin) {
+            try await self.answer { try await self.accounts.registerBegin(name: name, origin: origin, invite: invite) }
+        }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("the registration did not begin")
         }
         let registration = try await passkey.create(options: options)
-        var finish = extra
-        finish["challengeId"] = .string(challengeId)
-        finish["registration"] = try Self.json(registration)
-        let data = try await confirmed(.object(finish), passkey: passkey) { body in
-            try await self.json("POST", "auth/passkey/register/finish", body: CanonicalJSON.data(body))
-        }
-        let session = try decode(CalimeroSession.self, data)
+        let converted: Components.Schemas.Registration = try Self.converted(registration)
+        // The node asks the new passkey to sign the account it creates: the
+        // step-up middleware answers with it.
+        let session = try decode(
+            CalimeroSession.self,
+            try await answer {
+                try await self.accounts.registerFinish(
+                    challengeId: challengeId, registration: converted, invite: invite, passkey: passkey)
+            })
         useSession(session)
         return session
     }
 
-    /// Who may create an account on the cluster (`GET /sign-up`, core
-    /// rc.9+); needs no session.
-    public func signUpPolicy() async throws -> SignUpPolicy {
-        try decode(SignUpPolicy.self, try await json("GET", "sign-up"))
-    }
-
     /// POST a ceremony's `begin`, naming the `origin` sent in an
     /// ``OriginNotRegistered`` the node leaves it out of.
-    private func beginCeremony(_ path: String, _ body: JSONValue, origin: String?) async throws -> JSONValue {
+    private func beginCeremony(
+        origin: String?, _ begin: @Sendable () async throws -> Data
+    ) async throws -> JSONValue {
         do {
-            return try await post(path, body)
+            return try value(try await begin())
         } catch let error as OriginNotRegistered where error.origin.isEmpty && origin != nil {
             var details = error.details
             details["origin"] = origin.map(JSONValue.string)
@@ -495,17 +573,18 @@ public actor CalimeroClient {
     /// relying-party id the node answers for it.
     @discardableResult
     public func signIn(_ passkey: any PasskeyProvider, origin: String? = nil) async throws -> CalimeroSession {
-        let begin = try await beginCeremony(
-            "auth/passkey/login/begin", origin.map { ["origin": .string($0)] } ?? [:], origin: origin)
+        let begin = try await beginCeremony(origin: origin) {
+            try await self.answer { try await self.accounts.loginBegin(origin: origin) }
+        }
         guard let challengeId = begin["challengeId"]?.stringValue,
             let challenge = begin["options"]?["challenge"]?.stringValue,
             let rpId = begin["options"]?["rpId"]?.stringValue ?? begin["options"]?["rp"]?["id"]?.stringValue
         else { throw AccountError.protocolViolation("the sign-in did not begin") }
         let assertion = try await passkey.get(challenge: try fromB64url(challenge), rpId: rpId, allowCredentials: nil)
-        let data = try await json(
-            "POST", "auth/passkey/login/finish",
-            body: CanonicalJSON.data(["challengeId": .string(challengeId), "assertion": try Self.json(assertion)]))
-        let session = try decode(CalimeroSession.self, data)
+        let converted: Components.Schemas.Assertion = try Self.converted(assertion)
+        let session = try await legacy(CalimeroSession.self) {
+            try await self.accounts.loginFinish(challengeId: challengeId, assertion: converted)
+        }
         useSession(session)
         return session
     }
@@ -533,9 +612,10 @@ public actor CalimeroClient {
         var tried = 1
         while true {
             do {
-                let data = try await json(
-                    "POST", "auth/refresh", body: CanonicalJSON.data(["refreshToken": .string(current.refreshToken)]))
-                let session = try decode(CalimeroSession.self, data)
+                let token = current.refreshToken
+                let session = try await legacy(CalimeroSession.self) {
+                    try await self.accounts.refresh(refreshToken: token)
+                }
                 // A sign-in or another session taken while this one was refreshing wins.
                 if self.current == current { useSession(session) }
                 return session
@@ -548,14 +628,14 @@ public actor CalimeroClient {
 
     /// End this session.
     public func signOut() async throws {
-        try await post("auth/logout")
+        _ = try await answer { try await self.accounts.logout() }
         auth = nil
         setCurrent(nil)
     }
 
     /// End every session of the signed-in account, on every device, this one too.
     public func signOutEverywhere() async throws {
-        try await post("auth/logout-all")
+        _ = try await answer { try await self.accounts.logoutAll() }
         auth = nil
         setCurrent(nil)
     }
@@ -566,103 +646,25 @@ public actor CalimeroClient {
         setCurrent(nil)
     }
 
-    /// `GET /auth/me`: the account, its passkeys and its organizations.
-    public func me() async throws -> AccountInfo {
-        AccountInfo(json: try await get("auth/me"))
-    }
-
     /// Add another passkey (another device, `passkey`) to the signed-in
     /// account; answers its credential id. The node asks for the approval of
     /// a passkey the account already has (`412 CONFIRM_REQUIRED`, never the
     /// new one), which `approver` gives.
     public func addPasskey(_ passkey: any PasskeyProvider, approver: any PasskeyProvider) async throws -> String {
-        let begin = try await post("auth/passkeys/add/begin")
+        let begin = try await legacyValue { try await self.accounts.passkeyAddBegin() }
         guard let challengeId = begin["challengeId"]?.stringValue, let options = begin["options"] else {
             throw AccountError.protocolViolation("adding a passkey did not begin")
         }
-        let registration = try await passkey.create(options: options)
-        let finished = try await postConfirmed(
-            "auth/passkeys/add/finish",
-            ["challengeId": .string(challengeId), "registration": try Self.json(registration)], passkey: approver)
+        let created = try await passkey.create(options: options)
+        let registration: Components.Schemas.Registration = try Self.converted(created)
+        let finished = try await legacyValue {
+            try await self.accounts.passkeyAddFinish(
+                challengeId: challengeId, registration: registration, passkey: approver)
+        }
         return finished["credentialId"]?.stringValue ?? ""
     }
 
-    /// Remove one of the account's passkeys (not the last), approved with `passkey` (one it has).
-    public func removePasskey(_ credentialId: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("auth/passkeys/\(Self.seg(credentialId))", passkey: passkey)
-    }
-
-    /// Name one of the account's passkeys; `""` clears the name.
-    public func labelPasskey(_ credentialId: String, label: String) async throws {
-        try await post("auth/passkeys/\(Self.seg(credentialId))", ["label": .string(label)])
-    }
-
-    /// What this account uses, with the cluster's quotas.
-    public func usage() async throws -> JSONValue {
-        try await get("auth/usage")
-    }
-
-    /// The node's attestation document, unverified: for display only. Every
-    /// request this client sends is sealed to a key it verified itself first.
-    public func attestation() async throws -> AttestationDoc {
-        guard let url = URL(string: "\(nodeUrl)/attestation?nonce=\(Hex.encode(randomBytes(32)))") else {
-            throw TeeTrustError("bad node URL \(nodeUrl)")
-        }
-        let (data, response) = try await urlSession.data(from: url)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw errorFrom(status: status, data: data) }
-        return try decode(AttestationDoc.self, data)
-    }
-
-    /// The account's API keys (never the keys themselves).
-    public func listApiKeys() async throws -> [JSONValue] {
-        try await get("auth/apikeys")["keys"]?.arrayValue ?? []
-    }
-
-    /// Revoke one of the account's API keys, approved with its `passkey`
-    /// (`412 CONFIRM_REQUIRED`, core rc.9+).
-    public func revokeApiKey(_ keyId: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("auth/apikeys/\(Self.seg(keyId))", passkey: passkey)
-    }
-
-    /// Create an API key for an agent or server, approved with the account's
-    /// `passkey` (`412 CONFIRM_REQUIRED`); needs a passkey session (an API
-    /// key is refused `403`). The key is returned once.
-    ///
-    /// `upgrades` (core rc.10+) makes an upgrade key, for CI: it upgrades
-    /// that one app to signed releases of its package (default: the one the
-    /// app runs, by that package's pinned signer) with
-    /// ``upgradeApp(_:version:package:service:bundle:migrate:passkey:)`` and
-    /// no passkey, and every other request with it is refused `403
-    /// UPGRADE_KEY_ONLY`. It takes no other scope field.
-    public func createApiKey(
-        label: String? = nil, apps: [String]? = nil, methods: [String]? = nil, readOnly: Bool? = nil,
-        allowConfirm: Bool? = nil, ttlSecs: Int? = nil, upgrades: UpgradeKeyScope? = nil,
-        passkey: any PasskeyProvider
-    ) async throws -> (keyId: String, key: String) {
-        var body: [String: JSONValue] = [:]
-        if let label { body["label"] = .string(label) }
-        if let apps { body["apps"] = .array(apps.map { .string($0) }) }
-        if let methods { body["methods"] = .array(methods.map { .string($0) }) }
-        if let readOnly { body["readOnly"] = .bool(readOnly) }
-        if let allowConfirm { body["allowConfirm"] = .bool(allowConfirm) }
-        if let ttlSecs { body["ttlSecs"] = .number(Double(ttlSecs)) }
-        if let upgrades {
-            var scope: [String: JSONValue] = ["app": .string(upgrades.app)]
-            if let package = upgrades.package { scope["package"] = .string(package) }
-            body["upgrades"] = .object(scope)
-        }
-        let answer = try await postConfirmed("auth/apikeys", .object(body), passkey: passkey)
-        return (answer["keyId"]?.stringValue ?? "", answer["key"]?.stringValue ?? "")
-    }
-
     // MARK: - Bundles and blobs
-
-    /// Upload a raw WASM bundle (development clusters only); answers its hash.
-    public func uploadBundle(_ wasm: Data) async throws -> String {
-        let answer = try value(try await json("POST", "bundles", body: wasm, contentType: "application/wasm"))
-        return answer["hash"]?.stringValue ?? ""
-    }
 
     /// Upload a blob for `app`: `blobId` is base58 (what apps print), `id`
     /// hex. `contentType` (printable ASCII; the node refuses another with
@@ -672,8 +674,14 @@ public actor CalimeroClient {
     public func uploadBlob(
         _ app: String, _ data: Data, contentType: String = "application/octet-stream"
     ) async throws -> BlobInfo {
-        try decode(
-            BlobInfo.self, try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
+        // The document allows only `application/octet-stream`; another type
+        // (which the node records and serves the blob as) goes as written.
+        guard contentType == "application/octet-stream" else {
+            return try decode(
+                BlobInfo.self,
+                try await json("POST", "apps/\(Self.seg(app))/blobs", body: data, contentType: contentType))
+        }
+        return try await legacy(BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data) }
     }
 
     /// Upload a sealed file for component app `app` (core rc.9+,
@@ -685,23 +693,7 @@ public actor CalimeroClient {
     /// `size` and `sha256`, and the upload's log `index`. No route serves,
     /// replaces or deletes a sealed file: the app's runs open it by id.
     public func uploadFile(_ app: String, _ data: Data) async throws -> BlobInfo {
-        try decode(
-            BlobInfo.self,
-            try await json(
-                "POST", "apps/\(Self.seg(app))/blobs?sealed=true", body: data, contentType: "application/octet-stream"))
-    }
-
-    /// One of `app`'s blobs, by id (base58 or hex).
-    public func downloadBlob(_ app: String, _ id: String) async throws -> Data {
-        try await blobContent(app, id).data
-    }
-
-    /// Download a component app's blob with a grant one of its runs handed
-    /// out (`BlobRef::grant`, up to 24 h). No session needed: the grant is
-    /// the permission. A bad or expired grant answers ``NotFound``, as a
-    /// missing blob.
-    public func downloadBlobGranted(_ app: String, _ id: String, grant: String) async throws -> Data {
-        try await blobContent(app, id, grant: grant).data
+        try await legacy(BlobInfo.self) { try await self.apps.blobUpload(app: app, body: data, sealed: true) }
     }
 
     /// ``downloadBlob(_:_:)`` (or, with `grant`,
@@ -709,138 +701,33 @@ public actor CalimeroClient {
     /// serves it as: the uploader's, for a component app;
     /// `application/octet-stream` otherwise.
     public func blobContent(_ app: String, _ id: String, grant: String? = nil) async throws -> BlobContent {
-        // As `encodeURIComponent` spells it: a grant is base64, whose `+`, `/` and `=` must not pass raw.
-        let unreserved = CharacterSet(
-            charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.!~*'()")
-        let query = grant.map { "?grant=\($0.addingPercentEncoding(withAllowedCharacters: unreserved) ?? $0)" } ?? ""
-        let response = try await send("GET", "apps/\(Self.seg(app))/blobs/\(Self.seg(id))\(query)")
-        return BlobContent(
-            data: try await response.data(),
-            contentType: response.headers["content-type"] ?? "application/octet-stream")
+        // The document says `application/octet-stream`, but a component
+        // app's blob comes back as the uploader's type, which the generated
+        // decoder refuses: the tap keeps the bytes and the node's type.
+        let tap = AnswerTap()
+        do {
+            _ = try await AnswerTap.$current.withValue(tap) {
+                try await self.apps.blobDownload(app: app, id: id, grant: grant)
+            }
+        } catch {
+            guard tap.data != nil else { throw error }
+        }
+        return BlobContent(data: tap.data ?? Data(), contentType: tap.contentType ?? "application/octet-stream")
     }
 
     /// `app`'s blobs.
     public func listBlobs(_ app: String) async throws -> [BlobInfo] {
-        let answer = try await json("GET", "apps/\(Self.seg(app))/blobs")
-        return try decode(BlobList.self, answer).blobs
+        try await legacy(BlobList.self) { try await self.apps.blobList(app: app) }.blobs
     }
 
     /// One of `app`'s blobs' id and size; ``NotFound`` if the app has no such blob.
     public func blobInfo(_ app: String, _ id: String) async throws -> BlobInfo {
-        try decode(BlobInfo.self, try await json("GET", "apps/\(Self.seg(app))/blobs/\(Self.seg(id))/info"))
-    }
-
-    /// Delete one of `app`'s blobs (its owner, or an admin of its organization).
-    public func deleteBlob(_ app: String, _ id: String) async throws {
-        try await delete("apps/\(Self.seg(app))/blobs/\(Self.seg(id))")
+        try await legacy(BlobInfo.self) { try await self.apps.blobInfo(app: app, id: id) }
     }
 
     // MARK: - Packages
 
-    /// Install a signed `.mpk` package file (development clusters only).
-    public func uploadPackage(_ mpk: Data) async throws -> PackageInstalled {
-        try decode(
-            PackageInstalled.self,
-            try await json("POST", "packages", body: mpk, contentType: "application/octet-stream"))
-    }
-
-    /// Install `package@version` from the cluster's registry.
-    public func installPackage(_ package: String, version: String) async throws -> PackageInstalled {
-        let body = CanonicalJSON.data(["package": .string(package), "version": .string(version)])
-        return try decode(PackageInstalled.self, try await json("POST", "packages/install", body: body))
-    }
-
-    /// Installed packages and their versions.
-    public func packages() async throws -> [PackageInfo] {
-        try decode(PackageList.self, try await json("GET", "packages")).packages
-    }
-
-    /// One installed package and its versions.
-    public func package(_ package: String) async throws -> PackageInfo {
-        try decode(PackageInfo.self, try await json("GET", "packages/\(Self.seg(package))"))
-    }
-
-    /// Uninstall one version, or the whole package. Refused while an app runs it.
-    @discardableResult
-    public func uninstallPackage(_ package: String, version: String? = nil) async throws -> JSONValue {
-        try await delete(
-            version.map { "packages/\(Self.seg(package))/\(Self.seg($0))" } ?? "packages/\(Self.seg(package))")
-    }
-
     // MARK: - App instances
-
-    /// Apps this caller reaches, optionally only those of one package or bundle.
-    public func listApps(package: String? = nil, bundle: String? = nil) async throws -> [AppInfo] {
-        var query: [String] = []
-        if let package { query.append("package=\(Self.queryValue(package))") }
-        if let bundle { query.append("bundle=\(Self.queryValue(bundle))") }
-        let path = query.isEmpty ? "apps" : "apps?" + query.joined(separator: "&")
-        return try decode(AppList.self, try await json("GET", path)).apps
-    }
-
-    /// The app's record: `name`, `owner`, `org`, `access`, `metadata`, `bundle`, ….
-    public func getApp(_ app: String) async throws -> JSONValue {
-        try await get("apps/\(Self.seg(app))")
-    }
-
-    /// Delete an app instance (its owner, or an admin of its organization).
-    public func deleteApp(_ app: String) async throws {
-        try await delete("apps/\(Self.seg(app))")
-    }
-
-    /// Who may reach the app.
-    public func setAccess(_ app: String, _ access: AppAccess) async throws {
-        try await post("apps/\(Self.seg(app))/access", ["access": access.json])
-    }
-
-    /// Set the app instance's metadata; at most 16 KiB.
-    public func setAppMetadata(_ app: String, _ metadata: JSONValue) async throws {
-        try await post("apps/\(Self.seg(app))/metadata", ["metadata": metadata])
-    }
-
-    /// A component app's xcalls: how many messages wait in its outbox, and
-    /// the dead letters (never delivered), newest last. Its owner's or an org
-    /// admin's (`403` to anyone else); `409 NOT_SUPPORTED` for an app on the
-    /// wasmer runtime, whose xcalls are follow-ups.
-    public func appXcalls(_ app: String) async throws -> AppXcalls {
-        try decode(AppXcalls.self, try await json("GET", "apps/\(Self.seg(app))/xcalls"))
-    }
-
-    /// What the app's storage holds: `{ keys, bytes, blobs, blobBytes }`.
-    public func appStorage(_ app: String) async throws -> JSONValue {
-        try await get("apps/\(Self.seg(app))/storage")
-    }
-
-    /// The ABI the app's bundle embeds: `{ bundle, abi }`.
-    public func appAbi(_ app: String) async throws -> JSONValue {
-        try await get("apps/\(Self.seg(app))/abi")
-    }
-
-    /// Hand the app to another account. The owner approves with `passkey`.
-    public func transferApp(_ app: String, to: String, passkey: any PasskeyProvider) async throws {
-        _ = try await postConfirmed("apps/\(Self.seg(app))/transfer", ["to": .string(to)], passkey: passkey)
-    }
-
-    /// Move an app to another release of its package (`version`), another
-    /// package, or a bundle hash, running its migration. Where the node asks
-    /// for an approval (`412 CONFIRM_REQUIRED`), `passkey` gives it. With an
-    /// upgrade key (``createApiKey(label:apps:methods:readOnly:allowConfirm:ttlSecs:upgrades:passkey:)``
-    /// `upgrades`) pass no passkey and a `version` of the key's package.
-    @discardableResult
-    public func upgradeApp(
-        _ app: String, version: String? = nil, package: String? = nil, service: String? = nil, bundle: String? = nil,
-        migrate: String? = nil, passkey: (any PasskeyProvider)? = nil
-    ) async throws -> JSONValue {
-        var body: [String: JSONValue] = [:]
-        for (key, value) in [
-            ("version", version), ("package", package), ("service", service), ("bundle", bundle), ("migrate", migrate),
-        ] {
-            if let value { body[key] = .string(value) }
-        }
-        let path = "apps/\(Self.seg(app))/upgrade"
-        if let passkey { return try await postConfirmed(path, .object(body), passkey: passkey) }
-        return try await post(path, .object(body))
-    }
 
     /// POST `body` to `path`, answering a `412 CONFIRM_REQUIRED` with
     /// `passkey`'s assertion over the node's challenge (deleting an org,
@@ -876,55 +763,10 @@ public actor CalimeroClient {
         do {
             return try await send(body)
         } catch let required as ConfirmRequired {
-            let d = required.details
-            guard let challengeId = d["challengeId"]?.stringValue, let challenge = d["challenge"]?.stringValue,
-                let rpId = d["rpId"]?.stringValue
-            else { throw required }
-            let assertion: AssertionJSON
-            do {
-                assertion = try await passkey.get(
-                    challenge: try fromB64url(challenge), rpId: rpId,
-                    allowCredentials: d["allowCredentials"]?.arrayValue?.compactMap(\.stringValue))
-            } catch let cancelled as PasskeyCancelled {
-                throw ConfirmCancelled(cause: cancelled.message)
-            }
             var confirmedBody = body.objectValue ?? [:]
-            confirmedBody["confirm"] = ["challengeId": .string(challengeId), "assertion": try Self.json(assertion)]
+            confirmedBody["confirm"] = try await StepUp.confirmation(required, passkey: passkey)
             return try await send(.object(confirmedBody))
         }
-    }
-
-    /// Create an app instance from a bundle hash, or from a package release
-    /// (installed from the registry first if the cluster lacks it). With a
-    /// `deployment`, the instance runs the release that deployment offers for
-    /// the package (`version`, if given, must be it) and records the
-    /// deployment; no install, no deployer grant. A package or version it does
-    /// not offer answers `400 NOT_OFFERED`, several offered releases with no
-    /// `version` `400 VERSION_REQUIRED`, and an unknown `service` `400
-    /// NO_SUCH_SERVICE`. A page opened through `/d/{deployment}/` finds its
-    /// deployment with ``pageDeployment(_:)``. Answers its app id.
-    public func createApp(
-        _ name: String, bundle: AppSource, org: String? = nil, access: AppAccess? = nil,
-        confirmMethods: [String]? = nil, initArgs: JSONValue? = nil
-    ) async throws -> String {
-        var body: [String: JSONValue] = ["name": .string(name)]
-        switch bundle {
-        case .bundle(let hash): body["bundle"] = .string(hash)
-        case .package(let package, let version, let service, let deployment):
-            body["package"] = .string(package)
-            if let version { body["version"] = .string(version) }
-            if let service { body["service"] = .string(service) }
-            if let deployment { body["deployment"] = .string(deployment) }
-        }
-        if let org { body["org"] = .string(org) }
-        if let access { body["access"] = access.json }
-        if let confirmMethods { body["confirmMethods"] = .array(confirmMethods.map { .string($0) }) }
-        if let initArgs { body["initArgs"] = initArgs }
-        let answer = try await post("apps", .object(body))
-        guard let appId = answer["appId"]?.stringValue else {
-            throw AccountError.protocolViolation("the node created no app")
-        }
-        return appId
     }
 
     /// Call a method. A retry with the same `idempotencyKey` is answered
@@ -994,18 +836,19 @@ public actor CalimeroClient {
     /// Committed events from index `from`, then live, until the stream is
     /// cancelled (stop iterating, or cancel the task).
     public nonisolated func events(_ app: String, from: Int = 0) -> AsyncThrowingStream<CloudEvent, Error> {
-        stream("apps/\(Self.seg(app))/events?from=\(from)")
+        stream { try await self.apps.events(app: app, from: from) }
     }
 
     /// A server-sent event stream on `path`, sealed like every other answer.
-    private nonisolated func stream(_ path: String) -> AsyncThrowingStream<CloudEvent, Error> {
+    private nonisolated func stream(
+        _ open: @escaping @Sendable () async throws -> OpenAPIRuntime.HTTPBody
+    ) -> AsyncThrowingStream<CloudEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let response = try await self.send("GET", path)
                     var parser = SseParser()
-                    for try await chunk in response.body {
-                        for event in parser.feed(chunk) { continuation.yield(event) }
+                    for try await chunk in try await open() {
+                        for event in parser.feed(Data(chunk)) { continuation.yield(event) }
                     }
                     continuation.finish()
                 } catch {
@@ -1018,66 +861,26 @@ public actor CalimeroClient {
 
     // MARK: - Presence
 
-    /// Publish this device's presence in `app`: `state` (at most 4 KiB) or
-    /// `nil` to retract it. Send the same `seq` and state again as a
-    /// heartbeat: an entry not refreshed within 7 s is gone.
-    public func publishPresence(_ app: String, seq: Int, state: Data?) async throws {
-        try await post(
-            "apps/\(Self.seg(app))/presence",
-            ["seq": .number(Double(seq)), "state": state.map { .string(Hex.encode($0)) } ?? .null])
-    }
-
-    /// Who is present in `app` now.
-    public func presence(_ app: String) async throws -> [PresenceEntry] {
-        try decode(PresenceList.self, try await json("GET", "apps/\(Self.seg(app))/presence")).present
-    }
-
     /// Presence as a stream: a `snapshot` event, then a `presence` event per change.
     public nonisolated func presenceStream(_ app: String) -> AsyncThrowingStream<CloudEvent, Error> {
-        stream("apps/\(Self.seg(app))/presence/stream")
+        stream { try await self.apps.presenceStream(app: app) }
     }
 
     // MARK: - Aliases
 
-    /// Name an app for this account.
-    public func setAlias(_ alias: String, app: String) async throws {
-        try await put("auth/aliases/\(Self.seg(alias))", ["app": .string(app)])
-    }
-
-    /// This account's aliases, alias → app id.
-    public func aliases() async throws -> [String: String] {
-        (try await get("auth/aliases")["aliases"]?.objectValue ?? [:]).compactMapValues(\.stringValue)
-    }
-
-    /// The app an alias names.
-    public func alias(_ alias: String) async throws -> String {
-        try await get("auth/aliases/\(Self.seg(alias))")["appId"]?.stringValue ?? ""
-    }
-
-    public func deleteAlias(_ alias: String) async throws {
-        try await delete("auth/aliases/\(Self.seg(alias))")
-    }
-
     // MARK: - Organizations
-
-    /// Create an organization; answers its id. `recoveryKey` (core rc.9+,
-    /// ``RecoverySeed/publicKey``) lets whoever holds its seed recover the
-    /// organization if its owner loses every passkey; keep the seed offline
-    /// (``RecoverySeed/text``).
-    public func createOrg(_ name: String, recoveryKey: String? = nil) async throws -> String {
-        var body: [String: JSONValue] = ["name": .string(name)]
-        if let recoveryKey { body["recoveryKey"] = .string(recoveryKey) }
-        return try await post("orgs", .object(body))["orgId"]?.stringValue ?? ""
-    }
 
     /// Set or rotate (`publicKey`, ``RecoverySeed/publicKey``) or remove
     /// (`nil`) the organization's recovery key (core rc.9+): its owner only,
     /// approved with `passkey`. A recovery under way is cancelled, and the
     /// old seed's signatures are refused from then on.
     public func setRecoveryKey(_ org: String, publicKey: String?, passkey: any PasskeyProvider) async throws {
-        try await postConfirmed(
-            "orgs/\(Self.seg(org))/recovery", ["publicKey": publicKey.map(JSONValue.string) ?? .null],
-            passkey: passkey)
+        guard let publicKey else {
+            // Removing it is `publicKey: null`, which the generated body cannot send (it omits a nil).
+            try await postConfirmed("orgs/\(Self.seg(org))/recovery", ["publicKey": .null], passkey: passkey)
+            return
+        }
+        _ = try await answer { try await self.orgs.recoverySet(org: org, publicKey: publicKey, passkey: passkey) }
     }
 
     /// Start handing `org` to the signed-in account with the recovery
@@ -1087,120 +890,22 @@ public actor CalimeroClient {
     /// and every member sees it in ``OrgInfo/recovery``. A wrong seed, no
     /// organization or none set is `403 WRONG_RECOVERY_KEY`.
     public func startRecovery(_ org: String, seed: RecoverySeed) async throws -> RecoveryTimes {
-        let account = try await me().accountId
+        let account = AccountInfo(json: try await legacyValue { try await self.accounts.me() }).accountId
         let nonce = b64url(randomBytes(16))
         let signature = try seed.sign(org: org, account: account, nonce: nonce)
-        let data = try await json(
-            "POST", "orgs/\(Self.seg(org))/recovery/start",
-            body: CanonicalJSON.data(["nonce": .string(nonce), "signature": .string(signature)]))
-        return try decode(RecoveryTimes.self, data)
-    }
-
-    /// Cancel the recovery under way: the organization's owner, approved with `passkey` (core rc.9+).
-    public func cancelRecovery(_ org: String, passkey: any PasskeyProvider) async throws {
-        try await postConfirmed("orgs/\(Self.seg(org))/recovery/cancel", [:], passkey: passkey)
-    }
-
-    /// Finish a recovery this account started, once its delay passed
-    /// (``RecoveryNotReady`` before, with `readyAt`), approved with this
-    /// account's `passkey` (core rc.9+). The account becomes the owner; the
-    /// previous owner leaves the organization.
-    @discardableResult
-    public func finishRecovery(_ org: String, passkey: any PasskeyProvider) async throws -> RecoveryFinished {
-        let answer = try await postConfirmed("orgs/\(Self.seg(org))/recovery/finish", [:], passkey: passkey)
-        return RecoveryFinished(
-            org: answer["org"]?.stringValue ?? org,
-            previousOwners: (answer["previousOwners"]?.arrayValue ?? []).compactMap(\.stringValue))
-    }
-
-    /// The organization, with the teams this caller reaches or manages.
-    public func getOrg(_ org: String) async throws -> OrgInfo {
-        OrgInfo(json: try await get("orgs/\(Self.seg(org))"))
-    }
-
-    /// Delete an organization with its teams, invites and apps (its owner, with `passkey`).
-    public func deleteOrg(_ org: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("orgs/\(Self.seg(org))", passkey: passkey)
-    }
-
-    /// Set the organization's metadata; at most 16 KiB.
-    public func setOrgMetadata(_ org: String, _ metadata: JSONValue) async throws {
-        try await post("orgs/\(Self.seg(org))/metadata", ["metadata": metadata])
-    }
-
-    /// Set a member's metadata (theirs, or an admin's); `.null` clears it.
-    public func setMemberMetadata(_ org: String, account: String, _ metadata: JSONValue) async throws {
-        try await post("orgs/\(Self.seg(org))/members/\(Self.seg(account))/metadata", ["metadata": metadata])
-    }
-
-    /// Upgrade every app of `org` that runs `target.package`, approved with `passkey`.
-    public func upgradeOrg(
-        _ org: String, _ target: OrgUpgradeTarget, passkey: any PasskeyProvider
-    ) async throws
-        -> UpgradeRun
-    {
-        let body = try MeroJSON.decode(JSONValue.self, from: try MeroJSON.encode(target))
-        return try decode(
-            UpgradeRun.self,
-            CanonicalJSON.data(try await postConfirmed("orgs/\(Self.seg(org))/upgrade", body, passkey: passkey)))
-    }
-
-    /// An organization-wide upgrade run.
-    public func upgradeRun(_ org: String, _ run: String) async throws -> UpgradeRun {
-        try decode(UpgradeRun.self, try await json("GET", "orgs/\(Self.seg(org))/upgrades/\(Self.seg(run))"))
-    }
-
-    /// Run the apps that failed in `run` again, as a new run, approved with `passkey`.
-    public func retryUpgradeRun(_ org: String, _ run: String, passkey: any PasskeyProvider) async throws -> UpgradeRun {
-        let answer = try await postConfirmed(
-            "orgs/\(Self.seg(org))/upgrades/\(Self.seg(run))/retry", [:], passkey: passkey)
-        return try decode(UpgradeRun.self, CanonicalJSON.data(answer))
-    }
-
-    /// Approve a mero-tee release for `org`'s apps, or this account's own
-    /// (`org` `nil`); `approved: false` withdraws it. Refused to a session
-    /// opened on an app's frontend: ask with ``requestConsent(_:)`` instead.
-    @discardableResult
-    public func approveRelease(
-        _ org: String?, version: String, passkey: any PasskeyProvider, approved: Bool = true
-    )
-        async throws -> JSONValue
-    {
-        let path = org.map { "orgs/\(Self.seg($0))/releases" } ?? "auth/releases"
-        return try await postConfirmed(
-            path, ["version": .string(version), "approved": .bool(approved)], passkey: passkey)
-    }
-
-    /// Approve the URL prefixes apps from `package`'s publisher may call out
-    /// to; `prefixes` `nil` approves every prefix the package's latest
-    /// release declares; `replace` sets exactly `prefixes`.
-    @discardableResult
-    public func approveOutbound(
-        _ org: String?, package: String, passkey: any PasskeyProvider, prefixes: [String]? = nil, replace: Bool = false
-    ) async throws -> JSONValue {
-        let path = org.map { "orgs/\(Self.seg($0))/outbound" } ?? "auth/outbound"
-        return try await postConfirmed(
-            path,
-            [
-                "package": .string(package), "prefixes": prefixes.map { .array($0.map { .string($0) }) } ?? "manifest",
-                "replace": .bool(replace),
-            ], passkey: passkey)
+        return try await legacy(RecoveryTimes.self) {
+            try await self.orgs.recoveryStart(org: org, nonce: nonce, signature: signature)
+        }
     }
 
     // MARK: - Approvals
 
-    /// One page of the report of a scope's apps.
-    public func appsReport(_ org: String?, page: PageOptions = PageOptions()) async throws -> AppsReport {
-        let path = org.map { "orgs/\(Self.seg($0))/apps" } ?? "auth/apps"
-        return try decode(AppsReport.self, try await json("GET", path + (try page.query())))
-    }
-
     /// ``appsReport(_:page:)``, every page, with the apps of all of them in `apps`.
     public func appsReportAll(_ org: String?) async throws -> AppsReport {
-        var report = try await appsReport(org)
+        var report = try await reportPage(org, PageOptions())
         var next = report.next
         while let after = next {
-            let page = try await appsReport(org, page: PageOptions(after: after))
+            let page = try await reportPage(org, PageOptions(after: after))
             report.apps += page.apps
             next = page.next
         }
@@ -1208,15 +913,21 @@ public actor CalimeroClient {
         return report
     }
 
-    /// `GET /releases`: the cluster's governance and every release deadline.
-    public func releaseRules() async throws -> ReleaseRules {
-        try decode(ReleaseRules.self, try await json("GET", "releases"))
+    /// ``appsReport(_:page:)``, for the methods that are not deprecated.
+    private func reportPage(_ org: String?, _ page: PageOptions) async throws -> AppsReport {
+        _ = try page.query()
+        if let org {
+            return try await legacy(AppsReport.self) {
+                try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
+            }
+        }
+        return try await legacy(AppsReport.self) { try await self.accounts.apps(after: page.after, limit: page.limit) }
     }
 
     /// What waits for a decision in a scope (`org`, or the account's own apps with `nil`).
     public func pendingApprovals(org: String? = nil) async throws -> PendingApprovals {
         async let report = appsReportAll(org)
-        async let rules = releaseRules()
+        async let rules = legacy(ReleaseRules.self) { try await self.node.releasesPublic() }
         return pendingApprovalsFrom(try await report, rules: try await rules)
     }
 
@@ -1268,11 +979,6 @@ public actor CalimeroClient {
         }
     }
 
-    /// The decision on a consent request.
-    public func consentResult(_ requestId: String) async throws -> ConsentResult {
-        try decode(ConsentResult.self, try await json("GET", "consent/\(Self.seg(requestId))/result"))
-    }
-
     /// Poll ``consentResult(_:)`` until the request is decided, every
     /// `interval` seconds, until the task is cancelled or `expiresAt` (Unix
     /// seconds) passes, when it answers the last `pending` result.
@@ -1282,102 +988,16 @@ public actor CalimeroClient {
         -> ConsentResult
     {
         while true {
-            let result = try await consentResult(requestId)
+            let result = try await legacy(ConsentResult.self) { try await self.consent.pageResult(request: requestId) }
             if result.status != .pending || Task.isCancelled { return result }
             if let expiresAt, Date().timeIntervalSince1970 >= expiresAt { return result }
             await sleep(interval)
         }
     }
 
-    /// `GET /publishers/{signerId}`.
-    public func publisherBinding(_ signerId: String) async throws -> PublisherBindingInfo {
-        try decode(PublisherBindingInfo.self, try await json("GET", "publishers/\(Self.seg(signerId))"))
-    }
-
-    /// Bind a package signing key to `org` as its publisher, with `passkey`.
-    @discardableResult
-    public func bindPublisher(
-        _ org: String, _ proof: PublisherProof, passkey: any PasskeyProvider
-    ) async throws
-        -> JSONValue
-    {
-        try await postConfirmed("orgs/\(Self.seg(org))/publishers", try Self.json(proof), passkey: passkey)
-    }
-
-    /// Upgrade every instance of `package` that declares `upgrades: publisher`, as its publisher `org`.
-    public func upgradePublished(
-        _ org: String, package: String, version: String, migrate: String? = nil, passkey: any PasskeyProvider
-    ) async throws -> UpgradeRun {
-        var body: [String: JSONValue] = ["version": .string(version)]
-        if let migrate { body["migrate"] = .string(migrate) }
-        let answer = try await postConfirmed(
-            "orgs/\(Self.seg(org))/packages/\(Self.seg(package))/upgrade", .object(body), passkey: passkey)
-        return try decode(UpgradeRun.self, CanonicalJSON.data(answer))
-    }
-
     // MARK: - Operator
 
-    /// `GET /ops/apps`. Operator token (``useApiKey(_:)``).
-    public func opsApps(page: PageOptions = PageOptions()) async throws -> JSONValue {
-        try await get("ops/apps" + (try page.query()))
-    }
-
-    /// `GET /ops/orgs`. Operator token.
-    public func opsOrgs(page: PageOptions = PageOptions()) async throws -> JSONValue {
-        try await get("ops/orgs" + (try page.query()))
-    }
-
-    /// Announce when work on images older than `version` ends. Operator token.
-    public func setReleaseDeadline(_ version: String, after: Date) async throws {
-        let formatter = ISO8601DateFormatter()
-        try await post(
-            "ops/releases/\(Self.seg(version))/deadline", ["after": .string(formatter.string(from: after))])
-    }
-
-    /// Lift a release's deadline. Operator token.
-    public func liftReleaseDeadline(_ version: String) async throws {
-        try await delete("ops/releases/\(Self.seg(version))/deadline")
-    }
-
     // MARK: - Members, teams and invites
-
-    /// Add a member, or change their role, approved with the caller's `passkey`.
-    public func setMember(
-        _ org: String, account: String, role: OrgRole, passkey: any PasskeyProvider
-    ) async throws {
-        try await postConfirmed(
-            "orgs/\(Self.seg(org))/members", ["account": .string(account), "role": .string(role.rawValue)],
-            passkey: passkey)
-    }
-
-    /// Remove a member, or leave (`account` the caller's own), approved with the caller's `passkey`.
-    @discardableResult
-    public func removeMember(_ org: String, account: String, passkey: any PasskeyProvider) async throws -> JSONValue {
-        try await deleteConfirmed("orgs/\(Self.seg(org))/members/\(Self.seg(account))", passkey: passkey)
-    }
-
-    /// Set capability bits: for a member, a member of one team, or the
-    /// organization's default (neither). Approved with the caller's `passkey`.
-    public func setCapabilities(
-        _ org: String, _ capabilities: OrgCapabilities, passkey: any PasskeyProvider, account: String? = nil,
-        team: String? = nil
-    ) async throws {
-        var body: [String: JSONValue] = ["capabilities": .number(Double(capabilities.rawValue))]
-        if let account { body["account"] = .string(account) }
-        if let team { body["team"] = .string(team) }
-        try await postConfirmed("orgs/\(Self.seg(org))/capabilities", .object(body), passkey: passkey)
-    }
-
-    /// Create a team; answers its id.
-    public func createTeam(_ org: String, name: String, join: TeamJoin, parent: String? = nil) async throws -> String {
-        var body: [String: JSONValue] = ["name": .string(name), "join": .string(join.rawValue)]
-        if let parent { body["parent"] = .string(parent) }
-        return try await post("orgs/\(Self.seg(org))/teams", .object(body))["teamId"]?.stringValue ?? ""
-    }
-
-    public func getTeam(_ org: String, _ team: String) async throws -> TeamInfo {
-        TeamInfo(json: try await get("orgs/\(Self.seg(org))/teams/\(Self.seg(team))"), org: org)
-    }
 
     /// Rename, change who may join, set the app's metadata, or move the team:
     /// `parent` `.some(nil)` moves it to the top, `nil` leaves it.
@@ -1385,187 +1005,29 @@ public actor CalimeroClient {
         _ org: String, _ team: String, name: String? = nil, join: TeamJoin? = nil, parent: String?? = nil,
         metadata: JSONValue? = nil
     ) async throws {
-        var body: [String: JSONValue] = [:]
-        if let name { body["name"] = .string(name) }
-        if let join { body["join"] = .string(join.rawValue) }
-        if let parent { body["parent"] = parent.map { .string($0) } ?? .null }
-        if let metadata { body["metadata"] = metadata }
-        try await post("orgs/\(Self.seg(org))/teams/\(Self.seg(team))", .object(body))
-    }
-
-    /// Delete a team, the teams below it and their apps.
-    public func deleteTeam(_ org: String, _ team: String) async throws {
-        try await delete("orgs/\(Self.seg(org))/teams/\(Self.seg(team))")
-    }
-
-    /// Add a member to a team, or change their row, approved with the caller's `passkey`.
-    public func setTeamMember(
-        _ org: String, _ team: String, account: String, passkey: any PasskeyProvider, role: TeamRole? = nil,
-        lead: Bool? = nil, capabilities: OrgCapabilities? = nil
-    ) async throws {
-        var body: [String: JSONValue] = ["account": .string(account)]
-        if let role { body["role"] = .string(role.rawValue) }
-        if let lead { body["lead"] = .bool(lead) }
-        if let capabilities { body["capabilities"] = .number(Double(capabilities.rawValue)) }
-        try await postConfirmed(
-            "orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members", .object(body), passkey: passkey)
-    }
-
-    /// Remove a member from a team, approved with the caller's `passkey`.
-    public func removeTeamMember(
-        _ org: String, _ team: String, account: String, passkey: any PasskeyProvider
-    ) async throws {
-        try await deleteConfirmed(
-            "orgs/\(Self.seg(org))/teams/\(Self.seg(team))/members/\(Self.seg(account))", passkey: passkey)
-    }
-
-    /// Mint an invite token (`inv_…`) to `org` with `role`, into `teams`,
-    /// approved with the caller's `passkey`. ``redeemInvite(_:)`` takes it
-    /// (no approval there).
-    public func invite(
-        _ org: String, role: OrgRole = .member, passkey: any PasskeyProvider, teams: [String] = [],
-        ttlSecs: Int? = nil, uses: Int? = nil
-    ) async throws -> String {
-        var body: [String: JSONValue] = [
-            "role": .string(role.rawValue), "teams": .array(teams.map { .string($0) }),
-        ]
-        if let ttlSecs { body["ttlSecs"] = .number(Double(ttlSecs)) }
-        if let uses { body["uses"] = .number(Double(uses)) }
-        let answer = try await postConfirmed("orgs/\(Self.seg(org))/invites", .object(body), passkey: passkey)
-        guard let token = answer["token"]?.stringValue else { throw AccountError.protocolViolation("no invite token") }
-        return token
-    }
-
-    /// Redeem an invite token: the signed-in account joins its organization.
-    @discardableResult
-    public func redeemInvite(_ token: String) async throws -> JSONValue {
-        try await post("invites/\(Self.seg(token))/redeem")
+        if case .some(.none) = parent {
+            // Moving it to the top is `parent: null`, which the generated body cannot send (it omits a nil).
+            var body: [String: JSONValue] = ["parent": .null]
+            if let name { body["name"] = .string(name) }
+            if let join { body["join"] = .string(join.rawValue) }
+            if let metadata { body["metadata"] = metadata }
+            try await post("orgs/\(Self.seg(org))/teams/\(Self.seg(team))", .object(body))
+            return
+        }
+        let join: Components.Schemas.TeamJoin? = try join.map { try Self.converted($0) }
+        let metadata = try metadata.map { try OpenAPIValueContainer($0) }
+        let parent = parent ?? nil
+        _ = try await answer {
+            try await self.orgs.teamUpdate(
+                org: org, team: team, name: name, join: join, parent: parent, metadata: metadata)
+        }
     }
 
     // MARK: - Package origins
 
-    /// The web origins `package`'s managers registered (core rc.9+) so a
-    /// frontend they host themselves signs people in with passkeys: a session
-    /// opened on one is bound to the package. ``NotFound`` for an unknown
-    /// package; `403` to anyone not managing it. (== mero-js `packageOrigins.list`.)
-    public func packageOrigins(_ package: String) async throws -> [PackageOrigin] {
-        try decode(PackageOriginList.self, try await json("GET", "package-origins/\(Self.seg(package))")).origins
-    }
-
-    /// Register `origin` (`scheme://host[:port]`) for `package`, approved
-    /// with `passkey` (`412 CONFIRM_REQUIRED` over `__add_origin`). `rpId`
-    /// defaults to the node's choice for the origin (its host). Refusals:
-    /// ``BadOrigin`` (`BAD_ORIGIN`, `BAD_RP_ID`), ``OriginTaken``,
-    /// ``QuotaExceeded``. (== mero-js `packageOrigins.add`.)
-    @discardableResult
-    public func addPackageOrigin(
-        _ package: String, origin: String, passkey: any PasskeyProvider, rpId: String? = nil
-    ) async throws -> PackageOrigin {
-        var body: [String: JSONValue] = ["origin": .string(origin)]
-        if let rpId { body["rpId"] = .string(rpId) }
-        let data = try await confirmed(.object(body), passkey: passkey) { body in
-            try await self.json("POST", "package-origins/\(Self.seg(package))", body: CanonicalJSON.data(body))
-        }
-        return try decode(PackageOrigin.self, data)
-    }
-
-    /// Remove `origin` from `package`, approved with `passkey`
-    /// (`__remove_origin`). Sessions opened there stop working (`401`).
-    /// ``NotFound`` if it was not registered. (== mero-js `packageOrigins.remove`.)
-    public func removePackageOrigin(_ package: String, origin: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed(
-            "package-origins/\(Self.seg(package))", passkey: passkey, body: ["origin": .string(origin)])
-    }
-
     // MARK: - Deployers
 
-    /// Let an account or organization install apps where the cluster's
-    /// deployments are `granted`, until `until` (absent: the grant does not
-    /// end). The cluster's owner grants it, approved with `passkey`, where
-    /// governance says `deployers: owner`; elsewhere the operator grants with
-    /// its key, and this is refused `403`.
-    @discardableResult
-    public func grantDeployer(
-        _ deployer: Deployer, passkey: any PasskeyProvider, until: Date? = nil
-    ) async throws -> JSONValue {
-        var body: [String: JSONValue] = ["deployer": deployer.json]
-        if let until { body["until"] = .string(ISO8601DateFormatter().string(from: until)) }
-        return try await postConfirmed("deployers", .object(body), passkey: passkey)
-    }
-
-    /// Who may install apps on the cluster: its deployments rule, who grants
-    /// deployers, its owner and every grant. For the cluster's owner, or the
-    /// operator (its token, ``useApiKey(_:)``).
-    public func deployers() async throws -> DeployersInfo {
-        try decode(DeployersInfo.self, try await json("GET", "deployers"))
-    }
-
-    /// End a deployer's grant, as the cluster's owner, approved with
-    /// `passkey`. Apps it installed, and the apps running them, stay.
-    public func revokeDeployer(_ deployer: Deployer, passkey: any PasskeyProvider) async throws {
-        try await revokeDeployer(key: deployer.key, passkey: passkey)
-    }
-
-    /// ``revokeDeployer(_:passkey:)`` by its key, `account:{id}` or `org:{id}`.
-    public func revokeDeployer(key: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("deployers/\(Self.seg(key))", passkey: passkey)
-    }
-
     // MARK: - Deployments
-
-    /// Create a deployment: `owner`'s (the caller's own account, or an
-    /// organization where it holds `MANAGE_APPLICATION` org-wide) list of the
-    /// apps it offers, named `name` (1 to 64 characters, one line) for
-    /// customers. Approved with `passkey`; where deployments are `granted`
-    /// the caller needs a deployer grant. Answers the deployment's id.
-    public func createDeployment(_ name: String, owner: Deployer, passkey: any PasskeyProvider) async throws -> String {
-        let answer = try await postConfirmed(
-            "deployments", ["name": .string(name), "owner": owner.json], passkey: passkey)
-        guard let id = answer["id"]?.stringValue else { throw AccountError.protocolViolation("no deployment id") }
-        return id
-    }
-
-    /// The deployments the caller manages: its account's, and its
-    /// organizations' where it holds `MANAGE_APPLICATION`.
-    public func deployments() async throws -> [DeploymentInfo] {
-        try decode(DeploymentList.self, try await json("GET", "deployments")).deployments
-    }
-
-    /// A deployment as anyone may read it: its name, its owner's kind and
-    /// name, and the apps it offers. Public.
-    public func deployment(_ id: String) async throws -> PublicDeployment {
-        try decode(PublicDeployment.self, try await json("GET", "deployments/\(Self.seg(id))"))
-    }
-
-    /// Delete a deployment that offers nothing and has no instances, approved with `passkey`.
-    public func deleteDeployment(_ id: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("deployments/\(Self.seg(id))", passkey: passkey)
-    }
-
-    /// Offer `package@version` (installed, and seen by the caller) as `app`
-    /// (1 to 64 letters, digits, `.`, `_`, `-`) in deployment `id`, or move
-    /// an offered app to another release of its package. Approved with `passkey`.
-    @discardableResult
-    public func offerApp(
-        _ id: String, app: String, package: String, version: String, passkey: any PasskeyProvider
-    ) async throws -> JSONValue {
-        try await postConfirmed(
-            "deployments/\(Self.seg(id))/apps",
-            ["app": .string(app), "package": .string(package), "version": .string(version)], passkey: passkey)
-    }
-
-    /// Withdraw `app` from deployment `id`, approved with `passkey`; refused
-    /// while an instance created from the deployment still runs it.
-    public func withdrawApp(_ id: String, app: String, passkey: any PasskeyProvider) async throws {
-        try await deleteConfirmed("deployments/\(Self.seg(id))/apps/\(Self.seg(app))", passkey: passkey)
-    }
-
-    /// The organizations with instances created from deployment `id`, for
-    /// its managers: each one's id, name, instance count, apps and releases,
-    /// and first instance. Never members, teams or app data.
-    public func deploymentOrgs(_ id: String) async throws -> DeploymentOrgs {
-        try decode(DeploymentOrgs.self, try await json("GET", "deployments/\(Self.seg(id))/orgs"))
-    }
 
     // MARK: - Helpers
 
@@ -1614,11 +1076,11 @@ public enum AppSource: Sendable, Equatable {
 }
 
 private struct BlobList: Decodable { let blobs: [BlobInfo] }
-private struct PackageOriginList: Decodable { let origins: [PackageOrigin] }
-private struct PackageList: Decodable { let packages: [PackageInfo] }
-private struct AppList: Decodable { let apps: [AppInfo] }
-private struct DeploymentList: Decodable { let deployments: [DeploymentInfo] }
-private struct PresenceList: Decodable { let present: [PresenceEntry] }
+struct PackageOriginList: Decodable { let origins: [PackageOrigin] }
+struct PackageList: Decodable { let packages: [PackageInfo] }
+struct AppList: Decodable { let apps: [AppInfo] }
+struct DeploymentList: Decodable { let deployments: [DeploymentInfo] }
+struct PresenceList: Decodable { let present: [PresenceEntry] }
 
 /// Server-sent event frames from a byte stream: `{ id, kind, data }` each,
 /// `data` parsed as JSON when it is. (== mero-js `sseFrames`.)

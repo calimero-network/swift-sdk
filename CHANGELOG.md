@@ -2,6 +2,28 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: the node API is generated from core's OpenAPI document
+
+`CalimeroClient` gains a facade with one method per route of core's OpenAPI
+document (`openapi/openapi.json`, core `docs/openapi`), grouped by tag:
+`client.orgs.inviteCreate(org:role:...)`, `client.apps.get(app:)`,
+`client.accounts.me()`, ... It is generated (`scripts/generate-openapi.sh`)
+over swift-openapi-generator's client (the new `MeroAPI` product, whose types
+the facade answers) and checked in; CI fails when it is stale. Requests still
+go through the attested sealed channel; refusals throw the same typed errors.
+
+- **Step-ups are automatic.** A `412 CONFIRM_REQUIRED` is answered with the
+  call's `passkey:` or the client's `useStepUp(_:)` passkey; a `428
+  OPERATOR_SIGNATURE_REQUIRED` (new: `OperatorSignatureRequired`) with the
+  call's `operatorSigner:` or `useOperatorSigner(_:)` (`Ed25519OperatorKey`).
+- **Deprecated:** the 81 methods that wrap one route (`getOrg`, `invite`,
+  `createApp`, `listApps`, ...). They keep their signatures and answers and
+  name their replacement in the warning.
+- **New dependencies:** `swift-openapi-runtime` 1.9.0 and `swift-http-types`
+  1.5.1 (exact). `MeroKit.podspec` cannot express them yet.
+- A path parameter's reserved characters are now percent-encoded
+  (`/deployers/org%3Ao1`); the node decodes them as before.
+
 ## Unreleased: an account uploads and downloads blobs through its relay
 
 `AdminSurface` gains `uploadBlob`, `getBlob(_:contextId:)`,

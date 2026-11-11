@@ -7,7 +7,9 @@ live events. It is the Swift port of
 [mero-js](https://github.com/calimero-network/mero-js) ≥27 `CalimeroClient`:
 the same methods, the same typed errors, the same retry and failover rules.
 
-- Swift 5.9+, iOS 15+ / macOS 12+, no third-party dependencies.
+- Swift 5.9+, iOS 15+ / macOS 12+. Dependencies: Apple's
+  [swift-openapi-runtime](https://github.com/apple/swift-openapi-runtime) and
+  [swift-http-types](https://github.com/apple/swift-http-types), pinned exactly.
 - A Calimero 1.0 cluster (core `1.0.0-rc.10`, [`ci/core-version`](ci/core-version)),
   or `merod local` for development.
 - Docs: <https://calimero-network.github.io/swift-sdk/>
@@ -18,7 +20,8 @@ the same methods, the same typed errors, the same retry and failover rules.
 
 | Product | What it is |
 | --- | --- |
-| `MeroKit` | `CalimeroClient`, the sealed channel, TEE trust, passkeys (`SoftPasskey`), the app layer protocols (`MeroAppBackend`, `ContextContract`). |
+| `MeroKit` | `CalimeroClient` and its generated API facade, the sealed channel, TEE trust, passkeys (`SoftPasskey`), the app layer protocols (`MeroAppBackend`, `ContextContract`). |
+| `MeroAPI` | The client generated from core's OpenAPI document: `Components.Schemas.*`, `Operations.*`, the types the facade answers. |
 | `MeroKitUI` | `MeroAppSession`, `MeroClient`, `CalimeroAppBackend`, `PlatformPasskey`, the consent page in the system browser. |
 | `MeroKitTestSupport` | `InMemoryAppBackend`, `RecordingContextContract`, `FakeCloudNode` + `FakeCloud` (a node that runs the real sealed channel, and a cluster in memory), `MockURLProtocol`. |
 
@@ -42,6 +45,42 @@ _ = try await cloud.call(app, "send_message", ["message": "hi"])   // POST /apps
 let page = try await cloud.view(app, "get_messages", [:])          // POST /apps/{app}/views
 for try await event in cloud.events(app) { print(event.kind) }      // sealed SSE
 ```
+
+## The node API, generated
+
+Every route of the node API is a method of `CalimeroClient`, grouped by the
+OpenAPI document's tags: `accounts`, `apps`, `orgs`, `registry` (packages),
+`cluster` (sign-up, deployers, deployments), `consent`, `node` (public) and
+`ops`. Each takes the path parameters, the JSON body's fields and the query
+as labelled arguments and answers the typed success value (`import MeroAPI`
+to name it); a refusal throws the same typed errors as below.
+
+```swift
+let org = try await cloud.orgs.get(org: orgId)               // Operations.OrgGet.Output.Ok.Body.JsonPayload
+let invite = try await cloud.orgs.inviteCreate(org: orgId, role: .member, passkey: passkey)
+await cloud.useStepUp(PlatformPasskey())                     // answers any 412 without a `passkey:`
+try await cloud.orgs.delete(org: orgId)
+await cloud.useOperatorSigner(try Ed25519OperatorKey(raw: seed))   // answers a 428
+```
+
+A `412 CONFIRM_REQUIRED` is answered with the call's `passkey:`, else the
+client's (`useStepUp`); a `428 OPERATOR_SIGNATURE_REQUIRED` with the call's
+`operatorSigner:`, else the client's (`useOperatorSigner`). `client.api` is
+swift-openapi-generator's own `Client` over the same transport.
+
+The facade (`Sources/MeroKit/Api/Generated`) and `MeroAPI`
+(`Sources/MeroAPI/Generated`) are generated from
+[`openapi/openapi.json`](openapi/openapi.json), core's document at the commit
+in [`openapi/source`](openapi/source), by
+[`scripts/generate-openapi.sh`](scripts/generate-openapi.sh), and checked in:
+`refresh [REF]` vendors a newer document, `check` (a CI job) fails on stale
+output. The methods `CalimeroClient` had before (`getOrg`, `invite`,
+`createApp`, ...) still work and are deprecated in favour of the facade method
+their warning names. `call`/`view` (idempotent retries, failover, exact
+numbers), the sign-in ceremonies, the event streams and the escape hatches
+(`post`, `postConfirmed`, ...) are not.
+
+## Behaviour
 
 - **Transport.** Only `/health` and `/attestation` are plaintext. Everything
   else goes through `calimero/sealed-http/v2` (Noise NK to the attested
@@ -105,6 +144,8 @@ XCUITest suite drives.
 
 ```sh
 swift build && swift test
+scripts/generate-openapi.sh                     # regenerate MeroAPI + the facade from openapi/openapi.json
+scripts/generate-openapi.sh refresh docs/openapi   # vendor core's document from a branch, tag or commit first
 swiftlint lint --strict
 swift-format lint --recursive --strict Sources Tests Examples
 scripts/dev-cluster.sh up                       # merod local on :2501-2503 (Docker on a Mac)
