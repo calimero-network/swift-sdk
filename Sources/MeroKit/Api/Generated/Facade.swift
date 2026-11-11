@@ -560,8 +560,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func recoveryCancel(body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.AccountRecoveryCancel.Input(body: .json(body))
+        public func recoveryCancel(passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.AccountRecoveryCancel.Input()
             return try await client.perform(passkey: passkey) { api in
                 try await api.accountRecoveryCancel(input).ok.body.json
             }
@@ -691,8 +691,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func apikeyRevoke(key: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.ApikeyRevoke.Input(path: .init(key: key), body: .json(body))
+        public func apikeyRevoke(key: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.ApikeyRevoke.Input(path: .init(key: key))
             return try await client.perform(passkey: passkey) { api in
                 try await api.apikeyRevoke(input).ok.body.json
             }
@@ -800,8 +800,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func passkeyRemove(cred: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.PasskeyRemove.Input(path: .init(cred: cred), body: .json(body))
+        public func passkeyRemove(cred: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.PasskeyRemove.Input(path: .init(cred: cred))
             return try await client.perform(passkey: passkey) { api in
                 try await api.passkeyRemove(input).ok.body.json
             }
@@ -813,8 +813,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func recoveryCreate(body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.RecoveryCreate.Output.Ok.Body.JsonPayload {
-            let input = Operations.RecoveryCreate.Input(body: .json(body))
+        public func recoveryCreate(passkey: (any PasskeyProvider)? = nil) async throws -> Operations.RecoveryCreate.Output.Ok.Body.JsonPayload {
+            let input = Operations.RecoveryCreate.Input()
             return try await client.perform(passkey: passkey) { api in
                 try await api.recoveryCreate(input).ok.body.json
             }
@@ -824,8 +824,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func recoveryRemove(body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.RecoveryRemove.Input(body: .json(body))
+        public func recoveryRemove(passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.RecoveryRemove.Input()
             return try await client.perform(passkey: passkey) { api in
                 try await api.recoveryRemove(input).ok.body.json
             }
@@ -983,8 +983,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func deployerRevoke(key: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeployerRevoke.Output.Ok.Body.JsonPayload {
-            let input = Operations.DeployerRevoke.Input(path: .init(key: key), body: .json(body))
+        public func deployerRevoke(key: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeployerRevoke.Output.Ok.Body.JsonPayload {
+            let input = Operations.DeployerRevoke.Input(path: .init(key: key))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deployerRevoke(input).ok.body.json
             }
@@ -1007,8 +1007,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func delete(id: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentDelete.Output.Ok.Body.JsonPayload {
-            let input = Operations.DeploymentDelete.Input(path: .init(id: id), body: .json(body))
+        public func delete(id: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentDelete.Output.Ok.Body.JsonPayload {
+            let input = Operations.DeploymentDelete.Input(path: .init(id: id))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentDelete(input).ok.body.json
             }
@@ -1066,8 +1066,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func withdraw(id: Swift.String, app: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
-            let input = Operations.DeploymentWithdraw.Input(path: .init(id: id, app: app), body: .json(body))
+        public func withdraw(id: Swift.String, app: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
+            let input = Operations.DeploymentWithdraw.Input(path: .init(id: id, app: app))
             return try await client.perform(passkey: passkey) { api in
                 try await api.deploymentWithdraw(input).ok.body.json
             }
@@ -1099,8 +1099,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func signUpInviteRevoke(key: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
-            let input = Operations.SignUpInviteRevoke.Input(path: .init(key: key), body: .json(body))
+        public func signUpInviteRevoke(key: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
+            let input = Operations.SignUpInviteRevoke.Input(path: .init(key: key))
             return try await client.perform(passkey: passkey) { api in
                 try await api.signUpInviteRevoke(input).ok.body.json
             }
@@ -1183,8 +1183,8 @@ extension CalimeroClient {
         ///
         /// **Who:** the ops token. **Operator signature:** answers `428 OPERATOR_SIGNATURE_REQUIRED` first; send it again with `operatorProof`, the operator key's signature over `details.message` and its `nonce`.
         @discardableResult
-        public func releaseDeadlineLift(version: Swift.String, body: Components.Schemas.ProofOnly, operatorSigner: (any OperatorSigner)? = nil) async throws -> Components.Schemas.Written {
-            let input = Operations.OpsReleaseDeadlineLift.Input(path: .init(version: version), body: .json(body))
+        public func releaseDeadlineLift(version: Swift.String, operatorSigner: (any OperatorSigner)? = nil) async throws -> Components.Schemas.Written {
+            let input = Operations.OpsReleaseDeadlineLift.Input(path: .init(version: version))
             return try await client.perform(operatorSigner: operatorSigner) { api in
                 try await api.opsReleaseDeadlineLift(input).ok.body.json
             }
@@ -1269,8 +1269,8 @@ extension CalimeroClient {
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func inviteRevoke(org: Swift.String, key: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.InviteRevoke.Input(path: .init(org: org, key: key), body: .json(body))
+        public func inviteRevoke(org: Swift.String, key: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.InviteRevoke.Input(path: .init(org: org, key: key))
             return try await client.perform(passkey: passkey) { api in
                 try await api.inviteRevoke(input).ok.body.json
             }
@@ -1371,8 +1371,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func delete(org: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
-            let input = Operations.OrgDelete.Input(path: .init(org: org), body: .json(body))
+        public func delete(org: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.Written {
+            let input = Operations.OrgDelete.Input(path: .init(org: org))
             return try await client.perform(passkey: passkey) { api in
                 try await api.orgDelete(input).ok.body.json
             }
@@ -1460,8 +1460,8 @@ extension CalimeroClient {
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func removeMember(org: Swift.String, account: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.OrgRemoveMember.Input(path: .init(org: org, account: account), body: .json(body))
+        public func removeMember(org: Swift.String, account: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.OrgRemoveMember.Input(path: .init(org: org, account: account))
             return try await client.perform(passkey: passkey) { api in
                 try await api.orgRemoveMember(input).ok.body.json
             }
@@ -1564,8 +1564,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func recoveryCancel(org: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.RecoveryCancel.Input(path: .init(org: org), body: .json(body))
+        public func recoveryCancel(org: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.RecoveryCancel.Input(path: .init(org: org))
             return try await client.perform(passkey: passkey) { api in
                 try await api.recoveryCancel(input).ok.body.json
             }
@@ -1577,8 +1577,8 @@ extension CalimeroClient {
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func recoveryFinish(org: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.RecoveryFinish.Output.Ok.Body.JsonPayload {
-            let input = Operations.RecoveryFinish.Input(path: .init(org: org), body: .json(body))
+        public func recoveryFinish(org: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.RecoveryFinish.Output.Ok.Body.JsonPayload {
+            let input = Operations.RecoveryFinish.Input(path: .init(org: org))
             return try await client.perform(passkey: passkey) { api in
                 try await api.recoveryFinish(input).ok.body.json
             }
@@ -1631,8 +1631,8 @@ extension CalimeroClient {
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func teamDelete(org: Swift.String, team: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.TeamDelete.Output.Ok.Body.JsonPayload {
-            let input = Operations.TeamDelete.Input(path: .init(org: org, team: team), body: .json(body))
+        public func teamDelete(org: Swift.String, team: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.TeamDelete.Output.Ok.Body.JsonPayload {
+            let input = Operations.TeamDelete.Input(path: .init(org: org, team: team))
             return try await client.perform(passkey: passkey) { api in
                 try await api.teamDelete(input).ok.body.json
             }
@@ -1653,8 +1653,8 @@ extension CalimeroClient {
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func teamRemoveMember(org: Swift.String, team: Swift.String, account: Swift.String, body: Components.Schemas.ConfirmOnly, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
-            let input = Operations.TeamRemoveMember.Input(path: .init(org: org, team: team, account: account), body: .json(body))
+        public func teamRemoveMember(org: Swift.String, team: Swift.String, account: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.TeamRemoveMember.Input(path: .init(org: org, team: team, account: account))
             return try await client.perform(passkey: passkey) { api in
                 try await api.teamRemoveMember(input).ok.body.json
             }

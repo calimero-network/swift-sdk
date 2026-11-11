@@ -86,9 +86,23 @@ def init_params(lines, start, indent):
     raise SystemExit(f"no init at indent {indent} after line {start}")
 
 
+def component_structs(lines):
+    """`Components.Schemas` structs: name -> their init's parameters."""
+    out = {}
+    for i, line in enumerate(lines):
+        m = re.match(r"^        public struct (\w+): Codable", line)
+        if m:
+            try:
+                out[m.group(1)] = init_params(lines, i, 12)
+            except SystemExit:
+                pass
+    return out
+
+
 def operations(types):
     """Each generated operation: its id, Swift name, inputs and success answer."""
     lines = types.split("\n")
+    structs = component_structs(lines)
     starts = [i for i, l in enumerate(lines) if re.match(r"^    public enum (\w+) \{$", l)]
     ops = {}
     for n, start in enumerate(starts):
@@ -120,7 +134,12 @@ def operations(types):
                     if typ == f"Operations.{name}.Input.Body.JsonPayload" and payload_at is not None:
                         op["body"] = ("fields", case, init_params(block, payload_at, 20))
                     else:
-                        op["body"] = ("whole", case, typ)
+                        component = re.match(r"^Components\.Schemas\.(\w+)$", typ)
+                        if component and component.group(1) in structs:
+                            # A body that is one shared object (`ConfirmOnly`): its fields, as an inline body's.
+                            op["body"] = ("fields", case, structs[component.group(1)])
+                        else:
+                            op["body"] = ("whole", case, typ)
                     break
         ok_at = next((i for i in range(out_at, len(block))
                       if block[i] == "            public struct Ok: Sendable, Hashable {"), None)

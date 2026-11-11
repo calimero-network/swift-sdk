@@ -85,7 +85,7 @@ extension CalimeroClient {
         let answer = try await legacyValue {
             try await self.auth.apikeyCreate(
                 label: label, apps: apps, methods: methods, readOnly: readOnly, allowConfirm: allowConfirm,
-                ttlSecs: ttlSecs, upgrades: scope, passkey: passkey)
+                ttlSecs: ttlSecs.map { Int64($0) }, upgrades: scope, passkey: passkey)
         }
         return (answer["keyId"]?.stringValue ?? "", answer["key"]?.stringValue ?? "")
     }
@@ -307,7 +307,7 @@ extension CalimeroClient {
     public func publishPresence(_ app: String, seq: Int, state: Data?) async throws {
         // `nil` retracts it: an explicit `state: null`, as before.
         let state: String?? = .some(state.map { Hex.encode($0) })
-        _ = try await answer { try await self.apps.presencePublish(app: app, seq: seq, state: state) }
+        _ = try await answer { try await self.apps.presencePublish(app: app, seq: Int64(seq), state: state) }
     }
 
     /// Who is present in `app` now.
@@ -475,10 +475,12 @@ extension CalimeroClient {
         _ = try page.query()  // refuses a `limit` outside 1 to 100 before sending
         if let org {
             return try await legacy(AppsReport.self) {
-                try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
+                try await self.orgs.apps(org: org, after: page.after, limit: page.limit.map { Int64($0) })
             }
         }
-        return try await legacy(AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
+        return try await legacy(AppsReport.self) {
+            try await self.auth.apps(after: page.after, limit: page.limit.map { Int64($0) })
+        }
     }
 
     /// `GET /releases`: the cluster's governance and every release deadline.
@@ -531,14 +533,14 @@ extension CalimeroClient {
     @available(*, deprecated, message: "use client.ops.apps(after:limit:)")
     public func opsApps(page: PageOptions = PageOptions()) async throws -> JSONValue {
         _ = try page.query()
-        return try await legacyValue { try await self.ops.apps(after: page.after, limit: page.limit) }
+        return try await legacyValue { try await self.ops.apps(after: page.after, limit: page.limit.map { Int64($0) }) }
     }
 
     /// `GET /ops/orgs`. Operator token.
     @available(*, deprecated, message: "use client.ops.orgs(after:limit:)")
     public func opsOrgs(page: PageOptions = PageOptions()) async throws -> JSONValue {
         _ = try page.query()
-        return try await legacyValue { try await self.ops.orgs(after: page.after, limit: page.limit) }
+        return try await legacyValue { try await self.ops.orgs(after: page.after, limit: page.limit.map { Int64($0) }) }
     }
 
     /// Announce when work on images older than `version` ends. Operator token.
@@ -581,7 +583,7 @@ extension CalimeroClient {
     ) async throws {
         _ = try await answer {
             try await self.orgs.capabilities(
-                org: org, account: account, team: team, capabilities: capabilities.rawValue, passkey: passkey)
+                org: org, account: account, team: team, capabilities: Int64(capabilities.rawValue), passkey: passkey)
         }
     }
 
@@ -614,7 +616,8 @@ extension CalimeroClient {
         let role: Components.Schemas.TeamRole? = try role.map { try Self.converted($0) }
         _ = try await answer {
             try await self.orgs.teamSetMember(
-                org: org, team: team, account: account, lead: lead, role: role, capabilities: capabilities?.rawValue,
+                org: org, team: team, account: account, lead: lead, role: role,
+                capabilities: capabilities.map { Int64($0.rawValue) },
                 passkey: passkey)
         }
     }
@@ -640,7 +643,8 @@ extension CalimeroClient {
         let role: Components.Schemas.OrgRole = try Self.converted(role)
         let answer = try await legacyValue {
             try await self.orgs.inviteCreate(
-                org: org, role: role, teams: teams, ttlSecs: ttlSecs, uses: uses, passkey: passkey)
+                org: org, role: role, teams: teams, ttlSecs: ttlSecs.map { Int64($0) }, uses: uses.map { Int64($0) },
+                passkey: passkey)
         }
         guard let token = answer["token"]?.stringValue else { throw AccountError.protocolViolation("no invite token") }
         return token

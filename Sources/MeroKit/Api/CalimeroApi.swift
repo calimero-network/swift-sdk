@@ -330,17 +330,14 @@ extension OpenAPIValueContainer {
 }
 
 extension AppAccess {
-    /// This access as the generated API's `Access`. Built case by case: the
-    /// document's `oneOf` has no discriminator, so decoding it from JSON
-    /// takes the first case whose fields fit (`{ kind }`) and drops `team`
-    /// or `accounts`.
+    /// This access as the generated API's `Access` (discriminated by `kind`).
     public var generated: Components.Schemas.Access {
         switch self {
-        case .owner: return .case1(.init(kind: "owner"))
-        case .org: return .case2(.init(kind: "org"))
-        case .public: return .case3(.init(kind: "public"))
-        case .accounts(let accounts): return .case4(.init(kind: "accounts", accounts: accounts))
-        case .team(let team): return .case5(.init(kind: "team", team: team))
+        case .owner: return .owner(.init(kind: .owner))
+        case .org: return .org(.init(kind: .org))
+        case .public: return ._public(.init(kind: ._public))
+        case .accounts(let accounts): return .accounts(.init(kind: .accounts, accounts: accounts))
+        case .team(let team): return .team(.init(kind: .team, team: team))
         }
     }
 }

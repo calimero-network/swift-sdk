@@ -863,7 +863,7 @@ public actor CalimeroClient {
     /// Committed events from index `from`, then live, until the stream is
     /// cancelled (stop iterating, or cancel the task).
     public nonisolated func events(_ app: String, from: Int = 0) -> AsyncThrowingStream<CloudEvent, Error> {
-        stream { try await self.apps.events(app: app, from: from) }
+        stream { try await self.apps.events(app: app, from: Int64(from)) }
     }
 
     /// A server-sent event stream on `path`, sealed like every other answer.
@@ -942,10 +942,12 @@ public actor CalimeroClient {
         _ = try page.query()
         if let org {
             return try await legacy(AppsReport.self) {
-                try await self.orgs.apps(org: org, after: page.after, limit: page.limit)
+                try await self.orgs.apps(org: org, after: page.after, limit: page.limit.map { Int64($0) })
             }
         }
-        return try await legacy(AppsReport.self) { try await self.auth.apps(after: page.after, limit: page.limit) }
+        return try await legacy(AppsReport.self) {
+            try await self.auth.apps(after: page.after, limit: page.limit.map { Int64($0) })
+        }
     }
 
     /// What waits for a decision in a scope (`org`, or the account's own apps with `nil`).
