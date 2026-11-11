@@ -56,6 +56,9 @@ public final class ServedPageHandoff: @unchecked Sendable {
     public static let info = "calimero.native-sign-in.v1"
     /// The fragment that marks a native sign-in on the page.
     public static let fragment = "native-sign-in"
+    /// An approval's HKDF info and fragment (``ServedPageApproval``).
+    public static let approveInfo = "calimero.native-approve.v1"
+    public static let approveFragment = "native-approve"
 
     private let privateKey: P256.KeyAgreement.PrivateKey
     public let state: String
@@ -79,42 +82,73 @@ public final class ServedPageHandoff: @unchecked Sendable {
     /// The page to open: `{origin}/{version}/#native-sign-in&state=…&key=…`.
     /// The parameters ride in the fragment, so no server sees them.
     public func url(origin: URL, version: String) -> URL {
+        url(origin: origin, version: version, fragment: Self.fragment)
+    }
+
+    /// `{origin}/{version}/#{fragment}&state=…&key=…`, then `extra` (base64url or
+    /// rp-id values, so nothing in them needs escaping).
+    public func url(origin: URL, version: String, fragment: String, extra: [(String, String)] = []) -> URL {
         let base = origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
-        return URL(string: "\(base)/\(version)/#\(Self.fragment)&state=\(state)&key=\(publicKey)")!
+        let more = extra.map { "&\($0.0)=\($0.1)" }.joined()
+        return URL(string: "\(base)/\(version)/#\(fragment)&state=\(state)&key=\(publicKey)\(more)")!
     }
 
     /// The session in the page's answer (`callback#state=…&box=…`). Throws on
     /// another `state`, a box this key can't open, or a second answer.
     public func open(_ callback: URL) throws -> ServedPageSession {
+        let plain = try openBox(callback, info: Self.info)
+        guard let session = try? JSONDecoder().decode(ServedPageSession.self, from: plain) else {
+            throw ServedPageSignInError("the sign-in answer could not be opened")
+        }
+        guard session.v == 1 else { throw ServedPageSignInError("unknown sign-in answer version \(session.v)") }
+        return session
+    }
+
+    /// The assertion in an approval page's answer. Throws ``PasskeyCancelled``
+    /// when the person declined there (`#state=…&cancelled=1`).
+    public func openApproval(_ callback: URL) throws -> AssertionJSON {
+        struct Answer: Decodable {
+            let v: Int
+            let assertion: AssertionJSON
+        }
+        if value("cancelled", in: callback) == "1", value("state", in: callback) == state {
+            throw PasskeyCancelled("the approval was declined")
+        }
+        let plain = try openBox(callback, info: Self.approveInfo)
+        guard let answer = try? JSONDecoder().decode(Answer.self, from: plain), answer.v == 1 else {
+            throw ServedPageSignInError("the approval answer could not be opened")
+        }
+        return answer.assertion
+    }
+
+    private func value(_ name: String, in callback: URL) -> String? {
         var parts = URLComponents()
         parts.percentEncodedQuery = callback.fragment ?? ""
-        let items = parts.queryItems ?? []
-        let value = { (name: String) in items.first { $0.name == name }?.value }
-        guard let state = value("state"), let box = value("box") else {
-            throw ServedPageSignInError("the sign-in page sent no session back")
+        return parts.queryItems?.first { $0.name == name }?.value
+    }
+
+    /// The plaintext of `callback#state=…&box=…`, opened once, under HKDF `info`.
+    private func openBox(_ callback: URL, info: String) throws -> Data {
+        guard let state = value("state", in: callback), let box = value("box", in: callback) else {
+            throw ServedPageSignInError("the page sent nothing back")
         }
-        guard state == self.state else { throw ServedPageSignInError("the sign-in answer is not for this sign-in") }
+        guard state == self.state else { throw ServedPageSignInError("the answer is not for this request") }
         lock.lock()
         let first = !used
         used = true
         lock.unlock()
-        guard first else { throw ServedPageSignInError("this sign-in was already answered") }
+        guard first else { throw ServedPageSignInError("this request was already answered") }
         let bytes = try fromB64url(box)
-        guard bytes.count > 65 + 12 + 16 else { throw ServedPageSignInError("the sign-in answer is malformed") }
+        guard bytes.count > 65 + 12 + 16 else { throw ServedPageSignInError("the answer is malformed") }
         do {
             let epk = try P256.KeyAgreement.PublicKey(x963Representation: bytes.prefix(65))
             let shared = try privateKey.sharedSecretFromKeyAgreement(with: epk)
             let key = shared.hkdfDerivedSymmetricKey(
-                using: SHA256.self, salt: Data(), sharedInfo: Data(Self.info.utf8), outputByteCount: 32)
+                using: SHA256.self, salt: Data(), sharedInfo: Data(info.utf8), outputByteCount: 32)
             let sealed = try AES.GCM.SealedBox(combined: bytes.dropFirst(65))
-            let plain = try AES.GCM.open(sealed, using: key, authenticating: Data(state.utf8))
-            let session = try JSONDecoder().decode(ServedPageSession.self, from: plain)
-            guard session.v == 1 else { throw ServedPageSignInError("unknown sign-in answer version \(session.v)") }
-            return session
-        } catch let error as ServedPageSignInError {
-            throw error
+            return try AES.GCM.open(sealed, using: key, authenticating: Data(state.utf8))
         } catch {
-            throw ServedPageSignInError("the sign-in answer could not be opened")
+            throw ServedPageSignInError("the answer could not be opened")
         }
     }
 }

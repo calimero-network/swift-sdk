@@ -55,7 +55,7 @@ final class ServedPageHandoffTests: XCTestCase {
         let handoff = try jsHandoff()
         _ = try handoff.open(answer())
         XCTAssertThrowsError(try handoff.open(answer())) {
-            XCTAssertEqual($0 as? ServedPageSignInError, ServedPageSignInError("this sign-in was already answered"))
+            XCTAssertEqual($0 as? ServedPageSignInError, ServedPageSignInError("this request was already answered"))
         }
     }
 
@@ -66,7 +66,7 @@ final class ServedPageHandoffTests: XCTestCase {
     func testAnotherKeyCannotOpenTheBox() {
         let other = ServedPageHandoff(privateKey: P256.KeyAgreement.PrivateKey(), state: Self.jsState)
         XCTAssertThrowsError(try other.open(answer())) {
-            XCTAssertEqual($0 as? ServedPageSignInError, ServedPageSignInError("the sign-in answer could not be opened"))
+            XCTAssertEqual($0 as? ServedPageSignInError, ServedPageSignInError("the answer could not be opened"))
         }
     }
 
@@ -83,5 +83,49 @@ final class ServedPageHandoffTests: XCTestCase {
         XCTAssertEqual(url.fragment, "native-sign-in&state=\(handoff.state)&key=\(handoff.publicKey)")
         XCTAssertEqual(try fromB64url(handoff.publicKey).count, 65)
         XCTAssertNotEqual(handoff.state, ServedPageHandoff().state)
+    }
+}
+
+final class ServedPageApprovalTests: XCTestCase {
+    // Sealed by apps `@calimero-apps/passkey/native` (`approveNative`), WebCrypto.
+    static let jsAnswer =
+        "mero-chat://approved#state=c3RhdGUtZm9yLXRoaXMtc2lnbi1pbg&box=BGqRdlG34snUtVCv1fANYLwMq3Mi2-8jey_OJk-v5mj3A2AEulVm2VZeRGLWGy3elP1Y70Gm-2DtmCPSaYmk2N0fTp6LaB-u9muFZDJ2oh4IDknAWoZShiqFEIEDMh3B_SEL-ROmQUbeAAh-WUxipNxyXKonr9mRsJ1uRRv49K31ThwaIeujjSJGpo6_dGLnGlwyR8MMyFxUKv-tm-loT6ZNSjkfjXD_QhtMJSUAWA5Kmp6D4hZ8vbEjCvb3i_3XY1s3FpXSWcqHKqA"
+
+    private func handoff() throws -> ServedPageHandoff {
+        let key = try P256.KeyAgreement.PrivateKey(rawRepresentation: fromB64url(ServedPageHandoffTests.jsPrivateKey))
+        return ServedPageHandoff(privateKey: key, state: ServedPageHandoffTests.jsState)
+    }
+
+    func testOpensTheAssertionTheWebPageSealed() throws {
+        let got = try handoff().openApproval(URL(string: Self.jsAnswer)!)
+        XCTAssertEqual(
+            got, AssertionJSON(credentialId: "cred_1", authenticatorData: "ad", clientDataJson: "cd", signature: "sig"))
+    }
+
+    func testASignInCannotBeReadAsAnApprovalOrTheOtherWay() throws {
+        let signIn = URL(string: "mero-chat://signed-in#state=\(ServedPageHandoffTests.jsState)&box=\(ServedPageHandoffTests.jsBox)")!
+        XCTAssertThrowsError(try handoff().openApproval(signIn))
+        XCTAssertThrowsError(try handoff().open(URL(string: Self.jsAnswer)!))
+    }
+
+    func testRefusesAReplayedApproval() throws {
+        let h = try handoff()
+        _ = try h.openApproval(URL(string: Self.jsAnswer)!)
+        XCTAssertThrowsError(try h.openApproval(URL(string: Self.jsAnswer)!))
+    }
+
+    func testADeclineIsACancelledPasskey() throws {
+        let declined = URL(string: "mero-chat://approved#state=\(ServedPageHandoffTests.jsState)&cancelled=1")!
+        XCTAssertThrowsError(try handoff().openApproval(declined)) { XCTAssertTrue($0 is PasskeyCancelled) }
+    }
+
+    func testTheApprovalURLCarriesTheChallengeInTheFragment() {
+        let h = ServedPageHandoff()
+        let url = h.url(
+            origin: URL(string: "https://x.apps.calimero.network")!, version: "3.1.72",
+            fragment: ServedPageHandoff.approveFragment, extra: [("challenge", "AAAA"), ("rpId", "calimero.network")])
+        XCTAssertTrue(url.absoluteString.hasPrefix("https://x.apps.calimero.network/3.1.72/#"))
+        XCTAssertEqual(
+            url.fragment, "native-approve&state=\(h.state)&key=\(h.publicKey)&challenge=AAAA&rpId=calimero.network")
     }
 }
