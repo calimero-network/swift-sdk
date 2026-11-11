@@ -427,7 +427,7 @@ public actor CalimeroClient {
 
     /// A generated answer as MeroKit's own type `T`, through its JSON.
     static func reading<T: Decodable>(_ type: T.Type, _ value: some Encodable) throws -> T {
-        try MeroJSON.decode(type, from: try MeroJSON.encode(value))
+        try MeroJSON.convert(value, to: type)
     }
 
     /// `value` as generated type `T`, through its JSON.

@@ -391,3 +391,12 @@ extension JSONValue {
         self = try MeroJSON.decode(JSONValue.self, from: try MeroJSON.encode(value))
     }
 }
+
+extension MeroJSON {
+    /// A generated value (a facade method's answer) as one of MeroKit's
+    /// `Decodable` types, through its JSON:
+    /// `try MeroJSON.convert(try await client.consent.pageResult(request: id), to: ConsentResult.self)`.
+    public static func convert<T: Decodable>(_ value: some Encodable, to type: T.Type) throws -> T {
+        try decode(type, from: try encode(value))
+    }
+}

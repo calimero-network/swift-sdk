@@ -22,7 +22,8 @@ Upgrade notes:
 - Answers are the generated types, decoded strictly (core@94bcde3 types
   every answer and makes optional what older nodes leave out). To read one as
   a MeroKit type, go through its JSON:
-  `OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))`.
+  `OrgInfo(json: try JSONValue(encoding: try await client.orgs.get(org: id)))`,
+  `try MeroJSON.convert(try await client.consent.pageResult(request: id), to: ConsentResult.self)`.
 - Arguments that were MeroKit types take their `generated` form:
   `AppAccess.team(id).generated`, `Deployer.org(id).generated`,
   `OrgRole.admin.generated`, `TeamJoin.everyone.generated`,

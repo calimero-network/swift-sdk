@@ -71,7 +71,7 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
 
     func fetchApps(package: String? = nil) async throws -> [AppInfo] {
         let apps = try await client.apps.list(package: package).apps
-        return try MeroJSON.decode([AppInfo].self, from: try MeroJSON.encode(apps))
+        return try MeroJSON.convert(apps, to: [AppInfo].self)
     }
 
     func appRecord(_ id: String) async throws -> JSONValue {
