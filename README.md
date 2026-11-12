@@ -114,7 +114,13 @@ sign-in ceremonies, the event streams and the escape hatches (`post`,
   `OriginNotRegistered`, `BadOrigin`, `OriginTaken`, `QuotaExceeded`,
   `RecoveryNotReady{readyAt}`; plus `ConfirmCancelled`.
 - **Approvals** happen on the node's consent page: `requestConsent` → open the
-  `url` in the system browser → `consentResult`.
+  `url` in the system browser → `consentResult`. Besides releases, upgrades and
+  outbound hosts, the page creates organizations (`.createOrg`), mints invites
+  (`.createInvite`) and accepts them (`.acceptInvite`), and
+  `ConsentResult.outcome` says what it made (`orgId`, `inviteToken`,
+  `joinedOrg`). `confirmConsentReturn` refuses a return from the page that
+  did not decide the request the app started. See
+  [the consent page guide](docs/src/content/docs/guides/consent.mdx).
 
 ## The app layer (SwiftUI)
 

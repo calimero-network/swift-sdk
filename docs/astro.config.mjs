@@ -59,6 +59,7 @@ export default defineConfig({
           items: [
             'guides/calls-and-events',
             'guides/app-session',
+            'guides/consent',
             'guides/sealed-transport',
             'guides/tee-trust',
             'guides/agent-gate',

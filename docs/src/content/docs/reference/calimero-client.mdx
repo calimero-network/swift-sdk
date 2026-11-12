@@ -20,7 +20,7 @@ Methods marked with a passkey (`passkey:`) are step-ups: the node answers
 | Calls | `call`, `callJSON`, `callConfirmed`, `view`, `viewJSON`, `events`, `presenceStream` |
 | Blobs | `uploadFile(_:_:)`, `blobContent`, `listBlobs`, `blobInfo` |
 | Organizations | `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `updateTeam` |
-| Approvals | `appsReportAll`, `pendingApprovals`, `openConsentPage`, `waitForConsent`, `checkConsentCode`; `pageDeployment(_:)`, `frontendManifest(_:)` |
+| Approvals | `appsReportAll`, `pendingApprovals`, `requestConsent`, `consentResult`, `confirmConsentReturn`, `openConsentPage`, `waitForConsent`, `checkConsentCode` ([the consent page](/guides/consent/)); `pageDeployment(_:)`, `frontendManifest(_:)` |
 | Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed`; `JSONValue(encoding:)` (a facade answer as JSON, to read as MeroKit's types) |
 
 Every other route is a method of the generated facade, one per operation of

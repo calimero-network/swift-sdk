@@ -922,12 +922,6 @@ public actor CalimeroClient {
         return pendingApprovalsFrom(try await report, rules: try Self.reading(ReleaseRules.self, try await rules))
     }
 
-    /// Ask the node to ask the user (`POST /consent/requests`), for
-    /// ``openConsentPage(_:options:)``.
-    private func startConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
-        try Self.reading(ConsentStarted.self, try await consent.pageCreate(body: try request.generated()))
-    }
-
     /// ``requestConsent(_:)``, then hand the page's URL to `navigate`.
     /// (== mero-js `openConsentPage`, whose default navigates the window.)
     public func openConsentPage(
@@ -946,8 +940,7 @@ public actor CalimeroClient {
     /// ``CalimeroError`` (`CONSENT_CODE_MISMATCH`) and does not navigate.
     /// (== mero-js `openConsentPage(request, options)`.)
     public func openConsentPage(_ request: ConsentRequest, options: OpenConsentOptions) async throws -> ConsentStarted {
-        let started = try await startConsent(request)
-        try Self.checkConsentCode(started)
+        let started = try await requestConsent(request)
         if let confirm = options.confirm, !(await confirm(started)) { return started }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
         try await options.navigate(url)
@@ -977,7 +970,7 @@ public actor CalimeroClient {
         -> ConsentResult
     {
         while true {
-            let result = try Self.reading(ConsentResult.self, try await consent.pageResult(request: requestId))
+            let result = try await consentResult(requestId)
             if result.status != .pending || Task.isCancelled { return result }
             if let expiresAt, Date().timeIntervalSince1970 >= expiresAt { return result }
             await sleep(interval)

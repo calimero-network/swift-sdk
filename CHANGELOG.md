@@ -2,6 +2,49 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: consent requests create organizations and mint or accept invites
+
+`ConsentRequest` gains core's new consent kinds (calimero-network/core#5014):
+`.createOrg(name:returnTo:)`, `.createInvite(org:role:teams:ttlSecs:uses:allApps:returnTo:)`
+and `.acceptInvite(token:returnTo:)`, plus `kind` and `returnTo`.
+`ConsentResult` gains `outcome: ConsentOutcome?`, what the approval made
+(`.orgCreated(orgId:)`, `.inviteCreated(token:)`, `.inviteAccepted(org:)`),
+and `orgId`, `inviteToken`, `joinedOrg` and `isApproved`. The outcome is
+read only from the sealed `/consent/{id}/result`, never from the page's
+redirect. An invite token is redacted from every description and mirror
+(`print`, `dump`, interpolation) of `ConsentRequest`, `ConsentResult` and
+`ConsentOutcome`, and no error carries it.
+
+- `CalimeroClient.requestConsent(_:)` and `consentResult(_:)` are back,
+  hand-written: they send and read every kind (the generated
+  `consent.pageCreate` / `pageResult` types know only `release`, `upgrade`
+  and `outbound`). `openConsentPage`, `waitForConsent`,
+  `ConsentLauncher.request`, `MeroClient.requestConsent` and
+  `MeroAppSession` go through them. `ConsentRequest.generated()` throws for
+  the new kinds.
+- `CalimeroClient.confirmConsentReturn(_:returned:)` reads the result of the
+  request the app started after the page sent the person back, and throws
+  `CONSENT_REQUEST_MISMATCH` when the return names another request, or
+  `CONSENT_NOT_DECIDED` when the app's request is still pending (another
+  request approved, or a forged page), or `CONSENT_REPLACED` when the node
+  answers 404 for it (an account has one undecided request per node, and a
+  newer one replaced it). `MeroAppSession.handle(_:)` and
+  `requestConsent(_:)` and `MeroClient.requestConsent` apply it.
+- MeroKitUI's `ConsentLauncher.decide(client:request:callback:...)` asks,
+  opens the page and answers the checked result. With an https (universal
+  link) callback it uses `ASWebAuthenticationSession`'s `.https(host:path:)`
+  callback on iOS 17.4+ / macOS 14.4+, and the browser plus `waitForConsent`
+  before that.
+- `MeroClient.requestConsent` takes `returnTo:` (default: `callback.url`), for
+  a `returnTo` such as the package's served page.
+- A `MeroAppSession` consent that creates or joins an organization bumps
+  `revision`.
+
+Upgrade notes:
+
+- A `switch` over `ConsentRequest` that lists every case needs the three new
+  cases (or a `default`).
+
 ## Unreleased: `apps.blobUpload` takes the blob's content type again
 
 `apps.blobUpload(app:body:contentType:sealed:)` gains an optional

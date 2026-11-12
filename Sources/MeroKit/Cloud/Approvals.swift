@@ -213,7 +213,33 @@ public enum ConsentRequest: Sendable, Equatable {
     case upgrade(app: String, toVersion: String, returnTo: String)
     /// Approve outbound URL prefixes (`nil`: every one the latest release declares).
     case outbound(scope: ConsentScope, package: String? = nil, prefixes: [String]? = nil, returnTo: String)
+    /// Create an organization named `name`. Once approved, ``ConsentResult/outcome``
+    /// is ``ConsentOutcome/orgCreated(orgId:)``.
+    case createOrg(name: String, returnTo: String)
+    /// Mint an invite to `org` with `role`, optionally into `teams`, living
+    /// `ttlSecs`, redeemable `uses` times, and (`allApps`) granting every app of
+    /// the organization. Once approved, ``ConsentResult/outcome`` is
+    /// ``ConsentOutcome/inviteCreated(token:)``.
+    case createInvite(
+        org: String, role: OrgRole, teams: [String]? = nil, ttlSecs: Int? = nil, uses: Int? = nil,
+        allApps: Bool? = nil, returnTo: String)
+    /// Join the organization `token` invites to. Once approved,
+    /// ``ConsentResult/outcome`` is ``ConsentOutcome/inviteAccepted(org:)``.
+    case acceptInvite(token: String, returnTo: String)
 
+    /// The request's `kind`.
+    public var kind: String {
+        switch self {
+        case .release: return "release"
+        case .upgrade: return "upgrade"
+        case .outbound: return "outbound"
+        case .createOrg: return "createOrg"
+        case .createInvite: return "createInvite"
+        case .acceptInvite: return "acceptInvite"
+        }
+    }
+
+    /// The body of `POST /consent/requests`: `{ kind, scope?, subject, returnTo }`.
     public var json: JSONValue {
         switch self {
         case .release(let scope, let version, let withdraw, let returnTo):
@@ -234,6 +260,47 @@ public enum ConsentRequest: Sendable, Equatable {
             return [
                 "kind": "outbound", "scope": scope.json, "subject": .object(subject), "returnTo": .string(returnTo),
             ]
+        case .createOrg(let name, let returnTo):
+            return ["kind": "createOrg", "subject": ["name": .string(name)], "returnTo": .string(returnTo)]
+        case .createInvite(let org, let role, let teams, let ttlSecs, let uses, let allApps, let returnTo):
+            var subject: [String: JSONValue] = ["org": .string(org), "role": .string(role.rawValue)]
+            if let teams { subject["teams"] = .array(teams.map { .string($0) }) }
+            if let ttlSecs { subject["ttlSecs"] = .number(Double(ttlSecs)) }
+            if let uses { subject["uses"] = .number(Double(uses)) }
+            if let allApps { subject["allApps"] = .bool(allApps) }
+            return ["kind": "createInvite", "subject": .object(subject), "returnTo": .string(returnTo)]
+        case .acceptInvite(let token, let returnTo):
+            return ["kind": "acceptInvite", "subject": ["token": .string(token)], "returnTo": .string(returnTo)]
+        }
+    }
+
+    /// The request's `returnTo`.
+    public var returnTo: String {
+        switch self {
+        case .release(_, _, _, let returnTo), .upgrade(_, _, let returnTo), .outbound(_, _, _, let returnTo),
+            .createOrg(_, let returnTo), .createInvite(_, _, _, _, _, _, let returnTo),
+            .acceptInvite(_, let returnTo):
+            return returnTo
+        }
+    }
+
+    /// Refuses what the node would refuse, before anything is sent.
+    func validate() throws {
+        guard !returnTo.isEmpty else { throw AccountError.invalidInput("a consent request needs a returnTo") }
+        switch self {
+        case .createOrg(let name, _):
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AccountError.invalidInput("an organization needs a name")
+            }
+        case .createInvite(let org, let role, _, let ttlSecs, let uses, _, _):
+            guard !org.isEmpty else { throw AccountError.invalidInput("an invite needs an organization") }
+            guard role != .owner else { throw AccountError.invalidInput("an invite is for a guest, member or admin") }
+            if let ttlSecs, ttlSecs < 0 { throw AccountError.invalidInput("ttlSecs is not negative") }
+            if let uses, uses < 0 { throw AccountError.invalidInput("uses is not negative") }
+        case .acceptInvite(let token, _):
+            guard !token.isEmpty else { throw AccountError.invalidInput("an invite token is needed") }
+        case .release, .upgrade, .outbound:
+            break
         }
     }
 }
@@ -300,6 +367,11 @@ public struct ConsentResult: Codable, Sendable, Equatable {
     public var kind: String
     public var status: ConsentStatus
     public var decidedAt: Double?
+    /// What the approval made, typed by `kind` (`createOrg`, `createInvite`,
+    /// `acceptInvite`); `nil` while pending, when declined, and for the other
+    /// kinds. Read only from the sealed `/consent/{id}/result`, never from the
+    /// URL the page sent the person back to.
+    public var outcome: ConsentOutcome?
 }
 
 /// What the consent page put on `returnTo` when it sent the person back, or
