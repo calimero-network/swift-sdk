@@ -192,7 +192,9 @@ public final class FakeCloud: @unchecked Sendable {
                 body["name"]?.stringValue ?? "", body["org"]?.stringValue,
                 access?["kind"] == "team" ? access?["team"]?.stringValue : nil, body["package"]?.stringValue ?? ""
             )
-            return .json(["appId": .string(app), "contextId": .string(app), "group": 1, "replicas": [1]])
+            return .json([
+                "appId": .string(app), "contextId": .string(app), "group": 1, "replicas": [1], "compute": false,
+            ])
         case on("GET", "apps") != nil:
             let package = request.path.contains("package=") ? request.path.components(separatedBy: "package=")[1] : nil
             return .json([
