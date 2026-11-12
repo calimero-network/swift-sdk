@@ -1,6 +1,6 @@
 ---
 title: The consent page
-description: How a native app asks the person to approve what its package-bound session may not do (create an organization, mint or accept an invite, approve a release, upgrade, outbound hosts) on the node's own consent page, and reads the typed outcome.
+description: How a native app asks the person to approve what its package-bound session may not do (create an organization, mint or accept an invite, approve a release, upgrade, outbound hosts) on the node's own consent page, and reads what the approval made.
 sidebar:
   order: 3
 ---
@@ -8,92 +8,86 @@ sidebar:
 A session opened for an app's package may not create an organization, mint or
 accept an invite, approve a mero-tee release, upgrade an app instance or open
 outbound hosts on its own. The app asks the node, and the person decides on
-the node's own consent page, with their passkey. `client.consent` is the
-helper for that (the Swift twin of mero-js `client.consent.request / begin /
-resume / wait`).
+the node's own consent page, with their passkey.
 
-| Method | Route | |
-| --- | --- | --- |
-| `consent.request(_ ask:, returnTo:)` → `ConsentStarted` | `POST /consent/requests` (sealed) | `{ requestId, url, code, expiresAt }`; refuses a `code` that is not the page's (`CONSENT_CODE_MISMATCH`) |
-| `consent.result(requestId:)` → `ConsentDecision` | `GET /consent/{id}/result` (sealed, the same account) | the decision now |
-| `consent.resume(url:)` → `ConsentDecision?` | the same | the decision for a `returnTo?request_id=…&result=…` URL, `nil` for any other URL |
-| `consent.wait(requestId:timeout:interval:)` → `ConsentDecision` | the same, polled | until decided, or `pending` once `timeout` passes |
-| `ConsentLauncher.begin(client:ask:callback:…)` (MeroKitUI) → `ConsentDecision` | all of the above | the page in `ASWebAuthenticationSession`, or the browser plus `wait` |
+| | |
+| --- | --- |
+| `client.requestConsent(_ request:)` → `ConsentStarted` | `POST /consent/requests` (sealed): `{ requestId, url, code, expiresAt }`. Refuses a `code` that is not the page's (`CONSENT_CODE_MISMATCH`). |
+| `client.consentResult(_ requestId:)` → `ConsentResult` | `GET /consent/{id}/result` (sealed, the same account): the decision now, with its typed `outcome` |
+| `client.confirmConsentReturn(_ started:, returned:)` → `ConsentResult` | after the page sent the person back: the result of the request the app started, or an error (below) |
+| `client.openConsentPage(_:options:)`, `client.waitForConsent(_:)` | ask and navigate; poll until decided |
+| `ConsentLauncher.decide(client:request:callback:…)` (MeroKitUI) | all of the above, with the page in `ASWebAuthenticationSession` (or the browser) |
 
 ## What to ask, and what comes back
 
-| `ConsentAsk` | `outcome` once approved |
+| `ConsentRequest` | `ConsentResult.outcome` once approved |
 | --- | --- |
-| `.createOrg(name:)` | `.orgCreated(orgId:)`, `decision.orgId` |
-| `.createInvite(org:role:teams:ttlSecs:uses:allApps:)` | `.inviteCreated(token:)`, `decision.inviteToken` |
-| `.acceptInvite(token:)` | `.inviteAccepted(org:)`, `decision.joinedOrg` |
-| `.release(scope:version:withdraw:)`, `.upgrade(app:toVersion:)`, `.outbound(scope:package:prefixes:)` | none |
+| `.createOrg(name:returnTo:)` | `.orgCreated(orgId:)`, `result.orgId` |
+| `.createInvite(org:role:teams:ttlSecs:uses:allApps:returnTo:)` | `.inviteCreated(token:)`, `result.inviteToken` |
+| `.acceptInvite(token:returnTo:)` | `.inviteAccepted(org:)`, `result.joinedOrg` |
+| `.release(...)`, `.upgrade(...)`, `.outbound(...)` | none |
 
-A `ConsentDecision` has `requestId`, `kind` (`ConsentKind`, which also holds
-kinds newer than the SDK), `status` (`pending`, `approved`, `declined`),
-`decidedAt` and `outcome`. An approved `createOrg`, `createInvite` or
-`acceptInvite` without its outcome is refused as a protocol violation.
+The outcome comes only from the sealed `/consent/{id}/result`, never from the
+URL the page sends the person back to. `consentResult` refuses an answer for
+another request, an approved `createOrg`, `createInvite` or `acceptInvite`
+without its outcome, and an outcome of another kind.
 
-An invite token is a bearer credential. `ConsentAsk`, `ConsentOutcome` and
-`ConsentDecision` print it as `<redacted>` in their descriptions, debug
+An invite token is a bearer credential. `ConsentRequest`, `ConsentResult` and
+`ConsentOutcome` print it as `<redacted>` in their descriptions, debug
 descriptions and mirrors (`print`, `dump`, string interpolation), and no error
-carries it. Read it only from `decision.inviteToken`, and don't log it.
+carries it. Read it from `result.inviteToken`, and don't log it.
 
-## `returnTo`: a universal link
+## `returnTo`
 
 The node takes a `returnTo` only on the app package's own frontend origin or an
 origin its signed manifest names (`links.frontend`, `frontendAliases`). For a
-native app that is a universal link on such an https origin, served with the
-app in its `apple-app-site-association` and listed in the app's Associated
-Domains:
+native app that is either:
 
-```swift
-let callback = CloudCallback.https(host: "chat.example", path: "/consent")
-```
+- a universal link on such an https origin, `CloudCallback.https(host:path:)`,
+  with the app in that origin's `apple-app-site-association`; or
+- on Calimero Cloud, the package's served page
+  (`{origin}/{version}/?native-consent=1`), which passes `request_id` and
+  `result` on to the app's callback. `MeroClient.requestConsent` takes it as
+  `returnTo:`.
+
+## After the page sends the person back
+
+The query on the return URL is a hint. `confirmConsentReturn` reads the result
+of the request this app started and:
+
+- throws `CONSENT_RETURN_MISMATCH` when the return names another request;
+- throws `CONSENT_NOT_DECIDED` when the app's own request is still pending,
+  the sign that a different request was approved, or that the page was forged;
+- otherwise answers the decision (`approved` or `declined`) and its outcome.
 
 ## In the app
 
 ```swift
 import MeroKitUI
 
-let decision = try await ConsentLauncher.begin(
-    client: cloud, ask: .createOrg(name: "Acme"), callback: callback,
+let (started, result) = try await ConsentLauncher.decide(
+    client: cloud, request: .createOrg(name: "Acme", returnTo: callback.url), callback: callback,
     confirm: { started in await showCode(started.code) })   // false: don't open the page
-if let org = decision.orgId { open(org) }
+if let org = result.orgId { open(org) }
 ```
 
-`MeroAppSession.requestConsent(_ ask:)` does the same with the session's
-`callback`, keeps the answer in `consentDecision` (and `consentResult`), and
-bumps `revision` when an organization was created or joined.
+- With an app scheme, or an https callback on iOS 17.4+ / macOS 14.4+, the
+  page opens in `ASWebAuthenticationSession`, and the return is checked with
+  `confirmConsentReturn`. A dismissed sheet answers the result as it stands.
+- With an https callback on an older system, `ASWebAuthenticationSession`
+  takes no https callback, so the page opens in the browser and the result is
+  polled (`waitForConsent`) until the request expires. The universal link
+  arrives in `onOpenURL`: hand it to `session.handle(url)`.
 
-- **iOS 17.4+ / macOS 14.4+.** The page opens in `ASWebAuthenticationSession`
-  with the `.https(host:path:)` callback, and the URL the page sends the person
-  back to is resumed.
-- **Older systems.** `ASWebAuthenticationSession` takes no https callback
-  there, so the page opens in the browser and `begin` polls the result
-  (`wait`) until the request expires. The page sends the person back through
-  the universal link, which arrives in `onOpenURL`; hand it to
-  `session.handle(url)` (or `client.consent.resume(url:)`), which reads the
-  node's decision.
+`MeroAppSession.requestConsent(_:)` does the same with the session's
+`callback`, keeps the result in `consentResult`, remembers the request so
+`handle(url)` checks a later return against it, and bumps `revision` when an
+organization was created or joined.
 
 ```swift
 .onOpenURL { url in Task { await session.handle(url) } }
 ```
 
-The query on the return URL is a hint only: `resume` always reads the decision
-from the node, and an app should check `requestId` is one it started. A sheet
-dismissed before a decision throws `WebAuthenticationCancelled`; the request
-stays on the node until it expires (10 minutes).
-
-## Without MeroKitUI
-
-```swift
-let started = try await cloud.consent.request(.acceptInvite(token: token), returnTo: callback.url)
-show(started.code)                       // the page shows the same code
-open(URL(string: started.url)!)          // the node's own page
-let decision = try await cloud.consent.wait(requestId: started.requestId)
-```
-
-`openConsentPage`, `waitForConsent` and `ConsentRequest` still work for
-`release`, `upgrade` and `outbound`. They don't know the newer kinds, and they
-read results through the generated types, which don't have them yet either.
+The generated `client.consent.pageCreate` / `pageResult` know only
+`release`, `upgrade` and `outbound` until the vendored OpenAPI document has
+the new kinds; `ConsentRequest.generated()` throws for them.

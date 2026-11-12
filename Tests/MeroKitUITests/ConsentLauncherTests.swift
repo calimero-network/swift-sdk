@@ -5,33 +5,34 @@ import XCTest
 
 @testable import MeroKitUI
 
-/// A consent page answered in-process: sends the person back with `result`,
-/// or is dismissed.
-private struct Browser: WebAuthenticating {
-    let result: String?
+/// A consent page answered in-process: sends the person back naming
+/// `requestId`, or is dismissed (`nil`).
+private struct ReturningBrowser: WebAuthenticating {
+    let requestId: String?
     let opened = Box<[URL]>([])
 
     func authenticate(url: URL, callback: CloudCallback) async throws -> URL {
         opened.update { $0.append(url) }
-        guard let result else { throw WebAuthenticationCancelled() }
-        return URL(string: "\(callback.url)?request_id=r1&result=\(result)")!
+        guard let requestId else { throw WebAuthenticationCancelled() }
+        return URL(string: "\(callback.url)?request_id=\(requestId)&result=approved")!
     }
 }
 
-/// `ConsentLauncher.begin`: the auth session with an https callback, and the
-/// browser plus polling where the system has no https callback.
+/// `ConsentLauncher.decide`: the sealed result for the request this app
+/// started, the checks on the page's return, and the browser fallback where
+/// the system has no https callback.
 @MainActor
 final class ConsentLauncherTests: XCTestCase {
     private static let callback = CloudCallback.https(host: "chat.example", path: "/consent")
     nonisolated(unsafe) private var node: FakeCloudNode!
-    nonisolated(unsafe) private var decision: Box<JSONValue>!
+    nonisolated(unsafe) private var result: Box<JSONValue>!
 
     override func setUp() {
         super.setUp()
-        let decision = Box<JSONValue>([
+        let result = Box<JSONValue>([
             "requestId": "r1", "kind": "createOrg", "status": "approved", "decidedAt": 2, "outcome": ["orgId": "o9"],
         ])
-        self.decision = decision
+        self.result = result
         node = FakeCloudNode { request in
             switch request.path {
             case "/consent/requests":
@@ -39,7 +40,7 @@ final class ConsentLauncherTests: XCTestCase {
                     "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1_900_000_000,
                     "code": .string(confirmationCode("r1")),
                 ])
-            case "/consent/r1/result": return .json(decision.get)
+            case "/consent/r1/result": return .json(result.get)
             default: return .error(404, "NOT_FOUND")
             }
         }
@@ -58,60 +59,82 @@ final class ConsentLauncherTests: XCTestCase {
                 session: MockURLProtocol.makeSession()))
     }
 
-    func testRunsThePageInTheAuthSessionWithAnHTTPSCallback() async throws {
-        let browser = Browser(result: "approved")
-        let decision = try await ConsentLauncher.begin(
-            client: client(), ask: .createOrg(name: "Acme"), callback: Self.callback, opener: browser,
+    private static func createOrg(_ returnTo: String = ConsentLauncherTests.callback.url) -> ConsentRequest {
+        .createOrg(name: "Acme", returnTo: returnTo)
+    }
+
+    func testRunsThePageInTheAuthSessionAndReadsTheOutcome() async throws {
+        let browser = ReturningBrowser(requestId: "r1")
+        let (started, result) = try await ConsentLauncher.decide(
+            client: client(), request: Self.createOrg(), callback: Self.callback, opener: browser,
             openInBrowser: { _ in
                 XCTFail("the auth session takes an https callback here")
                 return false
             },
             httpsCallbackSupported: true)
-        XCTAssertEqual(decision.orgId, "o9")
+        XCTAssertEqual(started.requestId, "r1")
+        XCTAssertEqual(result.orgId, "o9")
         XCTAssertEqual(browser.opened.get, [URL(string: "https://node.test/consent/r1")!])
         let body = try XCTUnwrap(node.requests.first { $0.path == "/consent/requests" }?.json)
         XCTAssertEqual(body["returnTo"], "https://chat.example/consent")
     }
 
+    func testAReturnForAnotherRequestIsRefused() async throws {
+        do {
+            _ = try await ConsentLauncher.decide(
+                client: client(), request: Self.createOrg(), callback: Self.callback,
+                opener: ReturningBrowser(requestId: "r2"), httpsCallbackSupported: true)
+            XCTFail("expected CONSENT_RETURN_MISMATCH")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "CONSENT_RETURN_MISMATCH")
+        }
+    }
+
+    func testAReturnThatLeftThisRequestPendingIsRefused() async throws {
+        result.update { $0 = ["requestId": "r1", "kind": "createOrg", "status": "pending", "decidedAt": .null] }
+        do {
+            _ = try await ConsentLauncher.decide(
+                client: client(), request: Self.createOrg(), callback: Self.callback,
+                opener: ReturningBrowser(requestId: "r1"), httpsCallbackSupported: true)
+            XCTFail("expected CONSENT_NOT_DECIDED")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "CONSENT_NOT_DECIDED")
+        }
+    }
+
+    func testADismissedSheetAnswersTheResultAsItStands() async throws {
+        result.update { $0 = ["requestId": "r1", "kind": "createOrg", "status": "pending", "decidedAt": .null] }
+        let (_, result) = try await ConsentLauncher.decide(
+            client: client(), request: Self.createOrg(), callback: Self.callback,
+            opener: ReturningBrowser(requestId: nil), httpsCallbackSupported: true)
+        XCTAssertEqual(result.status, .pending)
+    }
+
     func testFallsBackToTheBrowserAndPollsOnAnOlderSystem() async throws {
-        let browser = Browser(result: "approved")
+        let browser = ReturningBrowser(requestId: "r1")
         let opened = Box<[URL]>([])
-        let decision = try await ConsentLauncher.begin(
-            client: client(), ask: .createOrg(name: "Acme"), callback: Self.callback, opener: browser,
+        let (_, result) = try await ConsentLauncher.decide(
+            client: client(), request: Self.createOrg(), callback: Self.callback, opener: browser,
             openInBrowser: { url in
                 opened.update { $0.append(url) }
                 return true
             },
             httpsCallbackSupported: false)
-        XCTAssertEqual(decision.orgId, "o9")
+        XCTAssertEqual(result.orgId, "o9")
         XCTAssertEqual(opened.get, [URL(string: "https://node.test/consent/r1")!])
         XCTAssertTrue(browser.opened.get.isEmpty, "no auth session without an https callback")
     }
 
-    func testADismissedSheetBeforeADecisionIsCancelled() async throws {
-        decision.update { $0 = ["requestId": "r1", "kind": "createOrg", "status": "pending", "decidedAt": .null] }
-        do {
-            _ = try await ConsentLauncher.begin(
-                client: client(), ask: .createOrg(name: "Acme"), callback: Self.callback,
-                opener: Browser(result: nil), httpsCallbackSupported: true)
-            XCTFail("expected WebAuthenticationCancelled")
-        } catch is WebAuthenticationCancelled {}
-    }
-
-    func testDecliningToOpenThePageSendsNothingMore() async throws {
-        let browser = Browser(result: "approved")
-        let shown = Box<String?>(nil)
-        do {
-            _ = try await ConsentLauncher.begin(
-                client: client(), ask: .acceptInvite(token: "inv_x"), callback: Self.callback, opener: browser,
-                httpsCallbackSupported: true,
-                confirm: { started in
-                    shown.update { $0 = started.code }
-                    return false
-                })
-            XCTFail("expected WebAuthenticationCancelled")
-        } catch is WebAuthenticationCancelled {}
-        XCTAssertEqual(shown.get, confirmationCode("r1"))
-        XCTAssertTrue(browser.opened.get.isEmpty)
+    func testTheServedPageCanBeTheReturnTo() async throws {
+        let session = MeroClient(
+            config: MeroProviderConfig(nodeURL: "https://node.test", policy: .development),
+            store: MemoryCloudSessionStore(), session: MockURLProtocol.makeSession(), passkey: SoftPasskey())
+        let served = "https://chat.apps.example/1.0.0/?native-consent=1"
+        let result = await session.requestConsent(
+            { Self.createOrg($0) }, callback: .scheme("merochat", path: "consent"), returnTo: served,
+            opener: ReturningBrowser(requestId: "r1"))
+        XCTAssertEqual(result?.orgId, "o9")
+        let body = try XCTUnwrap(node.requests.first { $0.path == "/consent/requests" }?.json)
+        XCTAssertEqual(body["returnTo"], .string(served))
     }
 }

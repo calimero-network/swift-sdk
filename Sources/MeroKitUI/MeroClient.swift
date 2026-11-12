@@ -252,9 +252,16 @@ public final class MeroClient: ObservableObject {
 
     /// Ask the node for a consent page, open it in the system browser with
     /// `opener`, and answer the decision once the page sends the person back
-    /// (or the sheet is dismissed). `nil` on a failure, in ``errorMessage``.
+    /// (or the sheet is dismissed), through `ConsentLauncher.decide`: the
+    /// node's sealed result for the request this app started, with its typed
+    /// `outcome`. `returnTo` replaces `callback.url` as the request's
+    /// `returnTo` (the package's served page on Calimero Cloud, which passes
+    /// the answer on to `callback`). `nil` on a failure, in ``errorMessage``,
+    /// including a return that did not decide this request
+    /// (`CONSENT_RETURN_MISMATCH`, `CONSENT_NOT_DECIDED`).
     public func requestConsent(
         _ request: (_ returnTo: String) -> ConsentRequest, callback: CloudCallback,
+        returnTo: String? = nil,
         opener: any WebAuthenticating = MeroClient.defaultOpener(),
         confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async -> ConsentResult? {
@@ -262,11 +269,12 @@ public final class MeroClient: ObservableObject {
             errorMessage = "Not connected to a node."
             return nil
         }
+        errorMessage = nil
         do {
-            let (started, _) = try await ConsentLauncher.request(
-                client: cloud, request: request(callback.url), callback: callback, opener: opener, confirm: confirm)
-            let id = started.requestId
-            return try MeroJSON.convert(try await cloud.consent.pageResult(request: id), to: ConsentResult.self)
+            return try await ConsentLauncher.decide(
+                client: cloud, request: request(returnTo ?? callback.url), callback: callback, opener: opener,
+                confirm: confirm
+            ).result
         } catch {
             errorMessage = Self.describe(error)
             return nil

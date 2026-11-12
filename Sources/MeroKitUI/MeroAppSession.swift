@@ -55,12 +55,58 @@ public enum ConsentLauncher {
         opener: any WebAuthenticating = MeroClient.defaultOpener(),
         confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
     ) async throws -> (started: ConsentStarted, returned: URL?) {
-        let body = try request.generated()
-        let started = try MeroJSON.convert(try await client.consent.pageCreate(body: body), to: ConsentStarted.self)
-        try CalimeroClient.checkConsentCode(started)
+        let started = try await client.requestConsent(request)
         if let confirm, !(await confirm(started)) { return (started, nil) }
         guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
         return (started, await open(url, callback: callback, opener: opener))
+    }
+
+    /// Ask, open the page, and answer the node's decision on the request this
+    /// app started, with its typed ``ConsentResult/outcome`` (the new
+    /// organization, the invite's token, the organization joined).
+    ///
+    /// - With an app scheme, or an https callback (a universal link) where the
+    ///   system takes one (iOS 17.4+ / macOS 14.4+), the page opens in
+    ///   `opener` (`ASWebAuthenticationSession`). When it sends the person
+    ///   back, ``CalimeroClient/confirmConsentReturn(_:returned:)`` reads the
+    ///   sealed result and throws `CONSENT_RETURN_MISMATCH` for a return that
+    ///   names another request, or `CONSENT_NOT_DECIDED` when this app's
+    ///   request is still pending (a different request approved, or a forged
+    ///   page). Dismissed, it answers the result as it stands.
+    /// - With an https callback on an older system, the page opens in the
+    ///   browser (`openInBrowser`) and the result is polled
+    ///   (``CalimeroClient/waitForConsent(_:interval:expiresAt:)``) until the
+    ///   request expires. The universal link reaches the app's `onOpenURL`;
+    ///   hand it to ``MeroAppSession/handle(_:)``.
+    ///
+    /// `confirm` runs before the page opens, with the node's answer (show the
+    /// person its `code`); answer `false` and the page is not opened, and the
+    /// result answered is `pending`.
+    @MainActor
+    public static func decide(
+        client: CalimeroClient, request: ConsentRequest, callback: CloudCallback,
+        opener: any WebAuthenticating = MeroClient.defaultOpener(),
+        openInBrowser: @escaping @MainActor (URL) async -> Bool = ConsentLauncher.openInBrowser,
+        httpsCallbackSupported: Bool = ConsentLauncher.supportsHTTPSCallback,
+        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
+    ) async throws -> (started: ConsentStarted, result: ConsentResult) {
+        if case .https = callback, !httpsCallbackSupported {
+            let started = try await client.requestConsent(request)
+            if let confirm, !(await confirm(started)) {
+                return (started, try await client.consentResult(started.requestId))
+            }
+            guard let url = URL(string: started.url) else {
+                throw AccountError.protocolViolation("bad consent URL")
+            }
+            guard await openInBrowser(url) else {
+                throw AccountError.protocolViolation("could not open the consent page")
+            }
+            return (started, try await client.waitForConsent(started.requestId, expiresAt: started.expiresAt))
+        }
+        let (started, returned) = try await Self.request(
+            client: client, request: request, callback: callback, opener: opener, confirm: confirm)
+        guard let returned else { return (started, try await client.consentResult(started.requestId)) }
+        return (started, try await client.confirmConsentReturn(started, returned: returned))
     }
 
     /// Whether `ASWebAuthenticationSession` takes an https callback here
@@ -72,64 +118,6 @@ public enum ConsentLauncher {
         #else
         return false
         #endif
-    }
-
-    /// Ask the person to approve `ask` on the node's consent page and answer
-    /// the node's decision, with its typed outcome (the new organization, the
-    /// invite's token, the organization joined).
-    /// (== mero-js `client.consent.begin`.)
-    ///
-    /// ``CalimeroClient/Consent/request(_:returnTo:)`` with `callback` as the
-    /// `returnTo`; `confirm` runs with the node's answer before the page opens
-    /// (show the person its `code`; answer `false` and the page is not opened,
-    /// which throws ``WebAuthenticationCancelled``). Then:
-    ///
-    /// - With an app scheme, or an https callback where the system takes one
-    ///   (iOS 17.4+ / macOS 14.4+), the page opens in `opener`
-    ///   (`ASWebAuthenticationSession`), and the URL it sends the person back
-    ///   to is resumed (``CalimeroClient/Consent/resume(url:)``).
-    /// - With an https callback on an older system, the page opens in the
-    ///   browser (`openInBrowser`) and the decision is polled
-    ///   (``CalimeroClient/Consent/wait(requestId:timeout:interval:)``) until
-    ///   `timeout` (default: the request's expiry). The universal link the page
-    ///   sends the person back to reaches the app's `onOpenURL`: hand it to
-    ///   ``MeroAppSession/handle(_:)`` (or `resume(url:)`). A `pending`
-    ///   answer here means the wait timed out.
-    ///
-    /// When the sheet is dismissed before the person decided, this throws
-    /// ``WebAuthenticationCancelled``; the request stays on the node until it expires.
-    @MainActor
-    public static func begin(
-        client: CalimeroClient, ask: ConsentAsk, callback: CloudCallback,
-        opener: any WebAuthenticating = MeroClient.defaultOpener(),
-        openInBrowser: @escaping @MainActor (URL) async -> Bool = ConsentLauncher.openInBrowser,
-        httpsCallbackSupported: Bool = ConsentLauncher.supportsHTTPSCallback,
-        timeout: Double? = nil,
-        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
-    ) async throws -> ConsentDecision {
-        let started = try await client.consent.request(ask, returnTo: callback.url)
-        if let confirm, !(await confirm(started)) { throw WebAuthenticationCancelled() }
-        guard let url = URL(string: started.url) else { throw AccountError.protocolViolation("bad consent URL") }
-        if case .https = callback, !httpsCallbackSupported {
-            guard await openInBrowser(url) else {
-                throw AccountError.protocolViolation("could not open the consent page")
-            }
-            let left = started.expiresAt - Date().timeIntervalSince1970
-            return try await client.consent.wait(requestId: started.requestId, timeout: timeout ?? max(0, left))
-        }
-        let returned: URL
-        do {
-            returned = try await opener.authenticate(url: url, callback: callback)
-        } catch is WebAuthenticationCancelled {
-            // Dismissed: the person may still have decided before closing it.
-            let decision = try await client.consent.result(requestId: started.requestId)
-            if decision.isDecided { return decision }
-            throw WebAuthenticationCancelled()
-        }
-        if let decision = try await client.consent.resume(url: returned), decision.requestId == started.requestId {
-            return decision
-        }
-        return try await client.consent.result(requestId: started.requestId)
     }
 
     /// Open `url` in the system browser (the fallback for an https callback
@@ -183,11 +171,10 @@ public final class MeroAppSession: ObservableObject {
     /// The decision on the last consent request, once the page sent the
     /// person back (``handle(_:)``) and the node confirmed it.
     @Published public private(set) var consentResult: ConsentResult?
-    /// The decision on the last consent request with its typed outcome (the
-    /// new organization, the invite's token, the organization joined), once
-    /// the page sent the person back (``handle(_:)``) and the node confirmed it.
-    @Published public private(set) var consentDecision: ConsentDecision?
 
+    /// The consent request this session started last, which a consent
+    /// return (``handle(_:)``) must answer.
+    private var consentRequestId: String?
     private var lastKey = ""
     private var restoreTask: Task<Void, Never>?
     #if canImport(Combine)
@@ -291,10 +278,13 @@ public final class MeroAppSession: ObservableObject {
     @discardableResult
     public func handle(_ url: URL) async -> Bool {
         if let restoreTask { await restoreTask.value }
-        if consentReturn(url) != nil {
-            if let cloud = client.cloud, let decision = try? await cloud.consent.resume(url: url) {
-                consentDecision = decision
-                consentResult = decision.result
+        if let back = consentReturn(url) {
+            if let cloud = client.cloud {
+                // The request this session started, from the sealed result: a
+                // return naming another request, or one that left it pending,
+                // is refused (nil).
+                consentResult = try? await cloud.confirmConsentReturn(
+                    requestId: consentRequestId ?? back.requestId, returned: url)
             }
             return true
         }
@@ -354,8 +344,11 @@ public final class MeroAppSession: ObservableObject {
 
     /// Ask the account holder to approve `request` on the node's consent
     /// page, opened in the system browser (``ConsentLauncher``) with
-    /// ``callback`` as its `returnTo`. When the page sends the person back,
-    /// ``consentResult`` holds the node's decision. Answers the request.
+    /// ``callback`` as its `returnTo`, through `ConsentLauncher.decide`.
+    /// ``consentResult`` holds the node's decision on this request, with its
+    /// typed `outcome`; a new or joined organization bumps ``revision``.
+    /// Throws `CONSENT_RETURN_MISMATCH` / `CONSENT_NOT_DECIDED` when the page
+    /// that sent the person back did not decide this request. Answers the request.
     @discardableResult
     public func requestConsent(
         _ request: ConsentRequest, opener: any WebAuthenticating = MeroClient.defaultOpener(),
@@ -363,30 +356,15 @@ public final class MeroAppSession: ObservableObject {
     ) async throws -> ConsentStarted {
         guard let cloud = client.cloud else { throw SignedOutError(method: "requestConsent") }
         consentResult = nil
-        let (started, returned) = try await ConsentLauncher.request(
-            client: cloud, request: request, callback: callback, opener: opener, confirm: confirm)
-        if let returned { await handle(returned) }
+        let (started, result) = try await ConsentLauncher.decide(
+            client: cloud, request: request, callback: callback, opener: opener,
+            confirm: { [weak self] started in
+                self?.consentRequestId = started.requestId
+                return await confirm?(started) ?? true
+            })
+        consentResult = result
+        if result.orgId != nil || result.joinedOrg != nil { revision += 1 }
         return started
-    }
-
-    /// Ask the account holder to approve `ask` on the node's consent page
-    /// (`ConsentLauncher.begin`) with ``callback`` as its `returnTo`, and
-    /// answer the node's decision, also held in ``consentDecision``. A new
-    /// organization or a joined one bumps ``revision``.
-    @discardableResult
-    public func requestConsent(
-        _ ask: ConsentAsk, opener: any WebAuthenticating = MeroClient.defaultOpener(),
-        confirm: (@MainActor (ConsentStarted) async -> Bool)? = nil
-    ) async throws -> ConsentDecision {
-        guard let cloud = client.cloud else { throw SignedOutError(method: "requestConsent") }
-        consentResult = nil
-        consentDecision = nil
-        let decision = try await ConsentLauncher.begin(
-            client: cloud, ask: ask, callback: callback, opener: opener, confirm: confirm)
-        consentDecision = decision
-        consentResult = decision.result
-        if decision.orgId != nil || decision.joinedOrg != nil { revision += 1 }
-        return decision
     }
 
     /// Rebuild ``backend`` from the client's current session. A no-op when

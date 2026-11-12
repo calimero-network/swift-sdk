@@ -20,7 +20,7 @@ use; tests hand view models `InMemoryAppBackend` instead.
 | `restore()`, `signIn()`, `signUp(name:)`, `signOut()`, `connect(nodeURL:allowMock:)` | sign-in |
 | `backend`, `revision`, `isSignedIn`, `account`, `applicationId`, `contract` | state |
 | `handle(url)`, `pendingInvitation`, `pendingOrgInvitation`, `redeemPendingInvitation()`, `dismissPendingInvitation()`, `createInvitationLink(namespaceId:)` | invitations |
-| `pendingApprovals(org:)`, `requestConsent(_:)` (`ConsentLauncher.begin`), `consentDecision`, `consentResult` | approvals ([the consent page](/guides/consent/)) |
+| `pendingApprovals(org:)`, `requestConsent(_:)` (`ConsentLauncher.decide`), `consentResult` | approvals ([the consent page](/guides/consent/)) |
 
 ## Names
 
