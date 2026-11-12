@@ -14,6 +14,15 @@ types now takes it too; nil (the default) still sends the first listed type,
 so existing calls are unchanged. Pass `contentType: "image/png"` to keep an
 image's type.
 
+## Unreleased: the `NoRelay*` aliases are gone
+
+**Breaking.** The deprecated `NoRelayContextContract` typealias (the 0.x
+name, kept since Calimero 1.0 has no relays) is removed.
+
+Upgrade notes:
+
+- Replace `NoRelayContextContract` with `SignedOutContextContract`.
+
 ## 1.0.0 (unreleased): the deprecated route wrappers are gone
 
 **Breaking.** The 83 `CalimeroClient` methods 0.x deprecated in favour of the
