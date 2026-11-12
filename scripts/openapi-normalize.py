@@ -25,6 +25,11 @@ document's meaning:
 4. Every non-2xx response is dropped. MeroKit's transport throws a refusal as
    its own typed error (`errorFrom`) before the generated client reads it, so
    the per-status types would never be reached. The document keeps them.
+5. A success answer whose JSON schema is only `{type: null}` (the body is
+   the JSON value `null`, as `POST /apps/{app}/transfer` answers) loses its
+   content: the generator cannot model a null-only schema and skips it with
+   a warning, and an answer with no content to decode is what the caller
+   gets either way.
 """
 import json
 import sys
@@ -112,6 +117,21 @@ def drop_refusals(document):
                 }
 
 
+def drop_null_answers(document):
+    for item in document.get("paths", {}).values():
+        for operation in item.values():
+            if not isinstance(operation, dict):
+                continue
+            for status, answer in operation.get("responses", {}).items():
+                content = answer.get("content") if isinstance(answer, dict) else None
+                if not status.startswith("2") or not isinstance(content, dict):
+                    continue
+                for media in [m for m, body in content.items() if body.get("schema") == {"type": "null"}]:
+                    del content[media]
+                if not content:
+                    del answer["content"]
+
+
 def main():
     if len(sys.argv) != 3:
         sys.exit(__doc__)
@@ -120,6 +140,7 @@ def main():
     normalize(document)
     hoist_discriminated(document)
     drop_refusals(document)
+    drop_null_answers(document)
     with open(sys.argv[2], "w", encoding="utf-8") as f:
         json.dump(document, f, indent=1)
         f.write("\n")
