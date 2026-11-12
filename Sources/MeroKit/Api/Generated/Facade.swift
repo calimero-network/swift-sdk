@@ -29,6 +29,8 @@ extension CalimeroClient {
 
         /// Set who may reach an app: `POST /apps/{app}/access` (`app_access`).
         ///
+        /// A package-bound session: only its own package's app, from one of its package's teams to another.
+        ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
         public func access(app: Swift.String, access: Components.Schemas.Access) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
@@ -40,7 +42,7 @@ extension CalimeroClient {
 
         /// Every replica's receipt-key attestation: `GET /apps/{app}/attestation` (`app_attestation`).
         ///
-        /// Each replica's `/attestation?purpose=receipts` for `nonce` (32 bytes, hex), or why it could not be had (`error`). Any other query parameter is ignored.
+        /// Each replica's `/attestation?purpose=receipts` for `nonce` (32 bytes, hex), or why it could not be had (`error`), and `cluster`, the cluster id each quote binds (with the replica's `node`): the documents are fetched in the clear, so their own `cluster` and `node` fields count for nothing. Any other query parameter is ignored.
         ///
         /// **Who:** whoever the app's access admits (a public app: anyone).
         @discardableResult
@@ -334,6 +336,32 @@ extension CalimeroClient {
             }
         }
 
+        /// Export a sealed file's key: `POST /apps/{app}/files/{id}/export` (`exports_export`).
+        ///
+        /// The owner and the organization's members. `recipient` is an X25519 public key (64 hex characters); the file's data key comes back wrapped to it, with the file's `segments` (each one's hash, hex) and `ephemeral` public key. The node never answers plaintext or a key in the clear. 30 a minute per account.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func exportsExport(app: Swift.String, id: Swift.String, recipient: Swift.String) async throws -> Operations.ExportsExport.Output.Ok.Body.JsonPayload {
+            let input = Operations.ExportsExport.Input(path: .init(app: app, id: id), body: .json(.init(recipient: recipient)))
+            return try await client.perform { api in
+                try await api.exportsExport(input).ok.body.json
+            }
+        }
+
+        /// One segment of a sealed file: `GET /apps/{app}/files/{id}/segments/{k}` (`exports_segment`).
+        ///
+        /// Segment `k` (from 0) of the file's ciphertext, raw; the owner and the organization's members.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func exportsSegment(app: Swift.String, id: Swift.String, k: Swift.String) async throws -> Data {
+            let input = Operations.ExportsSegment.Input(path: .init(app: app, id: id, k: k))
+            return try await client.perform { api in
+                try await Data(collecting: api.exportsSegment(input).ok.body.any, upTo: .max)
+            }
+        }
+
         /// One sealed file: `GET /apps/{app}/files/{id}` (`file_info`).
         ///
         /// Its plaintext size and SHA-256, never its key.
@@ -381,6 +409,123 @@ extension CalimeroClient {
             let input = Operations.Intents.Input(path: .init(app: app), body: .json(.init(method: method, args: args, idempotencyKey: idempotencyKey)))
             return try await client.perform(passkey: passkey, retry: idempotencyKey != nil) { api in
                 try await api.intents(input).ok.body.json
+            }
+        }
+
+        /// A pipeline run as server-sent events: `GET /apps/{app}/pipeline-runs/{run}/events` (`pipeline_events_events`).
+        ///
+        /// Whoever may read the run. Metadata only; at most 64 streams per app per node, and one lasts an hour.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func pipelineEventsEvents(app: Swift.String, run: Swift.String) async throws -> HTTPBody {
+            let input = Operations.PipelineEventsEvents.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.pipelineEventsEvents(input).ok.body.textEventStream
+            }
+        }
+
+        /// A pipeline run's receipt: `GET /apps/{app}/pipeline-runs/{run}/receipt` (`pipeline_receipt_receipt`).
+        ///
+        /// The owner and the organization's members. For an ended run: the receipt, the answering node and its signature over it, by the node's receipt key.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelineReceiptReceipt(app: Swift.String, run: Swift.String) async throws -> Operations.PipelineReceiptReceipt.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelineReceiptReceipt.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.pipelineReceiptReceipt(input).ok.body.json
+            }
+        }
+
+        /// Cancel a pipeline run: `POST /apps/{app}/pipeline-runs/{run}/cancel` (`pipelines_cancel`).
+        ///
+        /// The owner and the organization's members. Its pending steps end cancelled and its running steps' runs stop.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelinesCancel(app: Swift.String, run: Swift.String) async throws -> Operations.PipelinesCancel.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesCancel.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.pipelinesCancel(input).ok.body.json
+            }
+        }
+
+        /// Estimate a pipeline run: `POST /apps/{app}/pipelines/{name}/estimate` (`pipelines_estimate_run`).
+        ///
+        /// The owner and the organization's members. Runs, fuel and cost of a run of a pipeline the app's release registers, for `inputs` (file ids, only counted) or `counts`, not both; numbers as decimal strings.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelinesEstimateRun(app: Swift.String, name: Swift.String, inputs: Operations.PipelinesEstimateRun.Input.Body.JsonPayload.InputsPayload? = nil, counts: Operations.PipelinesEstimateRun.Input.Body.JsonPayload.CountsPayload? = nil, params: Operations.PipelinesEstimateRun.Input.Body.JsonPayload.ParamsPayload? = nil) async throws -> Operations.PipelinesEstimateRun.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesEstimateRun.Input(path: .init(app: app, name: name), body: .json(.init(inputs: inputs, counts: counts, params: params)))
+            return try await client.perform { api in
+                try await api.pipelinesEstimateRun(input).ok.body.json
+            }
+        }
+
+        /// One pipeline run: `GET /apps/{app}/pipeline-runs/{run}` (`pipelines_get`).
+        ///
+        /// Its record: `state`, `version`, `hash`, `computeBundle`, `inputs`, `params`, per-step `status`, `runs`, `outputs`, `result`, `reason` and `cost` (`cost` and `costSoFar` for a run with a cap). Sizes, hashes and results only for callers who may list the app's files.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func pipelinesGet(app: Swift.String, run: Swift.String) async throws -> Operations.PipelinesGet.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesGet.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.pipelinesGet(input).ok.body.json
+            }
+        }
+
+        /// An app's pipeline runs: `GET /apps/{app}/pipeline-runs` (`pipelines_list`).
+        ///
+        /// The recent runs, newest first, as `{ runs }`; `limit` 1 to 100. Sizes, hashes and results only for callers who may list the app's files.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func pipelinesList(app: Swift.String, limit: Swift.String? = nil) async throws -> Operations.PipelinesList.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesList.Input(path: .init(app: app), query: .init(limit: limit))
+            return try await client.perform { api in
+                try await api.pipelinesList(input).ok.body.json
+            }
+        }
+
+        /// Retry a pipeline run: `POST /apps/{app}/pipeline-runs/{run}/retry` (`pipelines_retry`).
+        ///
+        /// The owner and the organization's members. A new run of an ended run's pipeline at the same release, hash and compute component, with the same inputs and params, the `limits` applied and `retryOf` set. `202`.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelinesRetry(app: Swift.String, run: Swift.String, limits: Operations.PipelinesRetry.Input.Body.JsonPayload.LimitsPayload? = nil, maxCost: Swift.String? = nil) async throws -> Operations.PipelinesRetry.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesRetry.Input(path: .init(app: app, run: run), body: .json(.init(limits: limits, maxCost: maxCost)))
+            return try await client.perform { api in
+                try await api.pipelinesRetry(input).ok.body.json
+            }
+        }
+
+        /// Start a pipeline run: `POST /apps/{app}/pipelines/{name}/runs` (`pipelines_start`).
+        ///
+        /// The owner and the organization's members. Starts a run of a pipeline the app's release registers. `maxCost` (micro-units, a decimal string) caps the run, and `worstCase` answers it. `202`.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelinesStart(app: Swift.String, name: Swift.String, inputs: Operations.PipelinesStart.Input.Body.JsonPayload.InputsPayload? = nil, params: Operations.PipelinesStart.Input.Body.JsonPayload.ParamsPayload? = nil, maxCost: Swift.String? = nil) async throws -> Operations.PipelinesStart.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesStart.Input(path: .init(app: app, name: name), body: .json(.init(inputs: inputs, params: params, maxCost: maxCost)))
+            return try await client.perform { api in
+                try await api.pipelinesStart(input).ok.body.json
+            }
+        }
+
+        /// Validate a pipeline: `POST /pipelines/validate` (`pipelines_validate`).
+        ///
+        /// Every problem of `source`; with `package` and `version` (both, a release the caller sees) also against that release's methods, modules and the cluster's pools. Writes nothing.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelinesValidate(source: Swift.String, package: Swift.String? = nil, version: Swift.String? = nil) async throws -> Operations.PipelinesValidate.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelinesValidate.Input(body: .json(.init(source: source, package: package, version: version)))
+            return try await client.perform { api in
+                try await api.pipelinesValidate(input).ok.body.json
             }
         }
 
@@ -520,6 +665,19 @@ extension CalimeroClient {
             }
         }
 
+        /// The account's backup key: `GET /auth/backup-key` (`account_backup_key`).
+        ///
+        /// The X25519 public key the recovery-disk backups of the account's personal apps are sealed to (`key`, `null` while none is set).
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend).
+        @discardableResult
+        public func backupKey() async throws -> Components.Schemas.BackupKeyAnswer {
+            let input = Operations.AccountBackupKey.Input()
+            return try await client.perform { api in
+                try await api.accountBackupKey(input).ok.body.json
+            }
+        }
+
         /// Approve outbound prefixes for the account's apps: `POST /auth/outbound` (`account_outbound_approval`).
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
@@ -606,6 +764,19 @@ extension CalimeroClient {
             let input = Operations.AccountReleaseApproval.Input(body: .json(.init(version: version, approved: approved)))
             return try await client.perform(passkey: passkey) { api in
                 try await api.accountReleaseApproval(input).ok.body.json
+            }
+        }
+
+        /// Set the account's backup key: `POST /auth/backup-key` (`account_set_backup_key`).
+        ///
+        /// `publicKey`: 64 lowercase hex, an X25519 public key whose private half the account holder keeps (never a node), for its personal apps, where owners upgrade apps. `412` first.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func setBackupKey(publicKey: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.BackupKeyAnswer {
+            let input = Operations.AccountSetBackupKey.Input(body: .json(.init(publicKey: publicKey)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.accountSetBackupKey(input).ok.body.json
             }
         }
 
@@ -926,7 +1097,7 @@ extension CalimeroClient {
 
         /// Ask the account's owner to approve: `POST /consent/requests` (`consent_page_create`).
         ///
-        /// From an app's frontend: a release approval, an upgrade of its instance, or outbound prefixes, approved on the node's own consent page (`url`), which takes the passkey. 64 KiB at most.
+        /// From an app's frontend: a release approval, an upgrade of its instance, outbound prefixes, a new organization, a new invite or joining with one, leaving an organization, a member's removal, role, teams or capabilities, an invite's revocation, an organization's name, its deletion, defaults or all-apps grants, approved on the node's own consent page (`url`), which takes the passkey. What the approval made (`orgId`, an invite's `token`, the `org` joined, a rename's `{ orgId, name }`, a deletion's `apps`) is in `/consent/{request}/result`'s `outcome`. 64 KiB at most.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -939,7 +1110,7 @@ extension CalimeroClient {
 
         /// What became of a consent request: `GET /consent/{request}/result` (`consent_page_result`).
         ///
-        /// `decidedAt` (Unix seconds) is `null` while it is pending.
+        /// `decidedAt` (Unix seconds) is `null` while it is pending. `outcome`, once approved, is what the approval made: `{ orgId }` for `createOrg`, `{ token }` for `createInvite`, `{ org }` for `acceptInvite`, `{ orgId, name }` for `renameOrg`, `{ apps }` (the apps deleted) for `deleteOrg`; absent for the other kinds.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -1350,6 +1521,19 @@ extension CalimeroClient {
             }
         }
 
+        /// The organization's backup key: `GET /orgs/{org}/backup-key` (`org_backup_key`).
+        ///
+        /// The X25519 public key its apps' recovery-disk backups are sealed to (`key`, `null` while none is set), and how many apps that covers. Any member; `404` outside the organization.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend).
+        @discardableResult
+        public func backupKey(org: Swift.String) async throws -> Components.Schemas.BackupKeyAnswer {
+            let input = Operations.OrgBackupKey.Input(path: .init(org: org))
+            return try await client.perform { api in
+                try await api.orgBackupKey(input).ok.body.json
+            }
+        }
+
         /// Set capabilities: `POST /orgs/{org}/capabilities` (`org_capabilities`).
         ///
         /// A member's (`account`), in a team (`team`), or a team's default; the capability bits. `412` first.
@@ -1493,6 +1677,19 @@ extension CalimeroClient {
             }
         }
 
+        /// Set the organization's backup key: `POST /orgs/{org}/backup-key` (`org_set_backup_key`).
+        ///
+        /// `publicKey`: 64 lowercase hex, an X25519 public key whose private half its holder keeps (never a node). Those who upgrade all the organization's apps (org-wide `MANAGE_APPLICATION`), where owners upgrade apps; replaces the key before. `412` first.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func setBackupKey(org: Swift.String, publicKey: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.BackupKeyAnswer {
+            let input = Operations.OrgSetBackupKey.Input(path: .init(org: org), body: .json(.init(publicKey: publicKey)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.orgSetBackupKey(input).ok.body.json
+            }
+        }
+
         /// Set a member's role: `POST /orgs/{org}/members` (`org_set_member`).
         ///
         /// `owner` moves ownership. `412` first.
@@ -1627,7 +1824,7 @@ extension CalimeroClient {
 
         /// Create a team: `POST /orgs/{org}/teams` (`team_create`).
         ///
-        /// An admin, a lead of `parent`, a member with `CREATE_TEAM` at the top, or a member who holds `CREATE_CHILD_TEAM` under `parent` (a restricted team only).
+        /// An admin, a lead of `parent`, a member with `CREATE_TEAM` at the top, or a member who holds `CREATE_CHILD_TEAM` under `parent` (a restricted team only). A package-bound session: only its own package's teams (its app team and the teams below it): `parent` one of them.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -1640,7 +1837,7 @@ extension CalimeroClient {
 
         /// Delete a team: `DELETE /orgs/{org}/teams/{team}` (`team_delete`).
         ///
-        /// With the teams and apps below it.
+        /// With the teams and apps below it. A package-bound session: only its own package's teams (its app team and the teams below it): a team below its app team whose apps are all its package's.
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
@@ -1664,6 +1861,8 @@ extension CalimeroClient {
 
         /// Remove a team member, or leave: `DELETE /orgs/{org}/teams/{team}/members/{account}` (`team_remove_member`).
         ///
+        /// A package-bound session: only its own package's teams (its app team and the teams below it).
+        ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
         public func teamRemoveMember(org: Swift.String, team: Swift.String, account: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
@@ -1674,6 +1873,8 @@ extension CalimeroClient {
         }
 
         /// Add or change a team member: `POST /orgs/{org}/teams/{team}/members` (`team_set_member`).
+        ///
+        /// A package-bound session: only its own package's teams (its app team and the teams below it).
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
@@ -1686,7 +1887,7 @@ extension CalimeroClient {
 
         /// Update a team: `POST /orgs/{org}/teams/{team}` (`team_update`).
         ///
-        /// Rename, open or restrict, move under another parent, or set its metadata (the caller's own JSON, free-form, kept as given). `parent` absent leaves the team where it is; `parent: null` (an explicit null) moves it to the top; a team id moves it under that team.
+        /// Rename, open or restrict, move under another parent, or set its metadata (the caller's own JSON, free-form, kept as given). `parent` absent leaves the team where it is; `parent: null` (an explicit null) moves it to the top; a team id moves it under that team. A package-bound session: only its own package's teams (its app team and the teams below it): a team below its app team, moved only within.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -1796,6 +1997,19 @@ extension CalimeroClient {
             }
         }
 
+        /// A release's pipelines: `GET /packages/{package}/{version}/pipelines` (`package_pipelines`).
+        ///
+        /// The pipelines the release registers, by name: `hash`, `worstCaseFuel` (a decimal string), the `modules` they pin and the canonical `pipeline`. `404` for a release the caller may not see.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func pipelines(package: Swift.String, version: Swift.String) async throws -> Operations.PackagePipelines.Output.Ok.Body.JsonPayload {
+            let input = Operations.PackagePipelines.Input(path: .init(package: package, version: version))
+            return try await client.perform { api in
+                try await api.packagePipelines(input).ok.body.json
+            }
+        }
+
         /// Uninstall a package: `DELETE /packages/{package}` (`package_uninstall`).
         ///
         /// Every version; refused while an app runs one.
@@ -1892,6 +2106,19 @@ extension CalimeroClient {
             let input = Operations.ReleasesPublic.Input()
             return try await client.perform { api in
                 try await api.releasesPublic(input).ok.body.json
+            }
+        }
+
+        /// Bring an organization's or account's apps back from its recovery files: `POST /recover/holder` (`restore_recover_holder`).
+        ///
+        /// Sent by the holder's own device, over the sealed channel: its newest `holder` file (`slice`), each app's file and the code files, in the receiving node's `--recovery-dir` (or `--recover-from`) under `org-<id>/` or `account-<id>/`, each with the data key the holder opened from it with its backup key (hex). The cluster admits it with the operator's signature over `cluster / __recover_holder / { holder, slice, apps: [{ app, file, sha256 }] }` (`428` first, naming it). Where owners upgrade apps, and only for an organization, account, apps and passkeys the cluster does not hold; the receiving node seeds each app, which answers `409 APP_RESTORING` until its replicas hold it. People sign in again with the passkeys they had.
+        ///
+        /// **Who:** anyone. **Operator signature:** answers `428 OPERATOR_SIGNATURE_REQUIRED` first; send it again with `operatorProof`, the operator key's signature over `details.message` and its `nonce`.
+        @discardableResult
+        public func restoreRecoverHolder(holder: Swift.String, slice: Operations.RestoreRecoverHolder.Input.Body.JsonPayload.SlicePayload, apps: Operations.RestoreRecoverHolder.Input.Body.JsonPayload.AppsPayload? = nil, code: Operations.RestoreRecoverHolder.Input.Body.JsonPayload.CodePayload? = nil, operatorSigner: (any OperatorSigner)? = nil) async throws -> Operations.RestoreRecoverHolder.Output.Ok.Body.JsonPayload {
+            let input = Operations.RestoreRecoverHolder.Input(body: .json(.init(holder: holder, slice: slice, apps: apps, code: code)))
+            return try await client.perform(operatorSigner: operatorSigner) { api in
+                try await api.restoreRecoverHolder(input).ok.body.json
             }
         }
     }
