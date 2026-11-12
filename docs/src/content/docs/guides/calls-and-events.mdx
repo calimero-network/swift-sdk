@@ -65,7 +65,7 @@ seed is refused from then on.
 
 ## Blobs and presence
 
-`apps.blobUpload(app:body:contentType:)`, `apps.blobDownload(app:id:grant:)`
+`apps.blobUpload(app:body:)` (sent as `application/octet-stream`), `apps.blobDownload(app:id:grant:)`
 (`grant`: no session, a grant one of the app's runs handed out),
 `blobContent(app, id, grant:)` (bytes and content type), `listBlobs`,
 `blobInfo`, `apps.blobDelete(app:id:)` on
