@@ -65,7 +65,9 @@ seed is refused from then on.
 
 ## Blobs and presence
 
-`apps.blobUpload(app:body:)` (sent as `application/octet-stream`), `apps.blobDownload(app:id:grant:)`
+`apps.blobUpload(app:body:contentType:)` (the node stores the blob with the
+`contentType` you name and answers downloads with it; leave it out and it is
+sent as `application/octet-stream`), `apps.blobDownload(app:id:grant:)`
 (`grant`: no session, a grant one of the app's runs handed out),
 `blobContent(app, id, grant:)` (bytes and content type), `listBlobs`,
 `blobInfo`, `apps.blobDelete(app:id:)` on
@@ -75,3 +77,9 @@ upload it, and see `sealed` and the plaintext's `sha256` in `listBlobs` and
 `blobInfo`); `appXcalls(app)` for a component app's outbox and dead
 letters; `publishPresence`, `presence`,
 `presenceStream` on `/apps/{app}/presence`.
+
+```swift
+let png = try Data(contentsOf: imageURL)
+let blob = try await client.apps.blobUpload(app: app, body: png, contentType: "image/png")
+let content = try await client.blobContent(app, blob.blobId)   // content.contentType == "image/png"
+```

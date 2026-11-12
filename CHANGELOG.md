@@ -2,6 +2,18 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: `apps.blobUpload` takes the blob's content type again
+
+`apps.blobUpload(app:body:contentType:sealed:)` gains an optional
+`contentType: String? = nil`. The node stores a blob with the request's
+`Content-Type` and answers its downloads with it; since 3.0.0 the facade sent
+`application/octet-stream` for every upload, because core's document lists
+that type beside `*/*` and the facade generator only gave a `contentType`
+argument to a route listing `*/*` alone. A route that lists `*/*` among other
+types now takes it too; nil (the default) still sends the first listed type,
+so existing calls are unchanged. Pass `contentType: "image/png"` to keep an
+image's type.
+
 ## Unreleased: the `NoRelay*` aliases are gone
 
 **Breaking.** The deprecated `NoRelayContextContract` typealias (the 0.x

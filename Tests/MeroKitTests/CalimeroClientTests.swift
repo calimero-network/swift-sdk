@@ -575,15 +575,19 @@ final class CalimeroClientTests: XCTestCase {
         }
         node.install()
         let cloud = client()
-        // core 125f31c21 documents the upload as `application/octet-stream` (beside `*/*`), so
-        // the generated facade sends that type and takes no `contentType` of the caller's.
+        // core documents the upload as `application/octet-stream` beside `*/*` and stores the
+        // type the request names: the caller's `contentType`, else `application/octet-stream`.
         let uploaded = try await cloud.answer(as: BlobInfo.self) {
-            try await cloud.apps.blobUpload(app: "a1", body: Data([1, 2, 3]))
+            try await cloud.apps.blobUpload(app: "a1", body: Data([1, 2, 3]), contentType: "image/png")
         }
         XCTAssertEqual(uploaded.size, 3)
-        XCTAssertEqual(node.requests[0].headers["content-type"], "application/octet-stream")
+        XCTAssertEqual(node.requests[0].headers["content-type"], "image/png")
         _ = try await cloud.answerJSON { try await cloud.apps.blobUpload(app: "a1", body: Data([4])) }
         XCTAssertEqual(node.requests[1].headers["content-type"], "application/octet-stream")
+        _ = try await cloud.answerJSON {
+            try await cloud.apps.blobUpload(app: "a1", body: Data([5]), contentType: nil)
+        }
+        XCTAssertEqual(node.requests[2].headers["content-type"], "application/octet-stream")
         let content = try await cloud.blobContent("a1", "B1")
         XCTAssertEqual(content, BlobContent(data: Data([1, 2, 3]), contentType: "image/png"))
         let granted = try await cloud.apps.blobDownload(app: "a1", id: "B1", grant: "g+/=1")
