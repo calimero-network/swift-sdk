@@ -306,44 +306,41 @@ public enum ConsentRequest: Sendable, Equatable {
             return ["kind": "createInvite", "subject": .object(subject), "returnTo": .string(returnTo)]
         case .acceptInvite(let token, let returnTo):
             return ["kind": "acceptInvite", "subject": ["token": .string(token)], "returnTo": .string(returnTo)]
-        case .leaveOrg(let org, let returnTo):
-            return Self.body("leaveOrg", ["org": .string(org)], returnTo)
-        case .removeMember(let org, let account, let returnTo):
-            return Self.body("removeMember", ["org": .string(org), "account": .string(account)], returnTo)
-        case .setMemberRole(let org, let account, let role, let returnTo):
-            return Self.body(
-                "setMemberRole", ["org": .string(org), "account": .string(account), "role": .string(role.rawValue)],
-                returnTo)
-        case .setMemberTeams(let org, let account, let teams, let returnTo):
-            return Self.body(
-                "setMemberTeams",
-                ["org": .string(org), "account": .string(account), "teams": .array(teams.map(\.json))], returnTo)
-        case .removeMemberTeams(let org, let account, let teams, let returnTo):
-            return Self.body(
-                "removeMemberTeams",
-                ["org": .string(org), "account": .string(account), "teams": .array(teams.map { .string($0) })],
-                returnTo)
-        case .revokeInvite(let org, let inviteKey, let returnTo):
-            return Self.body("revokeInvite", ["org": .string(org), "inviteKey": .string(inviteKey)], returnTo)
-        case .renameOrg(let org, let name, let returnTo):
-            return Self.body("renameOrg", ["org": .string(org), "name": .string(name)], returnTo)
-        case .deleteOrg(let org, let returnTo):
-            return Self.body("deleteOrg", ["org": .string(org)], returnTo)
-        case .setCapabilities(let org, let account, let team, let capabilities, let returnTo):
+        case .leaveOrg, .removeMember, .setMemberRole, .setMemberTeams, .removeMemberTeams, .revokeInvite,
+            .renameOrg, .deleteOrg, .setCapabilities, .setAllApps:
+            return ["kind": .string(kind), "subject": .object(organizationSubject), "returnTo": .string(returnTo)]
+        }
+    }
+
+    /// The subject of an organization kind (calimero-network/core#5018); empty for the other kinds.
+    private var organizationSubject: [String: JSONValue] {
+        switch self {
+        case .leaveOrg(let org, _), .deleteOrg(let org, _):
+            return ["org": .string(org)]
+        case .removeMember(let org, let account, _):
+            return ["org": .string(org), "account": .string(account)]
+        case .setMemberRole(let org, let account, let role, _):
+            return ["org": .string(org), "account": .string(account), "role": .string(role.rawValue)]
+        case .setMemberTeams(let org, let account, let teams, _):
+            return ["org": .string(org), "account": .string(account), "teams": .array(teams.map(\.json))]
+        case .removeMemberTeams(let org, let account, let teams, _):
+            return ["org": .string(org), "account": .string(account), "teams": .array(teams.map { .string($0) })]
+        case .revokeInvite(let org, let inviteKey, _):
+            return ["org": .string(org), "inviteKey": .string(inviteKey)]
+        case .renameOrg(let org, let name, _):
+            return ["org": .string(org), "name": .string(name)]
+        case .setCapabilities(let org, let account, let team, let capabilities, _):
             var subject: [String: JSONValue] = [
                 "org": .string(org), "capabilities": .number(Double(capabilities.rawValue)),
             ]
             if let account { subject["account"] = .string(account) }
             if let team { subject["team"] = .string(team) }
-            return Self.body("setCapabilities", subject, returnTo)
-        case .setAllApps(let org, let account, let allApps, let returnTo):
-            return Self.body(
-                "setAllApps", ["org": .string(org), "account": .string(account), "allApps": .bool(allApps)], returnTo)
+            return subject
+        case .setAllApps(let org, let account, let allApps, _):
+            return ["org": .string(org), "account": .string(account), "allApps": .bool(allApps)]
+        case .release, .upgrade, .outbound, .createOrg, .createInvite, .acceptInvite:
+            return [:]
         }
-    }
-
-    private static func body(_ kind: String, _ subject: [String: JSONValue], _ returnTo: String) -> JSONValue {
-        ["kind": .string(kind), "subject": .object(subject), "returnTo": .string(returnTo)]
     }
 
     /// The request's `returnTo`.
@@ -375,6 +372,17 @@ public enum ConsentRequest: Sendable, Equatable {
             if let uses, uses < 0 { throw AccountError.invalidInput("uses is not negative") }
         case .acceptInvite(let token, _):
             guard !token.isEmpty else { throw AccountError.invalidInput("an invite token is needed") }
+        case .leaveOrg, .removeMember, .setMemberRole, .setMemberTeams, .removeMemberTeams, .revokeInvite,
+            .renameOrg, .deleteOrg, .setCapabilities, .setAllApps:
+            try validateOrganizationKind()
+        case .release, .upgrade, .outbound:
+            break
+        }
+    }
+
+    /// ``validate()`` for the organization kinds (calimero-network/core#5018).
+    private func validateOrganizationKind() throws {
+        switch self {
         case .leaveOrg(let org, _), .deleteOrg(let org, _):
             try Self.need(org, "an organization")
         case .removeMember(let org, let account, _), .setMemberRole(let org, let account, _, _),
@@ -407,7 +415,7 @@ public enum ConsentRequest: Sendable, Equatable {
             if let account { try Self.need(account, "an account") }
             if let team { try Self.need(team, "a team") }
             guard capabilities.rawValue >= 0 else { throw AccountError.invalidInput("capabilities are not negative") }
-        case .release, .upgrade, .outbound:
+        case .release, .upgrade, .outbound, .createOrg, .createInvite, .acceptInvite:
             break
         }
     }
