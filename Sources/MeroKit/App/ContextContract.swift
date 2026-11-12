@@ -140,10 +140,6 @@ public struct SignedOutContextContract: ContextContract {
     }
 }
 
-/// 0.x name of ``SignedOutContextContract``.
-@available(*, deprecated, renamed: "SignedOutContextContract", message: "No relays on Calimero 1.0")
-public typealias NoRelayContextContract = SignedOutContextContract
-
 /// One context's contract, in the shape a generated client calls: JSON in,
 /// JSON out, as UTF-8 bytes. (== Kotlin `ContextContractCalling`, which takes
 /// and returns strings.)
