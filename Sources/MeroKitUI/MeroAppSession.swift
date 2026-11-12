@@ -69,7 +69,7 @@ public enum ConsentLauncher {
     ///   system takes one (iOS 17.4+ / macOS 14.4+), the page opens in
     ///   `opener` (`ASWebAuthenticationSession`). When it sends the person
     ///   back, ``CalimeroClient/confirmConsentReturn(_:returned:)`` reads the
-    ///   sealed result and throws `CONSENT_RETURN_MISMATCH` for a return that
+    ///   sealed result and throws `CONSENT_REQUEST_MISMATCH` for a return that
     ///   names another request, or `CONSENT_NOT_DECIDED` when this app's
     ///   request is still pending (a different request approved, or a forged
     ///   page). Dismissed, it answers the result as it stands.
@@ -347,7 +347,7 @@ public final class MeroAppSession: ObservableObject {
     /// ``callback`` as its `returnTo`, through `ConsentLauncher.decide`.
     /// ``consentResult`` holds the node's decision on this request, with its
     /// typed `outcome`; a new or joined organization bumps ``revision``.
-    /// Throws `CONSENT_RETURN_MISMATCH` / `CONSENT_NOT_DECIDED` when the page
+    /// Throws `CONSENT_REQUEST_MISMATCH` / `CONSENT_NOT_DECIDED` when the page
     /// that sent the person back did not decide this request. Answers the request.
     @discardableResult
     public func requestConsent(

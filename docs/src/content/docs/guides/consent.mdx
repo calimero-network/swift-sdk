@@ -55,9 +55,12 @@ native app that is either:
 The query on the return URL is a hint. `confirmConsentReturn` reads the result
 of the request this app started and:
 
-- throws `CONSENT_RETURN_MISMATCH` when the return names another request;
+- throws `CONSENT_REQUEST_MISMATCH` when the return names another request;
 - throws `CONSENT_NOT_DECIDED` when the app's own request is still pending,
   the sign that a different request was approved, or that the page was forged;
+- throws `CONSENT_REPLACED` when the node answers `404` for the app's own
+  request: an account has one undecided consent request per node, and a newer
+  one replaced it (possibly on a forged page). Ask again;
 - otherwise answers the decision (`approved` or `declined`) and its outcome.
 
 ## In the app

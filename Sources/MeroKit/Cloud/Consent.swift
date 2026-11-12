@@ -197,10 +197,13 @@ extension CalimeroClient {
     /// started, read from the sealed `/consent/{id}/result` (never from the
     /// URL, whose query is a hint only).
     ///
-    /// - Throws `CONSENT_RETURN_MISMATCH` when `returned` names another request.
+    /// - Throws `CONSENT_REQUEST_MISMATCH` when `returned` names another request.
     /// - Throws `CONSENT_NOT_DECIDED` when this app's request is still
     ///   `pending`: the page that sent the person back did not decide it (a
     ///   different request approved, or a forged page).
+    /// - Throws `CONSENT_REPLACED` when the node no longer knows this app's
+    ///   request (`404`): an account has one undecided request per node, and
+    ///   a newer one replaced it, possibly on a forged page. Ask again.
     public func confirmConsentReturn(_ started: ConsentStarted, returned: URL) async throws -> ConsentResult {
         try await confirmConsentReturn(requestId: started.requestId, returned: returned)
     }
@@ -209,11 +212,19 @@ extension CalimeroClient {
     public func confirmConsentReturn(requestId: String, returned: URL) async throws -> ConsentResult {
         if let back = consentReturn(returned), back.requestId != requestId {
             throw CalimeroError(
-                status: 200, code: "CONSENT_RETURN_MISMATCH",
+                status: 200, code: "CONSENT_REQUEST_MISMATCH",
                 message: "the consent page sent back another request than the one this app started",
                 details: ["requestId": .string(requestId), "returned": .string(back.requestId)])
         }
-        let result = try await consentResult(requestId)
+        let result: ConsentResult
+        do {
+            result = try await consentResult(requestId)
+        } catch let error as CalimeroError where error.status == 404 {
+            throw CalimeroError(
+                status: 404, code: "CONSENT_REPLACED",
+                message: "this app's consent request was replaced by a newer one before it was decided",
+                details: ["requestId": .string(requestId)])
+        }
         guard result.status != .pending else {
             throw CalimeroError(
                 status: 200, code: "CONSENT_NOT_DECIDED",

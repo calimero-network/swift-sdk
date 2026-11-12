@@ -24,9 +24,11 @@ redirect. An invite token is redacted from every description and mirror
   the new kinds.
 - `CalimeroClient.confirmConsentReturn(_:returned:)` reads the result of the
   request the app started after the page sent the person back, and throws
-  `CONSENT_RETURN_MISMATCH` when the return names another request, or
+  `CONSENT_REQUEST_MISMATCH` when the return names another request, or
   `CONSENT_NOT_DECIDED` when the app's request is still pending (another
-  request approved, or a forged page). `MeroAppSession.handle(_:)` and
+  request approved, or a forged page), or `CONSENT_REPLACED` when the node
+  answers 404 for it (an account has one undecided request per node, and a
+  newer one replaced it). `MeroAppSession.handle(_:)` and
   `requestConsent(_:)` and `MeroClient.requestConsent` apply it.
 - MeroKitUI's `ConsentLauncher.decide(client:request:callback:...)` asks,
   opens the page and answers the checked result. With an https (universal

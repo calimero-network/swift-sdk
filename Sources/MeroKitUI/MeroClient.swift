@@ -258,7 +258,7 @@ public final class MeroClient: ObservableObject {
     /// `returnTo` (the package's served page on Calimero Cloud, which passes
     /// the answer on to `callback`). `nil` on a failure, in ``errorMessage``,
     /// including a return that did not decide this request
-    /// (`CONSENT_RETURN_MISMATCH`, `CONSENT_NOT_DECIDED`).
+    /// (`CONSENT_REQUEST_MISMATCH`, `CONSENT_NOT_DECIDED`).
     public func requestConsent(
         _ request: (_ returnTo: String) -> ConsentRequest, callback: CloudCallback,
         returnTo: String? = nil,

@@ -84,9 +84,9 @@ final class ConsentLauncherTests: XCTestCase {
             _ = try await ConsentLauncher.decide(
                 client: client(), request: Self.createOrg(), callback: Self.callback,
                 opener: ReturningBrowser(requestId: "r2"), httpsCallbackSupported: true)
-            XCTFail("expected CONSENT_RETURN_MISMATCH")
+            XCTFail("expected CONSENT_REQUEST_MISMATCH")
         } catch let error as CalimeroError {
-            XCTAssertEqual(error.code, "CONSENT_RETURN_MISMATCH")
+            XCTAssertEqual(error.code, "CONSENT_REQUEST_MISMATCH")
         }
     }
 
@@ -99,6 +99,25 @@ final class ConsentLauncherTests: XCTestCase {
             XCTFail("expected CONSENT_NOT_DECIDED")
         } catch let error as CalimeroError {
             XCTAssertEqual(error.code, "CONSENT_NOT_DECIDED")
+        }
+    }
+
+    func testAReturnAfterThisRequestWasReplacedIsRefused() async throws {
+        let node = FakeCloudNode { request in
+            guard request.path == "/consent/requests" else { return .error(404, "NOT_FOUND") }
+            return .json([
+                "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1_900_000_000,
+                "code": .string(confirmationCode("r1")),
+            ])
+        }
+        node.install()
+        do {
+            _ = try await ConsentLauncher.decide(
+                client: client(), request: Self.createOrg(), callback: Self.callback,
+                opener: ReturningBrowser(requestId: "r1"), httpsCallbackSupported: true)
+            XCTFail("expected CONSENT_REPLACED")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "CONSENT_REPLACED")
         }
     }
 

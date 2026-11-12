@@ -141,9 +141,9 @@ final class ConsentTests: XCTestCase {
         let forged = try XCTUnwrap(URL(string: "\(Self.returnTo)&request_id=r2&result=approved"))
         do {
             _ = try await cloud.confirmConsentReturn(started, returned: forged)
-            XCTFail("expected CONSENT_RETURN_MISMATCH")
+            XCTFail("expected CONSENT_REQUEST_MISMATCH")
         } catch let error as CalimeroError {
-            XCTAssertEqual(error.code, "CONSENT_RETURN_MISMATCH")
+            XCTAssertEqual(error.code, "CONSENT_REQUEST_MISMATCH")
         }
         XCTAssertFalse(node.requests.contains { $0.path.hasPrefix("/consent/r2") }, "r2's result is never read")
     }
@@ -158,6 +158,39 @@ final class ConsentTests: XCTestCase {
             XCTFail("expected CONSENT_NOT_DECIDED")
         } catch let error as CalimeroError {
             XCTAssertEqual(error.code, "CONSENT_NOT_DECIDED")
+        }
+    }
+
+    func testAReturnAfterThisRequestWasReplacedIsRefused() async throws {
+        // One undecided request per account and node: a newer one replaced r1,
+        // whose result is now 404 NOT_FOUND.
+        let node = FakeCloudNode { request in
+            switch (request.method, request.path) {
+            case ("POST", "/consent/requests"):
+                return .json([
+                    "requestId": "r1", "url": "https://node.test/consent/r1", "expiresAt": 1_900_000_000,
+                    "code": .string(confirmationCode("r1")),
+                ])
+            default: return .error(404, "NOT_FOUND")
+            }
+        }
+        node.install()
+        let cloud = client()
+        let started = try await cloud.requestConsent(.createOrg(name: "Acme", returnTo: Self.returnTo))
+        let returned = try XCTUnwrap(URL(string: "\(Self.returnTo)&request_id=r1&result=approved"))
+        do {
+            _ = try await cloud.confirmConsentReturn(started, returned: returned)
+            XCTFail("expected CONSENT_REPLACED")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "CONSENT_REPLACED")
+            XCTAssertEqual(error.details["requestId"], "r1")
+        }
+        // Outside a return, a 404 is the node's own refusal.
+        do {
+            _ = try await cloud.consentResult("r1")
+            XCTFail("expected NOT_FOUND")
+        } catch let error as CalimeroError {
+            XCTAssertEqual(error.code, "NOT_FOUND")
         }
     }
 
