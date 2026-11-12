@@ -160,7 +160,7 @@ extension CalimeroClient {
     /// (``confirmationCode(_:)``). (== mero-js `requestConsent`.)
     public func requestConsent(_ request: ConsentRequest) async throws -> ConsentStarted {
         try request.validate()
-        let answer = try await post("/consent/requests", request.json)
+        let answer = try await post("consent/requests", request.json)
         let started: ConsentStarted
         do {
             started = try MeroJSON.decode(ConsentStarted.self, from: CanonicalJSON.data(answer))
@@ -178,7 +178,7 @@ extension CalimeroClient {
     public func consentResult(_ requestId: String) async throws -> ConsentResult {
         guard !requestId.isEmpty else { throw AccountError.invalidInput("a consent request id is needed") }
         let id = requestId.addingPercentEncoding(withAllowedCharacters: .urlPathSegment) ?? requestId
-        let answer = try await get("/consent/\(id)/result")
+        let answer = try await get("consent/\(id)/result")
         let result: ConsentResult
         do {
             result = try MeroJSON.decode(ConsentResult.self, from: CanonicalJSON.data(answer))

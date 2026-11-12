@@ -371,7 +371,7 @@ public struct ConsentResult: Codable, Sendable, Equatable {
     /// `acceptInvite`); `nil` while pending, when declined, and for the other
     /// kinds. Read only from the sealed `/consent/{id}/result`, never from the
     /// URL the page sent the person back to.
-    public var outcome: ConsentOutcome? = nil
+    public var outcome: ConsentOutcome?
 }
 
 /// What the consent page put on `returnTo` when it sent the person back, or
