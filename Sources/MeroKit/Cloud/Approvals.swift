@@ -226,6 +226,31 @@ public enum ConsentRequest: Sendable, Equatable {
     /// Join the organization `token` invites to. Once approved,
     /// ``ConsentResult/outcome`` is ``ConsentOutcome/inviteAccepted(org:)``.
     case acceptInvite(token: String, returnTo: String)
+    /// Leave `org` (calimero-network/core#5018, as are the kinds below).
+    case leaveOrg(org: String, returnTo: String)
+    /// Remove the member `account` from `org`.
+    case removeMember(org: String, account: String, returnTo: String)
+    /// Give the member `account` of `org` the role `role`.
+    case setMemberRole(org: String, account: String, role: OrgRole, returnTo: String)
+    /// Set the member `account`'s rows in teams of `org`, all or nothing.
+    case setMemberTeams(org: String, account: String, teams: [ConsentTeamMembership], returnTo: String)
+    /// Remove the member `account` from `teams` of `org`, all or nothing.
+    case removeMemberTeams(org: String, account: String, teams: [String], returnTo: String)
+    /// Revoke the invite `inviteKey` of `org`.
+    case revokeInvite(org: String, inviteKey: String, returnTo: String)
+    /// Rename `org` to `name`. Once approved, ``ConsentResult/outcome`` is
+    /// ``ConsentOutcome/orgRenamed(orgId:name:)``.
+    case renameOrg(org: String, name: String, returnTo: String)
+    /// Delete `org` with its teams, invites and apps. Once approved,
+    /// ``ConsentResult/outcome`` is ``ConsentOutcome/orgDeleted(apps:)``.
+    case deleteOrg(org: String, returnTo: String)
+    /// Set ``OrgCapabilities`` in `org`: with `account`, that member's
+    /// (organization-wide, or in `team`); without, a default (the
+    /// organization's, or `team`'s).
+    case setCapabilities(
+        org: String, account: String? = nil, team: String? = nil, capabilities: OrgCapabilities, returnTo: String)
+    /// Give the member `account` of `org` every app (`allApps: true`), or take it back.
+    case setAllApps(org: String, account: String, allApps: Bool, returnTo: String)
 
     /// The request's `kind`.
     public var kind: String {
@@ -236,6 +261,16 @@ public enum ConsentRequest: Sendable, Equatable {
         case .createOrg: return "createOrg"
         case .createInvite: return "createInvite"
         case .acceptInvite: return "acceptInvite"
+        case .leaveOrg: return "leaveOrg"
+        case .removeMember: return "removeMember"
+        case .setMemberRole: return "setMemberRole"
+        case .setMemberTeams: return "setMemberTeams"
+        case .removeMemberTeams: return "removeMemberTeams"
+        case .revokeInvite: return "revokeInvite"
+        case .renameOrg: return "renameOrg"
+        case .deleteOrg: return "deleteOrg"
+        case .setCapabilities: return "setCapabilities"
+        case .setAllApps: return "setAllApps"
         }
     }
 
@@ -271,7 +306,44 @@ public enum ConsentRequest: Sendable, Equatable {
             return ["kind": "createInvite", "subject": .object(subject), "returnTo": .string(returnTo)]
         case .acceptInvite(let token, let returnTo):
             return ["kind": "acceptInvite", "subject": ["token": .string(token)], "returnTo": .string(returnTo)]
+        case .leaveOrg(let org, let returnTo):
+            return Self.body("leaveOrg", ["org": .string(org)], returnTo)
+        case .removeMember(let org, let account, let returnTo):
+            return Self.body("removeMember", ["org": .string(org), "account": .string(account)], returnTo)
+        case .setMemberRole(let org, let account, let role, let returnTo):
+            return Self.body(
+                "setMemberRole", ["org": .string(org), "account": .string(account), "role": .string(role.rawValue)],
+                returnTo)
+        case .setMemberTeams(let org, let account, let teams, let returnTo):
+            return Self.body(
+                "setMemberTeams",
+                ["org": .string(org), "account": .string(account), "teams": .array(teams.map(\.json))], returnTo)
+        case .removeMemberTeams(let org, let account, let teams, let returnTo):
+            return Self.body(
+                "removeMemberTeams",
+                ["org": .string(org), "account": .string(account), "teams": .array(teams.map { .string($0) })],
+                returnTo)
+        case .revokeInvite(let org, let inviteKey, let returnTo):
+            return Self.body("revokeInvite", ["org": .string(org), "inviteKey": .string(inviteKey)], returnTo)
+        case .renameOrg(let org, let name, let returnTo):
+            return Self.body("renameOrg", ["org": .string(org), "name": .string(name)], returnTo)
+        case .deleteOrg(let org, let returnTo):
+            return Self.body("deleteOrg", ["org": .string(org)], returnTo)
+        case .setCapabilities(let org, let account, let team, let capabilities, let returnTo):
+            var subject: [String: JSONValue] = [
+                "org": .string(org), "capabilities": .number(Double(capabilities.rawValue)),
+            ]
+            if let account { subject["account"] = .string(account) }
+            if let team { subject["team"] = .string(team) }
+            return Self.body("setCapabilities", subject, returnTo)
+        case .setAllApps(let org, let account, let allApps, let returnTo):
+            return Self.body(
+                "setAllApps", ["org": .string(org), "account": .string(account), "allApps": .bool(allApps)], returnTo)
         }
+    }
+
+    private static func body(_ kind: String, _ subject: [String: JSONValue], _ returnTo: String) -> JSONValue {
+        ["kind": .string(kind), "subject": .object(subject), "returnTo": .string(returnTo)]
     }
 
     /// The request's `returnTo`.
@@ -279,7 +351,11 @@ public enum ConsentRequest: Sendable, Equatable {
         switch self {
         case .release(_, _, _, let returnTo), .upgrade(_, _, let returnTo), .outbound(_, _, _, let returnTo),
             .createOrg(_, let returnTo), .createInvite(_, _, _, _, _, _, let returnTo),
-            .acceptInvite(_, let returnTo):
+            .acceptInvite(_, let returnTo), .leaveOrg(_, let returnTo), .removeMember(_, _, let returnTo),
+            .setMemberRole(_, _, _, let returnTo), .setMemberTeams(_, _, _, let returnTo),
+            .removeMemberTeams(_, _, _, let returnTo), .revokeInvite(_, _, let returnTo),
+            .renameOrg(_, _, let returnTo), .deleteOrg(_, let returnTo),
+            .setCapabilities(_, _, _, _, let returnTo), .setAllApps(_, _, _, let returnTo):
             return returnTo
         }
     }
@@ -299,9 +375,67 @@ public enum ConsentRequest: Sendable, Equatable {
             if let uses, uses < 0 { throw AccountError.invalidInput("uses is not negative") }
         case .acceptInvite(let token, _):
             guard !token.isEmpty else { throw AccountError.invalidInput("an invite token is needed") }
+        case .leaveOrg(let org, _), .deleteOrg(let org, _):
+            try Self.need(org, "an organization")
+        case .removeMember(let org, let account, _), .setMemberRole(let org, let account, _, _),
+            .setAllApps(let org, let account, _, _):
+            try Self.need(org, "an organization")
+            try Self.need(account, "an account")
+        case .setMemberTeams(let org, let account, let teams, _):
+            try Self.need(org, "an organization")
+            try Self.need(account, "an account")
+            guard !teams.isEmpty else { throw AccountError.invalidInput("setMemberTeams names at least one team") }
+            for row in teams { try Self.need(row.team, "a team") }
+            if teams.contains(where: { ($0.capabilities?.rawValue ?? 0) < 0 }) {
+                throw AccountError.invalidInput("capabilities are not negative")
+            }
+        case .removeMemberTeams(let org, let account, let teams, _):
+            try Self.need(org, "an organization")
+            try Self.need(account, "an account")
+            guard !teams.isEmpty else { throw AccountError.invalidInput("removeMemberTeams names at least one team") }
+            for team in teams { try Self.need(team, "a team") }
+        case .revokeInvite(let org, let inviteKey, _):
+            try Self.need(org, "an organization")
+            try Self.need(inviteKey, "an invite key")
+        case .renameOrg(let org, let name, _):
+            try Self.need(org, "an organization")
+            guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw AccountError.invalidInput("an organization needs a name")
+            }
+        case .setCapabilities(let org, let account, let team, let capabilities, _):
+            try Self.need(org, "an organization")
+            if let account { try Self.need(account, "an account") }
+            if let team { try Self.need(team, "a team") }
+            guard capabilities.rawValue >= 0 else { throw AccountError.invalidInput("capabilities are not negative") }
         case .release, .upgrade, .outbound:
             break
         }
+    }
+
+    private static func need(_ value: String, _ what: String) throws {
+        guard !value.isEmpty else { throw AccountError.invalidInput("a consent request needs \(what)") }
+    }
+}
+
+/// One team row a ``ConsentRequest/setMemberTeams(org:account:teams:returnTo:)``
+/// sets: `team`, and the member's `role` and `capabilities` there, each the
+/// team's default when `nil`. (== mero-js `MemberTeamConsent`.)
+public struct ConsentTeamMembership: Sendable, Equatable {
+    public var team: String
+    public var role: TeamRole?
+    public var capabilities: OrgCapabilities?
+
+    public init(team: String, role: TeamRole? = nil, capabilities: OrgCapabilities? = nil) {
+        self.team = team
+        self.role = role
+        self.capabilities = capabilities
+    }
+
+    var json: JSONValue {
+        var row: [String: JSONValue] = ["team": .string(team)]
+        if let role { row["role"] = .string(role.rawValue) }
+        if let capabilities { row["capabilities"] = .number(Double(capabilities.rawValue)) }
+        return .object(row)
     }
 }
 
@@ -368,8 +502,8 @@ public struct ConsentResult: Codable, Sendable, Equatable {
     public var status: ConsentStatus
     public var decidedAt: Double?
     /// What the approval made, typed by `kind` (`createOrg`, `createInvite`,
-    /// `acceptInvite`); `nil` while pending, when declined, and for the other
-    /// kinds. Read only from the sealed `/consent/{id}/result`, never from the
+    /// `acceptInvite`, `renameOrg`, `deleteOrg`); `nil` while pending, when
+    /// declined, and for the other kinds. Read only from the sealed `/consent/{id}/result`, never from the
     /// URL the page sent the person back to.
     public var outcome: ConsentOutcome?
 }

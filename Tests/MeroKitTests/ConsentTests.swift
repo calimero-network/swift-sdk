@@ -4,8 +4,8 @@ import XCTest
 
 @testable import MeroKit
 
-/// The consent kinds that make something (`createOrg`, `createInvite`,
-/// `acceptInvite`), their typed outcomes, and the check that a return from the
+/// The organization consent kinds (core#5014's `createOrg`, `createInvite`,
+/// `acceptInvite`; core#5018's ten), their bodies and typed outcomes, and the check that a return from the
 /// consent page decided the request this app started; against a
 /// ``FakeCloudNode`` (the real sealed channel).
 final class ConsentTests: XCTestCase {
@@ -68,9 +68,114 @@ final class ConsentTests: XCTestCase {
         XCTAssertEqual(ConsentRequest.upgrade(app: "a1", toVersion: "1.1.0", returnTo: returnTo).returnTo, returnTo)
     }
 
-    func testTheGeneratedBodyRefusesTheKindsItDoesNotKnow() throws {
-        XCTAssertThrowsError(try ConsentRequest.createOrg(name: "Acme", returnTo: Self.returnTo).generated())
-        XCTAssertNoThrow(try ConsentRequest.upgrade(app: "a1", toVersion: "1.1.0", returnTo: Self.returnTo).generated())
+    /// One request of every kind, organization kinds first.
+    private static let everyKind: [ConsentRequest] = [
+        .createOrg(name: "Acme", returnTo: returnTo),
+        .createInvite(
+            org: "o1", role: .member, teams: ["t1"], ttlSecs: 60, uses: 2, allApps: false, returnTo: returnTo),
+        .acceptInvite(token: "inv_x", returnTo: returnTo),
+        .leaveOrg(org: "o1", returnTo: returnTo),
+        .removeMember(org: "o1", account: "a2", returnTo: returnTo),
+        .setMemberRole(org: "o1", account: "a2", role: .admin, returnTo: returnTo),
+        .setMemberTeams(
+            org: "o1", account: "a2",
+            teams: [
+                ConsentTeamMembership(team: "t1"),
+                ConsentTeamMembership(team: "t2", role: .lead, capabilities: [.createApp, .inviteMembers]),
+            ], returnTo: returnTo),
+        .removeMemberTeams(org: "o1", account: "a2", teams: ["t1", "t2"], returnTo: returnTo),
+        .revokeInvite(org: "o1", inviteKey: "k1", returnTo: returnTo),
+        .renameOrg(org: "o1", name: "Acme 2", returnTo: returnTo),
+        .deleteOrg(org: "o1", returnTo: returnTo),
+        .setCapabilities(org: "o1", account: "a2", team: "t1", capabilities: [.createTeam], returnTo: returnTo),
+        .setCapabilities(org: "o1", capabilities: [], returnTo: returnTo),
+        .setAllApps(org: "o1", account: "a2", allApps: true, returnTo: returnTo),
+        .release(scope: .org("o1"), version: "1.2.0", returnTo: returnTo),
+        .upgrade(app: "a1", toVersion: "1.1.0", returnTo: returnTo),
+        .outbound(scope: .account, returnTo: returnTo),
+    ]
+
+    func testTheOrganizationKindsBodiesAreCores() {
+        let r = JSONValue.string(Self.returnTo)
+        let expected: [(ConsentRequest, JSONValue)] = [
+            (
+                .leaveOrg(org: "o1", returnTo: Self.returnTo),
+                ["kind": "leaveOrg", "subject": ["org": "o1"], "returnTo": r]
+            ),
+            (
+                .removeMember(org: "o1", account: "a2", returnTo: Self.returnTo),
+                ["kind": "removeMember", "subject": ["org": "o1", "account": "a2"], "returnTo": r]
+            ),
+            (
+                .setMemberRole(org: "o1", account: "a2", role: .admin, returnTo: Self.returnTo),
+                ["kind": "setMemberRole", "subject": ["org": "o1", "account": "a2", "role": "admin"], "returnTo": r]
+            ),
+            (
+                .setMemberTeams(
+                    org: "o1", account: "a2",
+                    teams: [
+                        ConsentTeamMembership(team: "t1"),
+                        ConsentTeamMembership(team: "t2", role: .readOnly, capabilities: [.createApp, .inviteMembers]),
+                    ], returnTo: Self.returnTo),
+                [
+                    "kind": "setMemberTeams",
+                    "subject": [
+                        "org": "o1", "account": "a2",
+                        "teams": [["team": "t1"], ["team": "t2", "role": "readOnly", "capabilities": 3]],
+                    ],
+                    "returnTo": r,
+                ]
+            ),
+            (
+                .removeMemberTeams(org: "o1", account: "a2", teams: ["t1"], returnTo: Self.returnTo),
+                [
+                    "kind": "removeMemberTeams", "subject": ["org": "o1", "account": "a2", "teams": ["t1"]],
+                    "returnTo": r,
+                ]
+            ),
+            (
+                .revokeInvite(org: "o1", inviteKey: "k1", returnTo: Self.returnTo),
+                ["kind": "revokeInvite", "subject": ["org": "o1", "inviteKey": "k1"], "returnTo": r]
+            ),
+            (
+                .renameOrg(org: "o1", name: "Acme 2", returnTo: Self.returnTo),
+                ["kind": "renameOrg", "subject": ["org": "o1", "name": "Acme 2"], "returnTo": r]
+            ),
+            (
+                .deleteOrg(org: "o1", returnTo: Self.returnTo),
+                ["kind": "deleteOrg", "subject": ["org": "o1"], "returnTo": r]
+            ),
+            (
+                .setCapabilities(
+                    org: "o1", account: "a2", team: "t1", capabilities: [.createTeam], returnTo: Self.returnTo),
+                [
+                    "kind": "setCapabilities",
+                    "subject": ["org": "o1", "account": "a2", "team": "t1", "capabilities": 32],
+                    "returnTo": r,
+                ]
+            ),
+            (
+                .setCapabilities(org: "o1", capabilities: .default, returnTo: Self.returnTo),
+                ["kind": "setCapabilities", "subject": ["org": "o1", "capabilities": 4], "returnTo": r]
+            ),
+            (
+                .setAllApps(org: "o1", account: "a2", allApps: false, returnTo: Self.returnTo),
+                ["kind": "setAllApps", "subject": ["org": "o1", "account": "a2", "allApps": false], "returnTo": r]
+            ),
+        ]
+        for (request, body) in expected {
+            XCTAssertEqual(request.json, body, request.kind)
+            XCTAssertEqual(request.json["kind"], .string(request.kind))
+            XCTAssertEqual(request.returnTo, Self.returnTo)
+        }
+    }
+
+    func testTheGeneratedBodyTakesEveryKind() throws {
+        for request in Self.everyKind {
+            let body = try request.generated()
+            XCTAssertEqual(
+                try MeroJSON.decode(JSONValue.self, from: MeroJSON.encode(body)), request.json, request.kind)
+        }
     }
 
     func testCreatesAnOrganizationAndReadsItsIdFromTheSealedResult() async throws {
@@ -219,6 +324,66 @@ final class ConsentTests: XCTestCase {
         }
     }
 
+    func testARenameAndADeleteAnswerWhatTheyChanged() async throws {
+        serve(result: [
+            "requestId": "r1", "kind": "renameOrg", "status": "approved", "decidedAt": 2,
+            "outcome": ["orgId": "o1", "name": "Acme 2"],
+        ])
+        let renamed = try await client().consentResult("r1")
+        XCTAssertEqual(renamed.outcome, .orgRenamed(orgId: "o1", name: "Acme 2"))
+        XCTAssertEqual(renamed.newOrgName, "Acme 2")
+        XCTAssertNil(renamed.orgId, "a rename made no organization")
+        XCTAssertTrue(renamed.changesOrganizations)
+        MockURLProtocol.reset()
+
+        serve(result: [
+            "requestId": "r1", "kind": "deleteOrg", "status": "approved", "decidedAt": 2,
+            "outcome": ["apps": ["app1", "app2"]],
+        ])
+        let deleted = try await client().consentResult("r1")
+        XCTAssertEqual(deleted.outcome, .orgDeleted(apps: ["app1", "app2"]))
+        XCTAssertEqual(deleted.deletedApps, ["app1", "app2"])
+        XCTAssertEqual(String(describing: deleted.outcome!), "orgDeleted(apps: 2)")
+    }
+
+    func testTheOtherOrganizationKindsApproveWithNoOutcome() async throws {
+        for kind in [
+            "leaveOrg", "removeMember", "setMemberRole", "setMemberTeams", "removeMemberTeams",
+            "revokeInvite", "setCapabilities", "setAllApps",
+        ] {
+            serve(result: ["requestId": "r1", "kind": .string(kind), "status": "approved", "decidedAt": 2])
+            let result = try await client().consentResult("r1")
+            XCTAssertTrue(result.isApproved, kind)
+            XCTAssertNil(result.outcome, kind)
+            XCTAssertTrue(result.changesOrganizations, kind)
+            MockURLProtocol.reset()
+        }
+        serve(result: ["requestId": "r1", "kind": "leaveOrg", "status": "declined", "decidedAt": 2])
+        let declined = try await client().consentResult("r1")
+        XCTAssertFalse(declined.changesOrganizations, "a declined request changed nothing")
+    }
+
+    func testARenameOrDeleteOutcomeThatDoesNotFitIsRefused() async throws {
+        let answers: [JSONValue] = [
+            ["requestId": "r1", "kind": "renameOrg", "status": "approved", "decidedAt": 2],
+            ["requestId": "r1", "kind": "deleteOrg", "status": "approved", "decidedAt": 2],
+            ["requestId": "r1", "kind": "deleteOrg", "status": "approved", "decidedAt": 2, "outcome": ["orgId": "o1"]],
+            [
+                "requestId": "r1", "kind": "createOrg", "status": "approved", "decidedAt": 2,
+                "outcome": ["orgId": "o1", "name": "Acme"],
+            ],
+            ["requestId": "r1", "kind": "leaveOrg", "status": "approved", "decidedAt": 2, "outcome": ["apps": []]],
+        ]
+        for answer in answers {
+            serve(result: answer)
+            do {
+                _ = try await client().consentResult("r1")
+                XCTFail("expected \(answer) to be refused")
+            } catch AccountError.protocolViolation {}
+            MockURLProtocol.reset()
+        }
+    }
+
     func testTheOlderKindsHaveNoOutcome() async throws {
         serve(result: ["requestId": "r1", "kind": "upgrade", "status": "approved", "decidedAt": 2])
         let result = try await client().consentResult("r1")
@@ -235,6 +400,19 @@ final class ConsentTests: XCTestCase {
             .createInvite(org: "", role: .member, returnTo: Self.returnTo),
             .createInvite(org: "o1", role: .member, uses: -1, returnTo: Self.returnTo),
             .acceptInvite(token: "", returnTo: Self.returnTo),
+            .leaveOrg(org: "", returnTo: Self.returnTo),
+            .removeMember(org: "o1", account: "", returnTo: Self.returnTo),
+            .setMemberRole(org: "", account: "a2", role: .member, returnTo: Self.returnTo),
+            .setMemberTeams(org: "o1", account: "a2", teams: [], returnTo: Self.returnTo),
+            .setMemberTeams(
+                org: "o1", account: "a2", teams: [ConsentTeamMembership(team: "")], returnTo: Self.returnTo),
+            .removeMemberTeams(org: "o1", account: "a2", teams: [], returnTo: Self.returnTo),
+            .revokeInvite(org: "o1", inviteKey: "", returnTo: Self.returnTo),
+            .renameOrg(org: "o1", name: " ", returnTo: Self.returnTo),
+            .deleteOrg(org: "", returnTo: Self.returnTo),
+            .setCapabilities(org: "o1", account: "", capabilities: [], returnTo: Self.returnTo),
+            .setCapabilities(org: "o1", capabilities: OrgCapabilities(rawValue: -1), returnTo: Self.returnTo),
+            .setAllApps(org: "o1", account: "", allApps: true, returnTo: Self.returnTo),
         ]
         for request in bad {
             do {

@@ -285,6 +285,7 @@ public final class MeroAppSession: ObservableObject {
                 // is refused (nil).
                 consentResult = try? await cloud.confirmConsentReturn(
                     requestId: consentRequestId ?? back.requestId, returned: url)
+                if consentResult?.changesOrganizations == true { revision += 1 }
             }
             return true
         }
@@ -346,7 +347,8 @@ public final class MeroAppSession: ObservableObject {
     /// page, opened in the system browser (``ConsentLauncher``) with
     /// ``callback`` as its `returnTo`, through `ConsentLauncher.decide`.
     /// ``consentResult`` holds the node's decision on this request, with its
-    /// typed `outcome`; a new or joined organization bumps ``revision``.
+    /// typed `outcome`; an approval that changed an organization
+    /// (``ConsentResult/changesOrganizations``) bumps ``revision``.
     /// Throws `CONSENT_REQUEST_MISMATCH` / `CONSENT_NOT_DECIDED` when the page
     /// that sent the person back did not decide this request. Answers the request.
     @discardableResult
@@ -363,7 +365,7 @@ public final class MeroAppSession: ObservableObject {
                 return await confirm?(started) ?? true
             })
         consentResult = result
-        if result.orgId != nil || result.joinedOrg != nil { revision += 1 }
+        if result.changesOrganizations { revision += 1 }
         return started
     }
 

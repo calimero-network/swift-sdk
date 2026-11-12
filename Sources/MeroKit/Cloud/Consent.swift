@@ -1,14 +1,17 @@
 import Foundation
 
-// The consent kinds that make something (calimero-network/core#5014):
-// `createOrg`, `createInvite` and `acceptInvite`, beside `release`, `upgrade`
-// and `outbound`. What an approval made is in `/consent/{id}/result`'s
-// `outcome`, typed here as ``ConsentOutcome``.
+// The consent kinds that make something: `createOrg`, `createInvite` and
+// `acceptInvite` (calimero-network/core#5014), `renameOrg` and `deleteOrg`
+// (calimero-network/core#5018). What an approval made is in
+// `/consent/{id}/result`'s `outcome`, typed here as ``ConsentOutcome``. The
+// other kinds core#5018 added (`leaveOrg`, `removeMember`, `setMemberRole`,
+// `setMemberTeams`, `removeMemberTeams`, `revokeInvite`, `setCapabilities`,
+// `setAllApps`) make nothing and answer no outcome.
 //
 // The request and result bodies go through ``CalimeroClient/post(_:_:)`` and
-// ``CalimeroClient/get(_:)`` (sealed like every other route), not the
-// generated `MeroAPI` types: the vendored OpenAPI document predates the new
-// kinds, and the generated decoder refuses a `kind` it does not know.
+// ``CalimeroClient/get(_:)`` (sealed like every other route), so the outcome
+// is typed by kind here; ``ConsentRequest/generated()`` gives the same body
+// as the generated `MeroAPI` type for `client.consent.pageCreate(body:)`.
 //
 // An invite token is a bearer credential: nothing here writes it to a
 // description, a debug description or a mirror (`print`, `dump`, string
@@ -22,20 +25,30 @@ public enum ConsentOutcome: Codable, Sendable, Equatable {
     case inviteCreated(token: String)
     /// `acceptInvite`: the organization joined.
     case inviteAccepted(org: String)
+    /// `renameOrg`: the organization and its new name.
+    case orgRenamed(orgId: String, name: String)
+    /// `deleteOrg`: the apps deleted with the organization.
+    case orgDeleted(apps: [String])
 
-    enum CodingKeys: String, CodingKey { case orgId, token, org }
+    enum CodingKeys: String, CodingKey { case orgId, token, org, name, apps }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        if let id = try c.decodeIfPresent(String.self, forKey: .orgId) {
-            self = .orgCreated(orgId: id)
+        if let apps = try c.decodeIfPresent([String].self, forKey: .apps) {
+            self = .orgDeleted(apps: apps)
+        } else if let id = try c.decodeIfPresent(String.self, forKey: .orgId) {
+            if let name = try c.decodeIfPresent(String.self, forKey: .name) {
+                self = .orgRenamed(orgId: id, name: name)
+            } else {
+                self = .orgCreated(orgId: id)
+            }
         } else if let token = try c.decodeIfPresent(String.self, forKey: .token) {
             self = .inviteCreated(token: token)
         } else if let org = try c.decodeIfPresent(String.self, forKey: .org) {
             self = .inviteAccepted(org: org)
         } else {
             throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "an outcome has orgId, token or org"))
+                .init(codingPath: decoder.codingPath, debugDescription: "an outcome has orgId, token, org or apps"))
         }
     }
 
@@ -45,6 +58,10 @@ public enum ConsentOutcome: Codable, Sendable, Equatable {
         case .orgCreated(let id): try c.encode(id, forKey: .orgId)
         case .inviteCreated(let token): try c.encode(token, forKey: .token)
         case .inviteAccepted(let org): try c.encode(org, forKey: .org)
+        case .orgRenamed(let id, let name):
+            try c.encode(id, forKey: .orgId)
+            try c.encode(name, forKey: .name)
+        case .orgDeleted(let apps): try c.encode(apps, forKey: .apps)
         }
     }
 
@@ -54,11 +71,13 @@ public enum ConsentOutcome: Codable, Sendable, Equatable {
         case .orgCreated: return "createOrg"
         case .inviteCreated: return "createInvite"
         case .inviteAccepted: return "acceptInvite"
+        case .orgRenamed: return "renameOrg"
+        case .orgDeleted: return "deleteOrg"
         }
     }
 
     /// The kinds whose approval answers an outcome.
-    static let kinds: Set<String> = ["createOrg", "createInvite", "acceptInvite"]
+    static let kinds: Set<String> = ["createOrg", "createInvite", "acceptInvite", "renameOrg", "deleteOrg"]
 }
 
 extension ConsentOutcome: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
@@ -68,6 +87,8 @@ extension ConsentOutcome: CustomStringConvertible, CustomDebugStringConvertible,
         case .orgCreated(let orgId): return "orgCreated(\(orgId))"
         case .inviteCreated: return "inviteCreated(token: <redacted>)"
         case .inviteAccepted(let org): return "inviteAccepted(\(org))"
+        case .orgRenamed(let orgId, let name): return "orgRenamed(\(orgId), \(name))"
+        case .orgDeleted(let apps): return "orgDeleted(apps: \(apps.count))"
         }
     }
 
@@ -98,10 +119,35 @@ extension ConsentResult {
         return nil
     }
 
+    /// `renameOrg`, approved: the organization's new name.
+    public var newOrgName: String? {
+        if case .orgRenamed(_, let name) = outcome { return name }
+        return nil
+    }
+
+    /// `deleteOrg`, approved: the apps deleted with the organization.
+    public var deletedApps: [String]? {
+        if case .orgDeleted(let apps) = outcome { return apps }
+        return nil
+    }
+
+    /// Whether this is an approved request that changed an organization the
+    /// account sees or its place in one (made, joined, left, renamed, deleted,
+    /// a member's role, teams, capabilities or apps, an invite revoked):
+    /// screens listing organizations, members or teams should read again.
+    public var changesOrganizations: Bool {
+        isApproved && Self.organizationKinds.contains(kind)
+    }
+
+    static let organizationKinds: Set<String> = [
+        "createOrg", "acceptInvite", "leaveOrg", "removeMember", "setMemberRole", "setMemberTeams",
+        "removeMemberTeams", "revokeInvite", "renameOrg", "deleteOrg", "setCapabilities", "setAllApps",
+    ]
+
     /// Throws ``AccountError/protocolViolation(_:)`` (which never quotes the
     /// answer) when the outcome does not fit the kind: an approved
-    /// `createOrg`, `createInvite` or `acceptInvite` without its outcome, or an
-    /// outcome of another kind.
+    /// `createOrg`, `createInvite`, `acceptInvite`, `renameOrg` or `deleteOrg`
+    /// without its outcome, or an outcome of another kind.
     func checkOutcome() throws {
         if let outcome, outcome.kind != kind {
             throw AccountError.protocolViolation("a \(kind) consent answered a \(outcome.kind) outcome")
@@ -142,6 +188,21 @@ extension ConsentRequest: CustomStringConvertible, CustomDebugStringConvertible,
         case .createOrg(let name, _): return "createOrg(\(name))"
         case .createInvite(let org, let role, _, _, _, _, _): return "createInvite(\(org), \(role.rawValue))"
         case .acceptInvite: return "acceptInvite(token: <redacted>)"
+        case .leaveOrg(let org, _): return "leaveOrg(\(org))"
+        case .removeMember(let org, let account, _): return "removeMember(\(org), \(account))"
+        case .setMemberRole(let org, let account, let role, _):
+            return "setMemberRole(\(org), \(account), \(role.rawValue))"
+        case .setMemberTeams(let org, let account, let teams, _):
+            return "setMemberTeams(\(org), \(account), teams: \(teams.count))"
+        case .removeMemberTeams(let org, let account, let teams, _):
+            return "removeMemberTeams(\(org), \(account), teams: \(teams.count))"
+        case .revokeInvite(let org, _, _): return "revokeInvite(\(org))"
+        case .renameOrg(let org, let name, _): return "renameOrg(\(org) → \(name))"
+        case .deleteOrg(let org, _): return "deleteOrg(\(org))"
+        case .setCapabilities(let org, let account, let team, let capabilities, _):
+            return
+                "setCapabilities(\(org), account: \(account ?? "-"), team: \(team ?? "-"), \(capabilities.rawValue))"
+        case .setAllApps(let org, let account, let allApps, _): return "setAllApps(\(org), \(account), \(allApps))"
         }
     }
 
