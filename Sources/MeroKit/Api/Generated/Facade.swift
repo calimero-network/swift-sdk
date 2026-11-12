@@ -314,9 +314,9 @@ extension CalimeroClient {
         ///
         /// **Who:** whoever the app's access admits (a public app: anyone).
         @discardableResult
-        public func blobUpload(app: Swift.String, body: Data, sealed: Swift.Bool? = nil) async throws -> Operations.BlobUpload.Output.Ok.Body.JsonPayload {
-            let input = Operations.BlobUpload.Input(path: .init(app: app), query: .init(sealed: sealed), body: .binary(HTTPBody(body)))
-            return try await client.perform { api in
+        public func blobUpload(app: Swift.String, body: Data, contentType: Swift.String? = nil, sealed: Swift.Bool? = nil) async throws -> Operations.BlobUpload.Output.Ok.Body.JsonPayload {
+            let input = Operations.BlobUpload.Input(path: .init(app: app), query: .init(sealed: sealed), body: contentType == nil ? .binary(HTTPBody(body)) : .any(HTTPBody(body)))
+            return try await client.perform(contentType: contentType) { api in
                 try await api.blobUpload(input).ok.body.json
             }
         }

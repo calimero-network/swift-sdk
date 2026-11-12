@@ -14,7 +14,10 @@ answer. `confirm` and `operatorProof` are no arguments: the client answers a
 call, else the client's own. An operation the document marks
 `x-calimero-retry-safe` is retried on a 503 or a lost connection, with
 failover (one marked `x-calimero-retry-requires: idempotencyKey` only when
-the call gives one). An optional body property the
+the call gives one). A binary body whose document lists `*/*` takes a
+`contentType:` argument (`apps.blobUpload(app:body:contentType:)`): alone,
+it defaults to `application/octet-stream`; beside a named type, it is
+optional and nil sends that type. An optional body property the
 document makes nullable is a `T??` argument: `.some(nil)` sends an explicit
 `null` (`orgs.teamUpdate(parent: .some(nil))` moves a team to the top).
 Refusals throw MeroKit's errors.
@@ -113,7 +116,8 @@ def operations(types):
         if not found:
             continue
         op_id = found.group(1)
-        op = {"name": name, "path": [], "query": [], "body": None, "bodyOptional": False, "answer": None}
+        op = {"name": name, "path": [], "query": [], "body": None, "bodyCases": [], "bodyOptional": False,
+              "answer": None}
         out_at = next(i for i, l in enumerate(block) if l.startswith("        @frozen public enum Output:"))
         for i, l in enumerate(block[:out_at]):
             if l == "            public struct Path: Sendable, Hashable {":
@@ -125,6 +129,8 @@ def operations(types):
         body_at = next((i for i, l in enumerate(block[:out_at])
                         if l.startswith("            @frozen public enum Body:")), None)
         if body_at is not None:
+            op["bodyCases"] = [m.group(1) for m in (re.match(r"^                case (\w+)\(", block[i])
+                                                    for i in range(body_at, out_at)) if m]
             for i in range(body_at, out_at):
                 m = re.match(r"^                case (\w+)\((.+)\)$", block[i])
                 if m:
@@ -288,8 +294,16 @@ def facade(document, ops, taken):
                     arg("body", "Data", None)
                     body_expr = f".{case}(HTTPBody(body))"
                     if case == "any":
-                        # `*/*`: the caller names the type (the generator would send `*/*`).
+                        # `*/*` alone: the caller names the type (the generator would send `*/*`).
                         arg("contentType", "Swift.String", '"application/octet-stream"')
+                        content_type = True
+                    elif "any" in op["bodyCases"]:
+                        # `*/*` beside a named type (`blob_upload`: `application/octet-stream`, `*/*`):
+                        # the node stores the type the request names, so the caller may name it; nil
+                        # sends the first listed type. The `*/*` case carries it (the transport sets
+                        # the header), the listed case keeps the generator's own.
+                        label = arg("contentType", "Swift.String?", "nil")
+                        body_expr = f"{label} == nil ? .{case}(HTTPBody(body)) : .any(HTTPBody(body))"
                         content_type = True
                 else:
                     arg("body", rest, None)
