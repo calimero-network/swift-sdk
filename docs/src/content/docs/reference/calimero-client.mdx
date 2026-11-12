@@ -21,6 +21,7 @@ Methods marked with a passkey (`passkey:`) are step-ups: the node answers
 | Blobs | `uploadFile(_:_:)`, `blobContent`, `listBlobs`, `blobInfo` |
 | Organizations | `setRecoveryKey(_:publicKey:passkey:)`, `startRecovery(_:seed:)`, `updateTeam` |
 | Approvals | `appsReportAll`, `pendingApprovals`, `openConsentPage`, `waitForConsent`, `checkConsentCode`; `pageDeployment(_:)`, `frontendManifest(_:)` |
+| Consent | `consent.request(_:returnTo:)`, `consent.result(requestId:)`, `consent.resume(url:)`, `consent.wait(requestId:timeout:interval:)`: every kind, with a typed `ConsentDecision.outcome` ([the consent page](/guides/consent/)) |
 | Raw routes | `get`, `post`, `put`, `delete`, `postConfirmed`, `deleteConfirmed`; `JSONValue(encoding:)` (a facade answer as JSON, to read as MeroKit's types) |
 
 Every other route is a method of the generated facade, one per operation of
@@ -28,7 +29,7 @@ core's OpenAPI document, grouped by its `x-calimero-group`: `client.auth`
 (`me`, `usage`, `apikeyCreate`, `aliasList`, ...), `client.apps` (`create`,
 `get`, `list`, `blobDownload`, `presencePublish`, ...), `client.orgs` (`create`,
 `get`, `teamCreate`, `inviteCreate`, `setMember`, ...), `client.consent`
-(`pageCreate`, `pageResult`), `client.ops`, `client.packages`,
+(`pageCreate`, `pageResult`; and the hand-written `request`, `result`, `resume`, `wait`), `client.ops`, `client.packages`,
 `client.deployments` (sign-up, deployers, deployments) and
 `client.publicApi` (`attestation`, `releasesPublic`, `publisherBinding`).
 `import MeroAPI` to name the types they answer. A step-up method takes

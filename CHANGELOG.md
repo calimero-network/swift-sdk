@@ -2,6 +2,27 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: `client.consent` asks for every consent kind, with typed outcomes
+
+`client.consent.request(_:returnTo:)`, `result(requestId:)`,
+`resume(url:)` and `wait(requestId:timeout:interval:)` (the Swift twin of
+mero-js `client.consent.request / resume / wait`) take a `ConsentAsk`:
+`release`, `upgrade` and `outbound`, and core's new `createOrg`,
+`createInvite` and `acceptInvite` (calimero-network/core#5014). They answer a
+`ConsentDecision` whose `outcome` is typed per kind: `orgId`, `inviteToken`,
+`joinedOrg`. An invite token never appears in a description, a mirror or an
+error.
+
+MeroKitUI's `ConsentLauncher.begin(client:ask:callback:…)` runs the page in
+`ASWebAuthenticationSession` with an https (universal link) callback on iOS
+17.4+ / macOS 14.4+, and in the browser plus `wait` before that.
+`MeroAppSession.requestConsent(_ ask:)` uses it and keeps the answer in the new
+`consentDecision`; `MeroAppSession.handle(_:)` now reads a consent return
+with `consent.resume(url:)`, so it also knows the new kinds.
+
+The request and result bodies are typed by hand: the vendored OpenAPI
+document predates the new kinds, and the generated types are unchanged.
+
 ## Unreleased: `apps.blobUpload` takes the blob's content type again
 
 `apps.blobUpload(app:body:contentType:sealed:)` gains an optional

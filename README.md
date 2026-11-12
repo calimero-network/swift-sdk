@@ -113,8 +113,16 @@ sign-in ceremonies, the event streams and the escape hatches (`post`,
   `ReleaseDeadlineError`, `ConsentStale`, `TrapError`, `SignUpRefused{reason}`,
   `OriginNotRegistered`, `BadOrigin`, `OriginTaken`, `QuotaExceeded`,
   `RecoveryNotReady{readyAt}`; plus `ConfirmCancelled`.
-- **Approvals** happen on the node's consent page: `requestConsent` → open the
-  `url` in the system browser → `consentResult`.
+- **Consent.** What an app's session may not do itself (create an
+  organization, mint or accept an invite, approve a release, upgrade, outbound
+  hosts) the person approves on the node's consent page:
+  `client.consent.request(_:returnTo:)` → show `code`, open `url` →
+  `resume(url:)` / `wait(requestId:)`, answering a `ConsentDecision` whose
+  `outcome` is typed per kind (`orgId`, `inviteToken`, `joinedOrg`).
+  `ConsentLauncher.begin` (MeroKitUI) runs it in `ASWebAuthenticationSession`
+  with a universal-link `returnTo` (`.https(host:path:)`, iOS 17.4+ / macOS
+  14.4+), and in the browser plus `wait` before that. See
+  [the consent page guide](docs/src/content/docs/guides/consent.mdx).
 
 ## The app layer (SwiftUI)
 
@@ -127,6 +135,9 @@ import MeroKitUI
 
 .task { await session.restore() }
 .onOpenURL { url in Task { await session.handle(url) } }
+
+let decision = try await session.requestConsent(.createOrg(name: "Acme"))   // the node's consent page
+let org = decision.orgId
 ```
 
 `session.backend` is a `MeroAppBackend`. Its names predate 1.0 and map one to

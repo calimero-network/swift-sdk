@@ -122,7 +122,7 @@ public actor CalimeroClient {
     private var sessionObserver: (@Sendable (CalimeroSession?) -> Void)?
     private var stepUpPasskey: (any PasskeyProvider)?
     private var operatorKey: (any OperatorSigner)?
-    private let sleep: @Sendable (Double) async -> Void
+    let sleep: @Sendable (Double) async -> Void
 
     public init(_ options: CalimeroClientOptions) {
         self.init(options, sleep: { seconds in try? await Task.sleep(nanoseconds: UInt64(max(0, seconds) * 1e9)) })
