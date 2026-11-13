@@ -169,7 +169,151 @@ final class CalimeroAppBackendTests: XCTestCase {
         XCTAssertTrue(cluster.orgs.isEmpty)
     }
 
-    private func backend(consent: RecordingConsent) async throws -> CalimeroAppBackend {
+    func testDecliningAnInviteOrAJoinThrowsAndCallsNoOrganizationRoute() async throws {
+        let backend = try await backend(consent: RecordingConsent(status: "declined"))
+        do {
+            _ = try await backend.createInvitation(namespaceId: "org_x")
+            XCTFail("a declined invite makes no token")
+        } catch let error as OrgConsentNotApproved {
+            XCTAssertEqual(error.kind, "createInvite")
+            XCTAssertEqual(error.errorDescription, "Declined. Nothing was changed.")
+        }
+        do {
+            _ = try await backend.joinNamespace(
+                namespaceId: "org_x", invitation: OrgInvitation(namespaceId: "org_x", token: "inv_org_x"))
+            XCTFail("a declined join joins nothing")
+        } catch let error as OrgConsentNotApproved {
+            XCTAssertEqual(error.kind, "acceptInvite")
+        }
+        XCTAssertFalse(node.requests.contains { $0.path.hasSuffix("/invites") || $0.path.hasSuffix("/redeem") })
+    }
+
+    func testAPageLeftWithoutDecidingIsNotAnApproval() async throws {
+        let backend = try await backend(consent: RecordingConsent(status: "pending"))
+        do {
+            _ = try await backend.foundNamespace(name: "Acme")
+            XCTFail("an undecided request founds nothing")
+        } catch let error as OrgConsentNotApproved {
+            XCTAssertEqual(error.status, .pending)
+            XCTAssertEqual(error.errorDescription, "Not approved. Nothing was changed.")
+        }
+    }
+
+    func testAnApprovalWithoutItsOutcomeIsAProtocolViolation() async throws {
+        let backend = try await backend(consent: RecordingConsent(outcome: "null"))
+        do {
+            _ = try await backend.foundNamespace(name: "Acme")
+            XCTFail("an approved createOrg without an org id")
+        } catch let error as OrgConsentNotApproved {
+            XCTFail("not a decline: \(error)")
+        } catch {
+            XCTAssertTrue("\(error)".contains("createOrg"), "\(error)")
+        }
+    }
+
+    func testANameTheNodeRefusesLeavesTheWorkspaceWithANote() async throws {
+        let consent = RecordingConsent()
+        let backend = try await backend(consent: consent)
+        // org_consent is not on the fake cluster: its metadata write is refused (404).
+        let founded = try await backend.foundNamespace(name: "Acme")
+        XCTAssertEqual(founded.namespaceId, "org_consent")
+        XCTAssertEqual(founded.nameError, "the workspace name could not be saved")
+    }
+
+    // MARK: A session bound to the package (core#4934), end to end
+
+    /// Signed in on the package's served page, as the phone is: everything the
+    /// app does goes through, and nothing the node refuses such a session is
+    /// called.
+    func testAPackageBoundSessionRunsTheWholeAppWithoutARefusedRoute() async throws {
+        cluster.boundPackage = "com.calimero.chat"
+        let consent = ClusterConsent(cluster: cluster)
+        let backend = try await backend(consent: consent)
+
+        // Create a workspace: on the consent page, with Chat's app team.
+        let org = try await backend.foundNamespace(name: "Acme").namespaceId
+        let appTeam = try XCTUnwrap(consent.appTeams[org])
+        let listed = try await backend.listNamespaces()
+        XCTAssertEqual(listed.map(\.name), ["Acme"])
+
+        // #general: an open channel reaches the app team.
+        let general = try await backend.createContext(groupId: org, applicationId: "", name: "general", initArgs: [:])
+        XCTAssertEqual(
+            node.requests.last { $0.path == "/apps" }?.json?["access"], ["kind": "team", "team": .string(appTeam)])
+        let openChannels = try await backend.listContexts(groupId: org)
+        XCTAssertEqual(openChannels, [general])
+        let noSubgroups = try await backend.listSubgroups(namespaceId: org)
+        XCTAssertEqual(noSubgroups, [], "the app team is not a channel")
+
+        // A private channel: its team is made under the app team.
+        let secret = try await backend.createSubgroup(namespaceId: org, name: "secret", isPublic: false)
+        let secretTeam = try XCTUnwrap(GroupRef.parse(secret).team)
+        XCTAssertEqual(cluster.teamParents[secretTeam], appTeam)
+        let inSecret = try await backend.createContext(
+            groupId: secret, applicationId: "", name: "secret", initArgs: [:])
+        let subgroups = try await backend.listSubgroups(namespaceId: org)
+        XCTAssertEqual(subgroups, [AppSubgroup(groupId: secret, name: "secret", contextIds: [inSecret])])
+        let stillOpen = try await backend.listContexts(groupId: org)
+        XCTAssertEqual(stillOpen, [general])
+
+        // Invite: on the consent page, naming the app team, so the invitee has Chat.
+        let invitation = try await backend.createInvitation(namespaceId: org)
+        XCTAssertEqual(invitation.name, "Acme")
+        XCTAssertEqual(cluster.inviteTeams[invitation.token], [appTeam])
+
+        // Join: on the consent page.
+        let joined = try await backend.joinNamespace(namespaceId: "", invitation: invitation)
+        XCTAssertEqual(joined.namespaceId, org)
+
+        XCTAssertEqual(consent.kinds, ["createOrg", "createInvite", "acceptInvite"])
+        XCTAssertEqual(cluster.refused, [])
+    }
+
+    /// The same session without the consent page is refused what the node
+    /// refuses it, so the test above would catch a route that slipped back.
+    func testWithoutTheConsentPageAPackageBoundSessionIsRefused() async throws {
+        cluster.boundPackage = "com.calimero.chat"
+        let backend = try await backend()
+        do {
+            _ = try await backend.foundNamespace(name: "Acme")
+            XCTFail("POST /orgs is refused to a package-bound session")
+        } catch {}
+        let org = cluster.consentOrg(name: "Legacy", package: "com.calimero.other").org
+        do {
+            _ = try await backend.createSubgroup(namespaceId: org, name: "x", isPublic: false)
+            XCTFail("a team outside the package's app team is refused")
+        } catch {}
+        XCTAssertEqual(cluster.refused, ["POST /orgs", "POST /orgs/\(org)/teams"])
+    }
+
+    func testAnOrgWithoutAnAppTeamKeepsOrgAccessAndInvitesToNoTeam() async throws {
+        let backend = try await backend()
+        let org = try await backend.foundNamespace(name: "Acme").namespaceId
+        _ = try await backend.createContext(groupId: org, applicationId: "", name: "general", initArgs: [:])
+        XCTAssertEqual(node.requests.last { $0.path == "/apps" }?.json?["access"], ["kind": "org"])
+        let token = try await backend.createInvitation(namespaceId: org).token
+        XCTAssertEqual(cluster.inviteTeams[token], [])
+        let team = try await backend.createSubgroup(namespaceId: org, name: "t", isPublic: true)
+        XCTAssertNil(cluster.teamParents[GroupRef.parse(team).team ?? ""])
+    }
+
+    func testTheAppTeamIsTheTopLevelTeamMarkedWithThePackage() {
+        let org = OrgInfo(json: [
+            "orgId": "o",
+            "teams": [
+                "t_nested": ["teamId": "t_nested", "parent": "t_chat", "metadata": ["app": ["package": "com.chat"]]],
+                "t_other": ["teamId": "t_other", "metadata": ["app": ["package": "com.other"]]],
+                "t_plain": ["teamId": "t_plain", "metadata": .null],
+                "t_chat": ["teamId": "t_chat", "metadata": ["app": ["package": "com.chat"]]],
+            ],
+        ])
+        XCTAssertEqual(org.appTeam(package: "com.chat"), "t_chat")
+        XCTAssertEqual(org.appTeam(package: "com.other"), "t_other")
+        XCTAssertNil(org.appTeam(package: "com.none"))
+        XCTAssertNil(org.appTeam(package: ""))
+    }
+
+    private func backend(consent: any OrgConsentApprover) async throws -> CalimeroAppBackend {
         let client = CalimeroClient(
             CalimeroClientOptions(
                 baseUrl: "https://node.test", policy: .development, session: MockURLProtocol.makeSession()))
@@ -184,9 +328,14 @@ final class CalimeroAppBackendTests: XCTestCase {
 private final class RecordingConsent: OrgConsentApprover, @unchecked Sendable {
     static let returnTo = "https://chat.test/1.0.0/?native-consent=1"
     let status: String
+    /// Replaces the outcome of an approval (`"null"`: none).
+    let outcome: String?
     private(set) var requests: [ConsentRequest] = []
 
-    init(status: String = "approved") { self.status = status }
+    init(status: String = "approved", outcome: String? = nil) {
+        self.status = status
+        self.outcome = outcome
+    }
 
     func decide(_ request: @escaping @Sendable (String) -> ConsentRequest) async throws -> ConsentResult {
         let made = request(Self.returnTo)
@@ -198,8 +347,39 @@ private final class RecordingConsent: OrgConsentApprover, @unchecked Sendable {
             case .acceptInvite: ("acceptInvite", #"{"org":"org_joined"}"#)
             default: ("other", "null")
             }
-        let body = status == "approved" ? outcome : "null"
+        let body = status == "approved" ? (self.outcome ?? outcome) : "null"
         let json = #"{"requestId":"r1","kind":"\#(kind)","status":"\#(status)","outcome":\#(body)}"#
         return try JSONDecoder().decode(ConsentResult.self, from: Data(json.utf8))
+    }
+}
+
+/// The node's consent page over the fake cluster: approves, and does what
+/// the node does (an org with the package's app team, an invite naming its
+/// teams, a join into them).
+private final class ClusterConsent: OrgConsentApprover, @unchecked Sendable {
+    let cluster: FakeCloud
+    private(set) var kinds: [String] = []
+    private(set) var appTeams: [String: String] = [:]
+
+    init(cluster: FakeCloud) { self.cluster = cluster }
+
+    func decide(_ request: @escaping @Sendable (String) -> ConsentRequest) async throws -> ConsentResult {
+        let (kind, outcome): (String, JSONValue)
+        switch request("https://chat.test/1.0.0/?native-consent=1") {
+        case .createOrg(let name, _):
+            let made = cluster.consentOrg(name: name, package: cluster.boundPackage ?? "")
+            appTeams[made.org] = made.appTeam
+            (kind, outcome) = ("createOrg", ["orgId": .string(made.org)])
+        case .createInvite(let org, _, let teams, _, _, _, _):
+            let token = cluster.consentInvite(org: org, teams: teams ?? [])
+            (kind, outcome) = ("createInvite", ["token": .string(token)])
+        case .acceptInvite(let token, _):
+            (kind, outcome) = ("acceptInvite", ["org": .string(cluster.consentRedeem(token))])
+        default:
+            (kind, outcome) = ("other", .null)
+        }
+        kinds.append(kind)
+        let json: JSONValue = ["requestId": "r1", "kind": .string(kind), "status": "approved", "outcome": outcome]
+        return try JSONDecoder().decode(ConsentResult.self, from: JSONEncoder().encode(json))
     }
 }

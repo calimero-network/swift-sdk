@@ -10,13 +10,13 @@ import OpenAPIRuntime
 /// | Backend call | Node route |
 /// | --- | --- |
 /// | ``listNamespaces()`` | `GET /auth/me` (orgs), `GET /orgs/{org}` (metadata, members), `GET /apps?package=` |
-/// | ``listSubgroups(namespaceId:)`` | `GET /orgs/{org}` (teams), `GET /orgs/{org}/teams/{team}` (apps) |
-/// | ``listContexts(groupId:)`` | a team's apps; an org's apps in no team (`GET /apps`) |
+/// | ``listSubgroups(namespaceId:)`` | `GET /orgs/{org}` (teams but the package's app team), `GET /orgs/{org}/teams/{team}` (apps) |
+/// | ``listContexts(groupId:)`` | a team's apps; an org's apps in no team or the package's app team (`GET /apps`) |
 /// | ``isMember(contextId:)`` / ``joinContext(contextId:)`` | `GET /apps/{app}` (reachable or `NotFound`) |
 /// | ``foundNamespace(name:)`` | `POST /orgs`, `POST /orgs/{org}/metadata {package, name}` |
-/// | ``createSubgroup(namespaceId:name:isPublic:)`` | `POST /orgs/{org}/teams {join: everyone \| invite}` |
-/// | ``createContext(groupId:applicationId:name:initArgs:)`` / ``createServiceContext(groupId:applicationId:service:name:initArgs:)`` | `POST /apps {package (+ service) \| bundle, org, access: team \| org, initArgs}` |
-/// | ``createInvitation(namespaceId:)`` / ``joinNamespace(namespaceId:invitation:)`` | `POST /orgs/{org}/invites`, `POST /invites/{token}/redeem` |
+/// | ``createSubgroup(namespaceId:name:isPublic:)`` | `POST /orgs/{org}/teams {join: everyone \| invite, parent: the app team}` |
+/// | ``createContext(groupId:applicationId:name:initArgs:)`` / ``createServiceContext(groupId:applicationId:service:name:initArgs:)`` | `POST /apps {package (+ service) \| bundle, org, access: team \| the app team \| org, initArgs}` |
+/// | ``createInvitation(namespaceId:)`` / ``joinNamespace(namespaceId:invitation:)`` | `POST /orgs/{org}/invites {teams: the app team}`, `POST /invites/{token}/redeem` |
 /// | ``events(contextId:)`` | `GET /apps/{app}/events` (sealed SSE) |
 /// | contract `query` / `execute` | `POST /apps/{app}/views` / `POST /apps/{app}/intents` |
 /// | blobs | `POST /apps/{app}/blobs`, `GET /apps/{app}/blobs/{id}` |
@@ -32,6 +32,10 @@ import OpenAPIRuntime
 /// and ``joinNamespace(namespaceId:invitation:)`` are approved on the node's
 /// consent page instead (`createOrg`, `createInvite`, `acceptInvite`), with
 /// the same answers. Declining throws ``OrgConsentNotApproved``.
+///
+/// The package's app team (``OrgInfo/appTeam(package:)``, which an org made on
+/// the consent page starts with) is the org's own place for the app: open
+/// instances reach it, invites name it, and teams are made under it.
 ///
 /// A `groupId` is `"{orgId}/{teamId}"` for a team (``teamGroupId(org:team:)``)
 /// or an org id for the org itself, as a namespace's root group was.
@@ -89,15 +93,23 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         try JSONValue(encoding: try await client.apps.get(app: id))
     }
 
-    func invite(_ org: String) async throws -> String {
+    /// An invite token to `org`, naming the package's app team when it has
+    /// one: an invitee outside it has no way into the app there.
+    func invite(_ org: String, appTeam: String?) async throws -> String {
+        let teams = appTeam.map { [$0] } ?? []
         if let consent {
             let result = try await Self.approved(
-                consent.decide { .createInvite(org: org, role: .member, teams: [], returnTo: $0) })
+                consent.decide { .createInvite(org: org, role: .member, teams: teams, returnTo: $0) })
             guard let token = result.inviteToken else { throw Self.noOutcome(result) }
             return token
         }
         let approval = try approver("createInvitation")
-        return try await client.orgs.inviteCreate(org: org, role: .member, teams: [], passkey: approval).token
+        return try await client.orgs.inviteCreate(org: org, role: .member, teams: teams, passkey: approval).token
+    }
+
+    /// The package's app team in `org` (``OrgInfo/appTeam(package:)``).
+    func appTeam(_ org: OrgInfo) -> String? {
+        org.appTeam(package: packageName)
     }
 
     func createApp(
@@ -158,8 +170,11 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
 
     public func listSubgroups(namespaceId: String) async throws -> [AppSubgroup] {
         let org = try await fetchOrg(namespaceId)
+        // The package's app team is the org's own place for the app (its
+        // instances are listed with the org's, ``listContextEntries(groupId:)``).
+        let own = appTeam(org)
         var out: [AppSubgroup] = []
-        for team in org.teams.values.sorted(by: { $0.name < $1.name }) {
+        for team in org.teams.values.sorted(by: { $0.name < $1.name }) where team.teamId != own {
             let apps = (try? await fetchTeam(namespaceId, team.teamId).apps.map(\.appId)) ?? []
             out.append(
                 AppSubgroup(
@@ -177,10 +192,11 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
         if let team = place.team {
             return try await fetchTeam(place.org, team).apps.map { AppContextEntry(id: $0.appId, name: $0.name) }
         }
-        // The org's own: its apps that no team holds.
+        // The org's own: its apps that no team holds but the package's app team.
         let org = try await fetchOrg(place.org)
+        let own = appTeam(org)
         var inTeams = Set<String>()
-        for team in org.teams.keys {
+        for team in org.teams.keys where team != own {
             for app in (try? await fetchTeam(place.org, team).apps) ?? [] { inTeams.insert(app.appId) }
         }
         return try await fetchApps().filter { $0.org == place.org && !inTeams.contains($0.appId) }
@@ -234,7 +250,12 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
 
     public func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String {
         let join: TeamJoin = isPublic ? .everyone : .invite
-        let team = try await client.orgs.teamCreate(org: namespaceId, name: name, join: join.generated).teamId
+        // Under the package's app team when the org has one: a session bound
+        // to the package makes teams there only.
+        let parent = appTeam(try await fetchOrg(namespaceId))
+        let team = try await client.orgs.teamCreate(
+            org: namespaceId, name: name, parent: parent, join: join.generated
+        ).teamId
         return teamGroupId(org: namespaceId, team: team)
     }
 
@@ -254,8 +275,15 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
             Hex.is32(package) && service == nil
             ? .bundle(package)
             : .package(package, version: package == packageName ? packageVersion : nil, service: service)
-        return try await createApp(
-            name, source: source, org: place.org, access: place.team.map { .team($0) } ?? .org, initArgs: initArgs)
+        // The org's own instance reaches the package's app team when the org
+        // has one (everyone with the app there), else the whole org.
+        let access: AppAccess
+        if let team = place.team {
+            access = .team(team)
+        } else {
+            access = (try await fetchOrg(place.org)).appTeam(package: packageName).map { .team($0) } ?? .org
+        }
+        return try await createApp(name, source: source, org: place.org, access: access, initArgs: initArgs)
     }
 
     public func createServiceContext(
@@ -267,11 +295,11 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     public func createInvitation(namespaceId: String) async throws -> OrgInvitation {
-        let name = try? await fetchOrg(namespaceId)
+        let org = try? await fetchOrg(namespaceId)
         return OrgInvitation(
             namespaceId: namespaceId,
-            token: try await invite(namespaceId),
-            name: name.map { $0.metadata["name"]?.stringValue ?? $0.name })
+            token: try await invite(namespaceId, appTeam: org.flatMap(appTeam)),
+            name: org.map { $0.metadata["name"]?.stringValue ?? $0.name })
     }
 
     public func joinNamespace(namespaceId: String, invitation: OrgInvitation) async throws -> AppJoinedNamespace {
