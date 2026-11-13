@@ -108,7 +108,7 @@ public actor SealedTransport {
     public static let handshakePath = "/sealed/handshake"
     /// Where nodes released before ``handshakePath`` existed open a session (newer
     /// nodes still serve it as a deprecated alias). The handshake is tried here only
-    /// when the node answers 404 or 405 at ``handshakePath``.
+    /// when the node answers 404, 405 or 403 `sealed_required` at ``handshakePath``.
     /// (== mero-js `LEGACY_HANDSHAKE_PATH`.)
     public static let legacyHandshakePath = "/sealed/v2/handshake"
     /// Where sealed requests are posted. (== mero-js `SEALED_PATH`.)
@@ -333,10 +333,12 @@ public actor SealedTransport {
         return try sessionFrom(noise, reply: data)
     }
 
-    /// Post handshake message 1 to ``handshakePath``; a node that does not route it
-    /// (404 or 405: a release from before the path) gets the same message once at
-    /// ``legacyHandshakePath``. That node never read the first message, so sending
-    /// it again opens nothing twice. Any other answer is returned as it is.
+    /// Post handshake message 1 to ``handshakePath``; a node from before the path
+    /// gets the same message once at ``legacyHandshakePath``. Such a node routes
+    /// nothing there (404, 405) or, sealing everything as Cloud nodes do, refuses it
+    /// as an unsealed request (403 `sealed_required`). That node never read the
+    /// first message, so sending it again opens nothing twice. Any other answer is
+    /// returned as it is.
     /// (== mero-js `postHandshake`.)
     static func postHandshake(
         _ carrier: URLSession, nodeURL: String, body: Data
@@ -346,8 +348,19 @@ public actor SealedTransport {
             return (data, response as? HTTPURLResponse)
         }
         let first = try await post(handshakePath)
-        guard let status = first.1?.statusCode, status == 404 || status == 405 else { return first }
+        guard predatesHandshakePath(status: first.1?.statusCode, body: first.0) else { return first }
         return try await post(legacyHandshakePath)
+    }
+
+    /// Whether a handshake answer says the node predates ``handshakePath`` (see `postHandshake`).
+    static func predatesHandshakePath(status: Int?, body: Data) -> Bool {
+        switch status {
+        case 404, 405: return true
+        case 403:
+            let json = try? MeroJSON.decode(JSONValue.self, from: body)
+            return json?["error"]?["code"]?.stringValue == "sealed_required"
+        default: return false
+        }
     }
 
     /// Finish the handshake with the node's reply. (== mero-js `sessionFrom`, for the published vectors.)

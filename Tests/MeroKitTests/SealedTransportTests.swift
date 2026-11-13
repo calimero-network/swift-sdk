@@ -281,6 +281,24 @@ final class SealedTransportTests: XCTestCase {
         }
     }
 
+    func testOpensTheSessionAtTheV2PathWhenASealedOnlyNodeRefusesTheNewOne() async throws {
+        // An older node that seals everything refuses an unknown path as unsealed.
+        let node = SealedStandInNode { _ in .ok() }
+        let paths = Box<[String]>([])
+        MockURLProtocol.setHandler { request in
+            let path = request.url?.path ?? ""
+            paths.update { $0.append(path) }
+            if path == "/node" + SealedTransport.handshakePath {
+                return SealedStandInNode.refusal(403, "sealed_required")
+            }
+            return node.handle(request)
+        }
+        let (_, response) = try await transport(node).data(for: request("/admin-api/health"))
+        XCTAssertEqual(response.statusCode, 200)
+        let expected = ["/node/sealed/handshake", "/node/sealed/v2/handshake", "/node" + SealedTransport.sealedPath]
+        XCTAssertEqual(paths.get, expected)
+    }
+
     func testReportsA404FromTheV2HandshakePathTooWithoutTryingAgain() async throws {
         let calls = Counter()
         MockURLProtocol.setHandler { _ in
@@ -298,7 +316,8 @@ final class SealedTransportTests: XCTestCase {
     }
 
     func testDoesNotTryTheV2HandshakePathOnAnyOtherRefusal() async throws {
-        for (status, code) in [(400, "malformed"), (409, "stale_transport_key"), (500, "internal")] {
+        let refusals = [(400, "malformed"), (403, "forbidden"), (409, "stale_transport_key"), (500, "internal")]
+        for (status, code) in refusals {
             let paths = Box<[String]>([])
             MockURLProtocol.setHandler { request in
                 paths.update { $0.append(request.url?.path ?? "") }
