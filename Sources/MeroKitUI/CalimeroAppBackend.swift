@@ -27,6 +27,12 @@ import OpenAPIRuntime
 /// CONFIRM_REQUIRED`): they are approved with ``passkey``. Without one they
 /// throw ``PasskeyRequired``.
 ///
+/// With ``consent`` (a session bound to the package, which the node refuses
+/// organization routes), ``foundNamespace(name:)``, ``createInvitation(namespaceId:)``
+/// and ``joinNamespace(namespaceId:invitation:)`` are approved on the node's
+/// consent page instead (`createOrg`, `createInvite`, `acceptInvite`), with
+/// the same answers. Declining throws ``OrgConsentNotApproved``.
+///
 /// A `groupId` is `"{orgId}/{teamId}"` for a team (``teamGroupId(org:team:)``)
 /// or an org id for the org itself, as a namespace's root group was.
 public final class CalimeroAppBackend: MeroAppBackend, Sendable {
@@ -40,13 +46,18 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     /// The signed-in account's passkey, which approves the step-ups
     /// (members, invites); `nil` makes them throw ``PasskeyRequired``.
     public let passkey: (any PasskeyProvider)?
+    /// Where organization actions are approved for a session bound to the
+    /// package (``MeroClient/servedPageConsent(cluster:callback:appsDomain:opener:confirm:)``);
+    /// `nil`: the node is called directly.
+    public let consent: (any OrgConsentApprover)?
 
     public init(
         client: CalimeroClient, account: String, packageName: String, packageVersion: String? = nil,
-        passkey: (any PasskeyProvider)? = nil
+        passkey: (any PasskeyProvider)? = nil, consent: (any OrgConsentApprover)? = nil
     ) {
         self.client = client
         self.passkey = passkey
+        self.consent = consent
         self.account = account
         self.packageName = packageName
         self.packageVersion = packageVersion
@@ -79,6 +90,12 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     func invite(_ org: String) async throws -> String {
+        if let consent {
+            let result = try await Self.approved(
+                consent.decide { .createInvite(org: org, role: .member, teams: [], returnTo: $0) })
+            guard let token = result.inviteToken else { throw Self.noOutcome(result) }
+            return token
+        }
         let approval = try approver("createInvitation")
         return try await client.orgs.inviteCreate(org: org, role: .member, teams: [], passkey: approval).token
     }
@@ -184,12 +201,35 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     public func foundNamespace(name: String) async throws -> AppFoundedNamespace {
+        if let consent {
+            let result = try await Self.approved(consent.decide { .createOrg(name: name, returnTo: $0) })
+            guard let org = result.orgId else { throw Self.noOutcome(result) }
+            // A session bound to the package may be refused the metadata
+            // write; the org is then listed by the app instances it runs.
+            let named = try? await setMetadata(org: org, name: name)
+            return AppFoundedNamespace(
+                namespaceId: org, nameError: named == nil ? "the workspace name could not be saved" : nil)
+        }
         let org = try await client.orgs.create(name: name).orgId
+        try await setMetadata(org: org, name: name)
+        return AppFoundedNamespace(namespaceId: org)
+    }
+
+    func setMetadata(org: String, name: String) async throws {
         var metadata: [String: JSONValue] = ["name": .string(name)]
         if !packageName.isEmpty { metadata["package"] = .string(packageName) }
         let orgMetadata = try OpenAPIValueContainer(JSONValue.object(metadata))
         _ = try await client.orgs.metadata(org: org, metadata: orgMetadata)
-        return AppFoundedNamespace(namespaceId: org)
+    }
+
+    /// `result`, when approved; ``OrgConsentNotApproved`` otherwise.
+    static func approved(_ result: ConsentResult) throws -> ConsentResult {
+        guard result.isApproved else { throw OrgConsentNotApproved(kind: result.kind, status: result.status) }
+        return result
+    }
+
+    static func noOutcome(_ result: ConsentResult) -> Error {
+        AccountError.protocolViolation("an approved \(result.kind) answered no outcome")
     }
 
     public func createSubgroup(namespaceId: String, name: String, isPublic: Bool) async throws -> String {
@@ -235,7 +275,15 @@ public final class CalimeroAppBackend: MeroAppBackend, Sendable {
     }
 
     public func joinNamespace(namespaceId: String, invitation: OrgInvitation) async throws -> AppJoinedNamespace {
-        let org = try await client.orgs.inviteRedeem(token: invitation.token).org
+        let token = invitation.token
+        let org: String
+        if let consent {
+            let result = try await Self.approved(consent.decide { .acceptInvite(token: token, returnTo: $0) })
+            guard let joined = result.joinedOrg else { throw Self.noOutcome(result) }
+            org = joined
+        } else {
+            org = try await client.orgs.inviteRedeem(token: token).org
+        }
         return AppJoinedNamespace(
             namespaceId: org.isEmpty ? namespaceId : org, published: true, nodeURL: await client.nodeUrl)
     }

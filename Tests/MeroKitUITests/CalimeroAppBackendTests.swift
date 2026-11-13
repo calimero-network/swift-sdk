@@ -131,4 +131,75 @@ final class CalimeroAppBackendTests: XCTestCase {
             XCTAssertEqual(error.method, "createInvitation")
         }
     }
+
+    // MARK: Organization actions on the consent page
+
+    func testWithConsentFoundsInvitesAndJoinsOnTheConsentPage() async throws {
+        let consent = RecordingConsent()
+        let backend = try await backend(consent: consent)
+        let founded = try await backend.foundNamespace(name: "Acme")
+        XCTAssertEqual(founded.namespaceId, "org_consent")
+        let invitation = try await backend.createInvitation(namespaceId: "org_consent")
+        XCTAssertEqual(invitation.token, "inv_consent")
+        let joined = try await backend.joinNamespace(namespaceId: "", invitation: invitation)
+        XCTAssertEqual(joined.namespaceId, "org_joined")
+        XCTAssertEqual(
+            consent.requests,
+            [
+                .createOrg(name: "Acme", returnTo: RecordingConsent.returnTo),
+                .createInvite(org: "org_consent", role: .member, teams: [], returnTo: RecordingConsent.returnTo),
+                .acceptInvite(token: "inv_consent", returnTo: RecordingConsent.returnTo),
+            ])
+        let direct = node.requests.filter {
+            ($0.path == "/orgs" && $0.method == "POST") || $0.path.hasSuffix("/invites")
+                || $0.path.hasSuffix("/redeem")
+        }
+        XCTAssertEqual(direct.map(\.path), [], "the node's organization routes are not called")
+    }
+
+    func testADeclineThrowsAndChangesNothing() async throws {
+        let consent = RecordingConsent(status: "declined")
+        let backend = try await backend(consent: consent)
+        do {
+            _ = try await backend.foundNamespace(name: "Acme")
+            XCTFail("a decline founds nothing")
+        } catch let error as OrgConsentNotApproved {
+            XCTAssertEqual(error, OrgConsentNotApproved(kind: "createOrg", status: .declined))
+        }
+        XCTAssertTrue(cluster.orgs.isEmpty)
+    }
+
+    private func backend(consent: RecordingConsent) async throws -> CalimeroAppBackend {
+        let client = CalimeroClient(
+            CalimeroClientOptions(
+                baseUrl: "https://node.test", policy: .development, session: MockURLProtocol.makeSession()))
+        try await client.signIn(SoftPasskey())
+        return CalimeroAppBackend(
+            client: client, account: FakeCloud.me, packageName: "com.calimero.chat", passkey: SoftPasskey(),
+            consent: consent)
+    }
+}
+
+/// Approves (or declines) every request, answering the outcome its kind makes.
+private final class RecordingConsent: OrgConsentApprover, @unchecked Sendable {
+    static let returnTo = "https://chat.test/1.0.0/?native-consent=1"
+    let status: String
+    private(set) var requests: [ConsentRequest] = []
+
+    init(status: String = "approved") { self.status = status }
+
+    func decide(_ request: @escaping @Sendable (String) -> ConsentRequest) async throws -> ConsentResult {
+        let made = request(Self.returnTo)
+        requests.append(made)
+        let (kind, outcome): (String, String) =
+            switch made {
+            case .createOrg: ("createOrg", #"{"orgId":"org_consent"}"#)
+            case .createInvite: ("createInvite", #"{"token":"inv_consent"}"#)
+            case .acceptInvite: ("acceptInvite", #"{"org":"org_joined"}"#)
+            default: ("other", "null")
+            }
+        let body = status == "approved" ? outcome : "null"
+        let json = #"{"requestId":"r1","kind":"\#(kind)","status":"\#(status)","outcome":\#(body)}"#
+        return try JSONDecoder().decode(ConsentResult.self, from: Data(json.utf8))
+    }
 }
