@@ -1,9 +1,20 @@
 # MeroKit — Calimero Swift SDK
 
-The native Swift SDK for **Calimero 1.0**, the confidential cloud. It verifies a
-node's TDX attestation, seals every request to it, signs people in with
-passkeys, and gives a SwiftUI app its organizations, teams, app instances and
-live events. It is the Swift port of
+**Calimero** is your app's whole backend, like Firebase. Except nobody can read
+your data, not even us. It gives an app auth (passkeys, sessions, scoped API
+keys), a database (replicated app state), functions (Rust app methods, jobs,
+timers), realtime (events, presence), storage, search, hosting and typed
+clients, all running inside attested Intel TDX hardware. Clients verify a
+node's attestation against Sigstore-signed releases, then talk to it over a
+sealed Noise channel.
+
+**MeroKit** brings that to iOS and macOS apps. `CalimeroClient` checks a node's
+TDX quote (DCAP chain, Sigstore-signed mero-tee release, measurements) before
+it sends anything, seals every request, and signs people in with platform
+passkeys (`PlatformPasskey`) or machines in with API keys. On top it gives you
+organizations, teams and app instances, calls and views of your app's methods,
+live event and presence streams, the node's consent page, and SwiftUI pieces
+(`MeroAppSession`) that tie it into an app. It is the Swift port of
 [mero-js](https://github.com/calimero-network/mero-js) ≥27 `CalimeroClient`:
 the same methods, the same typed errors, the same retry and failover rules.
 
@@ -161,3 +172,14 @@ swift-format lint --recursive --strict Sources Tests Examples
 scripts/dev-cluster.sh up                       # merod local on :2501-2503 (Docker on a Mac)
 MERO_E2E_NODE_URL=http://127.0.0.1:2501 swift test --filter MeroKitE2ETests   # against it
 ```
+
+## Related repositories
+
+- [core](https://github.com/calimero-network/core): the node (`merod`), `meroctl` and the Rust app SDK; docs at <https://calimero-network.github.io/core/>.
+- [mero-tee](https://github.com/calimero-network/mero-tee): the signed TDX node images whose releases MeroKit trusts.
+- [app-registry](https://github.com/calimero-network/app-registry): where app packages are published.
+- [mero-js](https://github.com/calimero-network/mero-js): the JavaScript/TypeScript client MeroKit ports.
+- [mero-react](https://github.com/calimero-network/mero-react): React bindings over mero-js.
+- [calimero-client-py](https://github.com/calimero-network/calimero-client-py): the Python client.
+- [kotlin-sdk](https://github.com/calimero-network/kotlin-sdk): the Android/Kotlin SDK.
+- [apps](https://github.com/calimero-network/apps): example and first-party apps, including the iOS apps that use MeroKit.
