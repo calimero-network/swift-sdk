@@ -26,7 +26,8 @@ public struct ServedPageSession: Codable, Sendable, Equatable {
     }
 
     public var session: CalimeroSession {
-        CalimeroSession(accountId: accountId, sessionToken: sessionToken, expiresAt: expiresAt, refreshToken: refreshToken)
+        CalimeroSession(
+            accountId: accountId, sessionToken: sessionToken, expiresAt: expiresAt, refreshToken: refreshToken)
     }
 }
 
@@ -63,7 +64,8 @@ public final class ServedPageHandoff: @unchecked Sendable {
     /// The served page as a consent page's `returnTo`: it passes the answer on
     /// to the app (`callback?request_id=…&result=…`).
     public static func consentReturnTo(origin: URL, version: String) -> String {
-        let base = origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
+        let base =
+            origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
         return "\(base)/\(version)/?native-consent=1"
     }
 
@@ -95,7 +97,8 @@ public final class ServedPageHandoff: @unchecked Sendable {
     /// `{origin}/{version}/#{fragment}&state=…&key=…`, then `extra` (base64url or
     /// rp-id values, so nothing in them needs escaping).
     public func url(origin: URL, version: String, fragment: String, extra: [(String, String)] = []) -> URL {
-        let base = origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
+        let base =
+            origin.absoluteString.hasSuffix("/") ? String(origin.absoluteString.dropLast()) : origin.absoluteString
         let more = extra.map { "&\($0.0)=\($0.1)" }.joined()
         return URL(string: "\(base)/\(version)/#\(fragment)&state=\(state)&key=\(publicKey)\(more)")!
     }

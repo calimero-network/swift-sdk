@@ -6,7 +6,8 @@ import XCTest
 final class AppHostTests: XCTestCase {
     // Vectors from mdma `mdma_common.app_host` (core `app_host::label`).
     func testLabelsMatchCoreAndTheManager() {
-        XCTAssertEqual(AppHost.label(package: "com.calimero.chat"), "pjfzih7fgm2e33figvvm2hcvlbr3egcxy3jjn6zhuzdlxkz4hfdq")
+        XCTAssertEqual(
+            AppHost.label(package: "com.calimero.chat"), "pjfzih7fgm2e33figvvm2hcvlbr3egcxy3jjn6zhuzdlxkz4hfdq")
         XCTAssertEqual(
             AppHost.clusterLabel(cluster: "eu-shared-1", package: "com.calimero.chat"),
             "5eolix2xlsehjkbd2l5262oevb65zvq4dkgo66zlxpfc4os34una")
@@ -27,8 +28,12 @@ final class ServedPageHandoffTests: XCTestCase {
     static let jsPrivateKey = "EpEiMtOxmJcC8Oyk4yxIbQYSzNzstVYDlfteYP99sc0"
     static let jsPublicKey = "BPm9Ej3fpM78ghV7ScdMix1F2coNyd4CzOo4wYgGl6J7HwWpT_RF9F2UFB2hmWMC18FNL7qERY4X4HC1qTzcRto"
     static let jsState = "c3RhdGUtZm9yLXRoaXMtc2lnbi1pbg"
-    static let jsBox =
-        "BGXAHK69TLTGc5H45ACET70ViGXy_NxiBMP-cyei7hsPwDzi7MKUiC7fW8VglZEa8PjpOLhchHRKFKk1Yl_qnowMAVY8i-E8-fQFYNUyYQrs3VcdqyQcQ6vAXLym7vjHXmIC8Rt2Vu4PFi_wyBGthxCsqp8VtVrmiACH-yqSw2ENb6F8WXUhIl9UInB-osdLnEWIwqQJcVswEAPjbKlEtWCwY1PZVUVGwBr7PwJ5oSwITiQDeYI9caY5LL2yFXPYuLRWr65Q8g5148xjWgTbf6E8M-nf_mi9vA4Vb06bx-L2vF6W-vpz6q_BO0Gq6vONxvcqmeIeHfQTPylNxuRfpAOp"
+    static let jsBox = [
+        "BGXAHK69TLTGc5H45ACET70ViGXy_NxiBMP-cyei7hsPwDzi7MKUiC7fW8VglZEa8PjpOLhchHRKFKk1Yl_qnowMAVY8i-E8",
+        "-fQFYNUyYQrs3VcdqyQcQ6vAXLym7vjHXmIC8Rt2Vu4PFi_wyBGthxCsqp8VtVrmiACH-yqSw2ENb6F8WXUhIl9UInB-osdL",
+        "nEWIwqQJcVswEAPjbKlEtWCwY1PZVUVGwBr7PwJ5oSwITiQDeYI9caY5LL2yFXPYuLRWr65Q8g5148xjWgTbf6E8M-nf_mi9",
+        "vA4Vb06bx-L2vF6W-vpz6q_BO0Gq6vONxvcqmeIeHfQTPylNxuRfpAOp",
+    ].joined()
 
     private func jsHandoff() throws -> ServedPageHandoff {
         let key = try P256.KeyAgreement.PrivateKey(rawRepresentation: fromB64url(Self.jsPrivateKey))
@@ -103,7 +108,8 @@ final class ServedPageApprovalTests: XCTestCase {
     }
 
     func testASignInCannotBeReadAsAnApprovalOrTheOtherWay() throws {
-        let signIn = URL(string: "mero-chat://signed-in#state=\(ServedPageHandoffTests.jsState)&box=\(ServedPageHandoffTests.jsBox)")!
+        let state = ServedPageHandoffTests.jsState
+        let signIn = URL(string: "mero-chat://signed-in#state=\(state)&box=\(ServedPageHandoffTests.jsBox)")!
         XCTAssertThrowsError(try handoff().openApproval(signIn))
         XCTAssertThrowsError(try handoff().open(URL(string: Self.jsAnswer)!))
     }

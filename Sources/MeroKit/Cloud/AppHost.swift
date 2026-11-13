@@ -39,7 +39,8 @@ public enum AppHost {
         let (data, response) = try await session.data(from: url)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            throw AccountError.protocolViolation("\(url.host ?? "the app host") answered \(status): no frontend served there")
+            throw AccountError.protocolViolation(
+                "\(url.host ?? "the app host") answered \(status): no frontend served there")
         }
         struct Info: Decodable { let versions: [String] }
         guard let latest = try JSONDecoder().decode(Info.self, from: data).versions.last else {

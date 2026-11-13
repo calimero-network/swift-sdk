@@ -17,7 +17,8 @@ private struct SealingPage: WebAuthenticating {
         var parts = URLComponents()
         parts.percentEncodedQuery = String(url.fragment!.dropFirst("native-sign-in&".count))
         let state = parts.queryItems!.first { $0.name == "state" }!.value!
-        let key = try P256.KeyAgreement.PublicKey(x963Representation: fromB64url(parts.queryItems!.first { $0.name == "key" }!.value!))
+        let keyParam = parts.queryItems!.first { $0.name == "key" }!.value!
+        let key = try P256.KeyAgreement.PublicKey(x963Representation: fromB64url(keyParam))
         let mine = P256.KeyAgreement.PrivateKey()
         let aes = try mine.sharedSecretFromKeyAgreement(with: key).hkdfDerivedSymmetricKey(
             using: SHA256.self, salt: Data(), sharedInfo: Data(ServedPageHandoff.info.utf8), outputByteCount: 32)
@@ -46,7 +47,8 @@ final class ServedPageSignInTests: XCTestCase {
             }
             return .init(
                 status: 200, headers: ["Content-Type": "application/json"],
-                body: Data(#"{"package":"com.calimero.chat","versions":["1.0.0","1.2.0"],"deployments":[],"api":[]}"#.utf8))
+                body: Data(
+                    #"{"package":"com.calimero.chat","versions":["1.0.0","1.2.0"],"deployments":[],"api":[]}"#.utf8))
         }
     }
 
@@ -91,7 +93,8 @@ final class ServedPageSignInTests: XCTestCase {
 
     func testADismissedSheetIsNotAnError() async {
         let client = client(MemoryCloudSessionStore())
-        let ok = await client.signInWithServedPage(callback: .scheme("mero-chat", path: "signed-in"), opener: DismissedSheet())
+        let ok = await client.signInWithServedPage(
+            callback: .scheme("mero-chat", path: "signed-in"), opener: DismissedSheet())
         XCTAssertFalse(ok)
         XCTAssertNil(client.errorMessage)
         XCTAssertFalse(client.isAuthenticated)

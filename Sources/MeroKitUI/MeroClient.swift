@@ -311,7 +311,8 @@ public final class MeroClient: ObservableObject {
             let origin = AppHost.origin(package: package, cluster: cluster, domain: appsDomain)
             let version = try await AppHost.latestVersion(origin: origin, session: urlSession)
             let handoff = ServedPageHandoff()
-            let answer = try await opener.authenticate(url: handoff.url(origin: origin, version: version), callback: callback)
+            let answer = try await opener.authenticate(
+                url: handoff.url(origin: origin, version: version), callback: callback)
             let signedIn = try handoff.open(answer)
             connect(nodeURL: signedIn.nodeUrl, nodes: signedIn.nodes, allowMock: config.policy.allowMock)
             guard let cloud else { throw AccountError.notSignedIn("could not connect to \(signedIn.nodeUrl)") }
