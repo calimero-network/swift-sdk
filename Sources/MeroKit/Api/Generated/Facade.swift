@@ -55,7 +55,7 @@ extension CalimeroClient {
 
         /// Create an app instance: `POST /apps` (`app_create`).
         ///
-        /// From a release (`package`, `version`, `service`), a deployment's offer (`deployment`), or an uploaded `bundle`; in an organization (`org`) or the caller's own. `initArgs` go to the app's `init` and `metadata` is kept as given (both free-form JSON). Answers once `init` committed; `compute` says whether the app has a compute component.
+        /// From a release (`package`, `version`, `service`), a deployment's offer (`deployment`), or an uploaded `bundle`; in an organization (`org`), or, naming none, the caller's personal organization. Every app is in an organization. `initArgs` go to the app's `init` and `metadata` is kept as given (both free-form JSON). Answers once `init` committed; `compute` says whether the app has a compute component.
         ///
         /// **Who:** an installer (an account holder, or an unscoped API key that is not read-only).
         @discardableResult
@@ -167,6 +167,19 @@ extension CalimeroClient {
             let input = Operations.AppRun.Input(path: .init(app: app, run: run))
             return try await client.perform { api in
                 try await api.appRun(input).ok.body.json
+            }
+        }
+
+        /// A compute run's attempt logs: `GET /apps/{app}/runs/{run}/logs` (`app_run_logs`).
+        ///
+        /// Each attempt's module log, as a sealed file of the app: `{ attempt, id, size, sha256 }`. Only for those who may handle the app's files; the bytes are a files export.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func runLogs(app: Swift.String, run: Swift.String) async throws -> Operations.AppRunLogs.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppRunLogs.Input(path: .init(app: app, run: run))
+            return try await client.perform { api in
+                try await api.appRunLogs(input).ok.body.json
             }
         }
 
@@ -654,7 +667,7 @@ extension CalimeroClient {
 
         /// The account's own apps: `GET /auth/apps` (`account_apps`).
         ///
-        /// Outside any organization (a package-bound session: its package's): each app's release, the newer releases it may upgrade to, its last upgrade, its replicas' releases and `lastWriteAt`.
+        /// The apps the account owns, in any organization (a package-bound session: its package's), with its personal organization's `approvedReleases`: each app's release, the newer releases it may upgrade to, its last upgrade, its replicas' releases and `lastWriteAt`.
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
@@ -675,17 +688,6 @@ extension CalimeroClient {
             let input = Operations.AccountBackupKey.Input()
             return try await client.perform { api in
                 try await api.accountBackupKey(input).ok.body.json
-            }
-        }
-
-        /// Approve outbound prefixes for the account's apps: `POST /auth/outbound` (`account_outbound_approval`).
-        ///
-        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
-        @discardableResult
-        public func outboundApproval(package: Swift.String, prefixes: Components.Schemas.OutboundSelection? = nil, replace: Swift.Bool? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.OutboundApproved {
-            let input = Operations.AccountOutboundApproval.Input(body: .json(.init(package: package, prefixes: prefixes, replace: replace)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.accountOutboundApproval(input).ok.body.json
             }
         }
 
@@ -751,19 +753,6 @@ extension CalimeroClient {
             let input = Operations.AccountRecoveryStart.Input(body: .json(.init(challengeId: challengeId, code: code, registration: registration)))
             return try await client.perform { api in
                 try await api.accountRecoveryStart(input).ok.body.json
-            }
-        }
-
-        /// Approve a mero-tee release for the account's apps: `POST /auth/releases` (`account_release_approval`).
-        ///
-        /// Where the owner holds release approvals; `412` first.
-        ///
-        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
-        @discardableResult
-        public func releaseApproval(version: Swift.String, approved: Swift.Bool? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.ApprovedReleases {
-            let input = Operations.AccountReleaseApproval.Input(body: .json(.init(version: version, approved: approved)))
-            return try await client.perform(passkey: passkey) { api in
-                try await api.accountReleaseApproval(input).ok.body.json
             }
         }
 
@@ -922,7 +911,7 @@ extension CalimeroClient {
 
         /// The caller's account: `GET /auth/me` (`me`).
         ///
-        /// The account, its passkeys (with `addedAt` and `lastSignInAt`), organizations, approvals and recovery state, and how the caller came (`via`).
+        /// The account, its passkeys (with `addedAt` and `lastSignInAt`), organizations (`personal`: the one made at sign-up, where its instances go unless they name another; its approvals are that organization's), recovery state, and how the caller came (`via`).
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
@@ -1110,7 +1099,7 @@ extension CalimeroClient {
 
         /// What became of a consent request: `GET /consent/{request}/result` (`consent_page_result`).
         ///
-        /// `decidedAt` (Unix seconds) is `null` while it is pending. `outcome`, once approved, is what the approval made: `{ orgId }` for `createOrg`, `{ token }` for `createInvite`, `{ org }` for `acceptInvite`, `{ orgId, name }` for `renameOrg`, `{ apps }` (the apps deleted) for `deleteOrg`; absent for the other kinds.
+        /// `decidedAt` (Unix seconds) is `null` while it is pending. `outcome`, once approved, is what the approval made: `{ orgId }` for `createOrg` (with `teamId`, the asking app's own team the organization starts with, when an app's frontend asked on a cluster that makes it), `{ token }` for `createInvite`, `{ org }` for `acceptInvite`, `{ orgId, name }` for `renameOrg`, `{ apps }` (the apps deleted) for `deleteOrg`; absent for the other kinds.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
@@ -1231,7 +1220,7 @@ extension CalimeroClient {
 
         /// The organizations a deployment serves: `GET /deployments/{id}/orgs` (`deployment_orgs`).
         ///
-        /// For its managers: each organization with instances from it, its name (`null` when unknown), member counts (`activeMembers30d`: active in the last 30 days), its instances and the releases they run, and when its first was created (RFC 3339); instances outside an organization are only counted (`outsideOrgs`). Never who the members are.
+        /// For its managers: each organization with instances from it, its name (`null` when unknown), member counts (`activeMembers30d`: active in the last 30 days), its instances and the releases they run, and when its first was created (RFC 3339); instances outside an organization, or in a personal organization, are only counted (`outsideOrgs`). Never who the members are.
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
@@ -1549,7 +1538,7 @@ extension CalimeroClient {
 
         /// Create an organization: `POST /orgs` (`org_create`).
         ///
-        /// `recoveryKey` is the public half of an organization recovery key.
+        /// `recoveryKey` is the public half of an organization recovery key. Every account also has a personal organization from sign-up (`personal` in `/auth/me`), which this does not make.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
