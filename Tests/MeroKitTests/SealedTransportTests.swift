@@ -275,7 +275,9 @@ final class SealedTransportTests: XCTestCase {
             }
             let (_, response) = try await transport(node).data(for: request("/admin-api/health"))
             XCTAssertEqual(response.statusCode, 200, "\(status)")
-            let expected = ["/node/sealed/handshake", "/node/sealed/v2/handshake", "/node" + SealedTransport.sealedPath]
+            let expected = [
+                "/node/sealed/handshake", "/node/sealed/v2/handshake", "/node" + SealedTransport.sealedPath,
+            ]
             XCTAssertEqual(paths.get, expected, "\(status)")
             XCTAssertEqual(node.handshakes, 1, "\(status)")
         }
