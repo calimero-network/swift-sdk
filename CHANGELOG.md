@@ -2,6 +2,35 @@
 
 Notable changes to MeroKit. Versions are git tags (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased: consent requests manage organizations
+
+`ConsentRequest` gains the ten organization kinds of calimero-network/core#5018:
+`.leaveOrg(org:returnTo:)`, `.removeMember(org:account:returnTo:)`,
+`.setMemberRole(org:account:role:returnTo:)`,
+`.setMemberTeams(org:account:teams:returnTo:)` (rows of the new
+`ConsentTeamMembership(team:role:capabilities:)`),
+`.removeMemberTeams(org:account:teams:returnTo:)`,
+`.revokeInvite(org:inviteKey:returnTo:)`, `.renameOrg(org:name:returnTo:)`,
+`.deleteOrg(org:returnTo:)`,
+`.setCapabilities(org:account:team:capabilities:returnTo:)` (`OrgCapabilities`)
+and `.setAllApps(org:account:allApps:returnTo:)`. Each is checked before it is
+sent, as the earlier kinds are.
+
+- `ConsentOutcome` gains `.orgRenamed(orgId:name:)` and `.orgDeleted(apps:)`,
+  with `ConsentResult.newOrgName` and `deletedApps`; `consentResult` refuses an
+  approved `renameOrg` or `deleteOrg` without its outcome. The other eight kinds
+  answer no outcome.
+- `ConsentResult.changesOrganizations`: an approved request that changed an
+  organization the account sees. `MeroAppSession` bumps `revision` on it, for
+  every organization kind and also when a return is handled through
+  `handle(url)`, where it used to bump only for a created or joined
+  organization from `requestConsent`.
+- `ConsentRequest.generated()` now gives the generated body for every kind
+  (the vendored OpenAPI document has them since #106), where it threw for the
+  organization kinds.
+- Source compatibility: `ConsentRequest` and `ConsentOutcome` gain cases, so an
+  exhaustive `switch` over either needs the new cases (or a `default`).
+
 ## Unreleased: consent requests create organizations and mint or accept invites
 
 `ConsentRequest` gains core's new consent kinds (calimero-network/core#5014):

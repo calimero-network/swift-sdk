@@ -378,19 +378,11 @@ extension TeamJoin {
 }
 
 extension ConsentRequest {
-    /// This request as the body of `client.consent.pageCreate(body:)`. The
-    /// generated type knows `release`, `upgrade` and `outbound` only: for
-    /// `createOrg`, `createInvite` and `acceptInvite` this throws; send them
-    /// with ``CalimeroClient/requestConsent(_:)``.
+    /// This request as the body of `client.consent.pageCreate(body:)`, every
+    /// kind. ``CalimeroClient/requestConsent(_:)`` sends the same body and also
+    /// checks the request and the node's confirmation code.
     public func generated() throws -> Operations.ConsentPageCreate.Input.Body.JsonPayload {
-        switch self {
-        case .createOrg, .createInvite, .acceptInvite:
-            throw AccountError.invalidInput(
-                "the generated consent body has no \(kind); use CalimeroClient.requestConsent(_:)")
-        case .release, .upgrade, .outbound:
-            return try MeroJSON.decode(
-                Operations.ConsentPageCreate.Input.Body.JsonPayload.self, from: CanonicalJSON.data(json))
-        }
+        try MeroJSON.decode(Operations.ConsentPageCreate.Input.Body.JsonPayload.self, from: CanonicalJSON.data(json))
     }
 }
 
