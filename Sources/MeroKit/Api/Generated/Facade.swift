@@ -66,6 +66,32 @@ extension CalimeroClient {
             }
         }
 
+        /// Let an app call another as you: `PUT /apps/{app}/delegations/{target}` (`app_delegate`).
+        ///
+        /// The methods of `target` that the release `app` runs lists for `target`'s package in its signed `uses` (`methods`), with your passkey over exactly those. You must reach both apps, which are in one organization. From then on, when `app` calls one of those methods while serving you, `target` runs it with you as the caller and reads `env::via()` = `app`; without the grant it runs as `app`, and `target` never learns who `app` was serving. A method that needs your passkey confirmation is still refused there. `409 NOTHING_TO_DELEGATE` when the release lists none. A session opened on an app's frontend is refused (`403`): the app asks on the consent page instead (`POST /consent/requests { kind: "delegate" }`).
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func delegate(app: Swift.String, target: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppDelegate.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppDelegate.Input(path: .init(app: app, target: target), body: .json(.init()))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appDelegate(input).ok.body.json
+            }
+        }
+
+        /// What you let an app do as you: `GET /apps/{app}/delegations` (`app_delegations`).
+        ///
+        /// The apps you let this app call as you, each with the methods (`SetDelegation`). A session bound to an app's frontend reads its own app's only.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func delegations(app: Swift.String) async throws -> Operations.AppDelegations.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppDelegations.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appDelegations(input).ok.body.json
+            }
+        }
+
         /// Delete an app: `DELETE /apps/{app}` (`app_delete`).
         ///
         /// The owner or an organization admin.
@@ -89,6 +115,32 @@ extension CalimeroClient {
             let input = Operations.AppGet.Input(path: .init(app: app))
             return try await client.perform { api in
                 try await api.appGet(input).ok.body.json
+            }
+        }
+
+        /// Attach an app to one of an app's references: `PUT /apps/{app}/links/{name}` (`app_link`).
+        ///
+        /// `name` is an `attach` reference of the release the app runs, and `app` an app of the same organization that runs its package; the caller manages both. One outside the reference's range is attached anyway and answered `inRange: false`, and the consent page warns about it on later upgrades: an attached app is never upgraded with the instance. `env::linked(name)` answers it from the next run on. Answers the link as `GET /apps/{app}/links` lists it.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func link(app: Swift.String, name: Swift.String, bodyApp: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppLink.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppLink.Input(path: .init(app: app, name: name), body: .json(.init(app: bodyApp)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appLink(input).ok.body.json
+            }
+        }
+
+        /// List an app's links to the apps its release uses: `GET /apps/{app}/links` (`app_links`).
+        ///
+        /// One row per reference (`uses`) of the release the app runs, with the app linked under it: a member made with the instance (`mode: create`) or an app its owner attached (`mode: attach`), `null` when none. `version` is the release that app runs and `inRange` whether it is inside the reference's range (`null` with nothing linked). A link the release no longer names is listed with `package`, `range` and `mode` `null`.
+        ///
+        /// **Who:** whoever the app's access admits (a public app: anyone).
+        @discardableResult
+        public func links(app: Swift.String) async throws -> Operations.AppLinks.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppLinks.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appLinks(input).ok.body.json
             }
         }
 
@@ -196,6 +248,45 @@ extension CalimeroClient {
             }
         }
 
+        /// Remove an app's own value of a secret: `DELETE /apps/{app}/secrets/{name}` (`app_secret_clear`).
+        ///
+        /// The operator's value applies again. Same rules as setting one; a step-up over `{ name }`.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func secretClear(app: Swift.String, name: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppSecretClear.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppSecretClear.Input(path: .init(app: app, name: name))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appSecretClear(input).ok.body.json
+            }
+        }
+
+        /// Set an app's own value of a declared secret: `PUT /apps/{app}/secrets/{name}` (`app_secret_set`).
+        ///
+        /// Sent only to the secret's declared hosts, never shown again (`app_secrets` answers its fingerprint), kept in the app's log on its replicas, out of the app's own reach. The owner, or whoever manages the organization's apps, with a step-up over `{ name, fingerprint }`: the value is never in the consent. `404` for a name the release does not declare; 1 to 4,096 bytes (`400 BAD_SECRET`); `409 CLUSTER_NOT_UPGRADED` while a node runs an earlier release.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func secretSet(app: Swift.String, name: Swift.String, value: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.AppSecretSet.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppSecretSet.Input(path: .init(app: app, name: name), body: .json(.init(value: value)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appSecretSet(input).ok.body.json
+            }
+        }
+
+        /// The secrets an app's release declares: `GET /apps/{app}/secrets` (`app_secrets`).
+        ///
+        /// For each secret the release the instance runs declares (its signed manifest's `secrets`): its hosts, description and whether it is required, and `source`: `app` when the instance has its own value (with its `fingerprint`, the first 16 hex digits of its SHA-256, `setBy` and `setAt`), else `deployment` when the deployment it was created from holds one (`deployment_secret_set`; nothing more of it), else `cluster` (the operator's, if it bound one). Never a value. The owner, or whoever manages the organization's apps.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func secrets(app: Swift.String) async throws -> Operations.AppSecrets.Output.Ok.Body.JsonPayload {
+            let input = Operations.AppSecrets.Input(path: .init(app: app))
+            return try await client.perform { api in
+                try await api.appSecrets(input).ok.body.json
+            }
+        }
+
         /// What an app stores: `GET /apps/{app}/storage` (`app_storage`).
         ///
         /// Keys, bytes and blobs held, and `lastWriteAt` (Unix seconds of its last committed write, `null` before one).
@@ -221,6 +312,32 @@ extension CalimeroClient {
             }
         }
 
+        /// Take back what an app may do on another as you: `DELETE /apps/{app}/delegations/{target}` (`app_undelegate`).
+        ///
+        /// No passkey: it only narrows. `404 NOT_DELEGATED` when you granted nothing there.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func undelegate(app: Swift.String, target: Swift.String) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.AppUndelegate.Input(path: .init(app: app, target: target))
+            return try await client.perform { api in
+                try await api.appUndelegate(input).ok.body.json
+            }
+        }
+
+        /// Detach an app attached to an app: `DELETE /apps/{app}/links/{name}` (`app_unlink`).
+        ///
+        /// Whoever manages the app. A member made with the instance is never detached.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func unlink(app: Swift.String, name: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> OpenAPIRuntime.OpenAPIObjectContainer {
+            let input = Operations.AppUnlink.Input(path: .init(app: app, name: name), body: .json(.init()))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appUnlink(input).ok.body.json
+            }
+        }
+
         /// Upgrade an app instance: `POST /apps/{app}/upgrade` (`app_upgrade`).
         ///
         /// To a release (`version`, of the app's own package unless `package` names another) or a `bundle`, code only: the state stays and is read by the new code. Whoever the package's manifest names (`upgrades`: the owner, or its publisher's `MANAGE_APPLICATION` holders), with a step-up over `{ bundle, migrate, manifest }`; an upgrade key signs in place of it. A refused or failed upgrade leaves the app on its release and answers `422 UPGRADE_FAILED` with the app log's error in `details` (`MigrationsNotSupported` when `migrate` is named: there are no migrations in this version). `error` is the app log's error value (`null` when it ran), free-form: the app's own.
@@ -231,6 +348,19 @@ extension CalimeroClient {
             let input = Operations.AppUpgrade.Input(path: .init(app: app), body: .json(.init(bundle: bundle, package: package, version: version, service: service, migrate: migrate)))
             return try await client.perform(passkey: passkey) { api in
                 try await api.appUpgrade(input).ok.body.json
+            }
+        }
+
+        /// Upgrade an app and the apps it created, in one consent: `POST /apps/{app}/upgrade-unit` (`app_upgrade_unit`).
+        ///
+        /// An instance created with apps of its own (`links`): it moves to `version` of its package, and each member the target release's `uses` gives a release other than the one it runs moves to that release (its lock's, else the newest installed one inside the range), all under one step-up over `{ app, package, version, targets }`. Answers the run (`GET /orgs/{org}/upgrades/{run}` follows it); each app is upgraded on its own as an organization's run does. `400 NOT_A_UNIT` for an app with no members; `409 CONFLICT` when the target release creates a member the instance lacks.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func upgradeUnit(app: Swift.String, version: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Components.Schemas.UpgradeRun {
+            let input = Operations.AppUpgradeUnit.Input(path: .init(app: app), body: .json(.init(version: version)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.appUpgradeUnit(input).ok.body.json
             }
         }
 
@@ -440,12 +570,12 @@ extension CalimeroClient {
 
         /// A pipeline run's receipt: `GET /apps/{app}/pipeline-runs/{run}/receipt` (`pipeline_receipt_receipt`).
         ///
-        /// The owner and the organization's members. For an ended run: the receipt, the answering node and its signature over it, by the node's receipt key.
+        /// The owner and the organization's members. For an ended run: the receipt, the answering node and its signature over it, by the node's receipt key. `version=2` adds what each job's report signs to its proof (`job`) and each job node's attestation (`jobAttestations`); the default, `1`, leaves them out.
         ///
         /// **Who:** signed in (a session or an API key).
         @discardableResult
-        public func pipelineReceiptReceipt(app: Swift.String, run: Swift.String) async throws -> Operations.PipelineReceiptReceipt.Output.Ok.Body.JsonPayload {
-            let input = Operations.PipelineReceiptReceipt.Input(path: .init(app: app, run: run))
+        public func pipelineReceiptReceipt(app: Swift.String, run: Swift.String, version: Swift.Int64? = nil) async throws -> Operations.PipelineReceiptReceipt.Output.Ok.Body.JsonPayload {
+            let input = Operations.PipelineReceiptReceipt.Input(path: .init(app: app, run: run), query: .init(version: version))
             return try await client.perform { api in
                 try await api.pipelineReceiptReceipt(input).ok.body.json
             }
@@ -644,7 +774,7 @@ extension CalimeroClient {
 
         /// Read with a view method: `POST /apps/{app}/views` (`views`).
         ///
-        /// Read on a caught-up replica (`consistency: "strong"`, the default; any value but `"stale"` reads as it), or (`"stale"`) on the one answering; `minIndex` waits until the replica applied it (`503 NOT_CAUGHT_UP`). `args`, `result` and each event's `data` are the app's own JSON, free-form here: the app's ABI (`GET /apps/{app}/abi`, or its OpenAPI document) types them.
+        /// Read linearizably (`consistency: "strong"`, the default; any value but `"stale"` reads as it): the replica answering waits until it applied the index the app's leader names once it confirmed it leads, and sends the view to the leader if it cannot catch up; or (`"stale"`) on the replica answering, as it stands; `minIndex` waits until the replica applied it (`503 NOT_CAUGHT_UP`). `args`, `result` and each event's `data` are the app's own JSON, free-form here: the app's ABI (`GET /apps/{app}/abi`, or its OpenAPI document) types them.
         ///
         /// **Who:** whoever the app's access admits (a public app: anyone).
         @discardableResult
@@ -1231,6 +1361,45 @@ extension CalimeroClient {
             }
         }
 
+        /// Remove a deployment's value of a secret: `DELETE /deployments/{id}/secrets/{name}` (`deployment_secret_clear`).
+        ///
+        /// Its instances that set no value of their own fall back to the operator's. A manager, with a step-up over `deployment:{id} / __clear_secret / { name }`; `404` when the deployment holds no value of it.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func secretClear(id: Swift.String, name: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentSecretClear.Output.Ok.Body.JsonPayload {
+            let input = Operations.DeploymentSecretClear.Input(path: .init(id: id, name: name))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.deploymentSecretClear(input).ok.body.json
+            }
+        }
+
+        /// Set a deployment's value of a secret: `PUT /deployments/{id}/secrets/{name}` (`deployment_secret_set`).
+        ///
+        /// Every instance created from the deployment uses it unless the instance set its own (`app_secret_set`), and only in a request to the secret's declared hosts, for an instance whose release declares the name; it wins over the operator's. Kept in the system group's state, sealed, never shown again (`deployment_secrets` answers its fingerprint) and out of every app's reach. A manager of the deployment, with a step-up over `deployment:{id} / __set_secret / { name, fingerprint }`: the value is never in the consent. `404 UNDECLARED_SECRET` unless a release the deployment offers declares the name; a name of A-Z, 0-9 and `_` and a value of 1 to 4,096 bytes (`400 BAD_SECRET`); at most 16 per deployment (`429 QUOTA_EXCEEDED`); `409 FEATURE_NOT_ACTIVE` below cluster version 1.0.0-rc.32.
+        ///
+        /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
+        @discardableResult
+        public func secretSet(id: Swift.String, name: Swift.String, value: Swift.String, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.DeploymentSecretSet.Output.Ok.Body.JsonPayload {
+            let input = Operations.DeploymentSecretSet.Input(path: .init(id: id, name: name), body: .json(.init(value: value)))
+            return try await client.perform(passkey: passkey) { api in
+                try await api.deploymentSecretSet(input).ok.body.json
+            }
+        }
+
+        /// A deployment's secrets: `GET /deployments/{id}/secrets` (`deployment_secrets`).
+        ///
+        /// For its managers, on fresh state: every secret a release the deployment offers declares, and every one it holds a value of. Each row names the deployment's apps whose release declares it (`apps`, empty when none does any more: the value is kept, unused, until cleared) and `set`; a set one adds its `fingerprint` (the first 16 hex digits of the value's SHA-256), `setBy` (`account:<id>`) and `setAt` (Unix seconds). Never a value.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func secrets(id: Swift.String) async throws -> Operations.DeploymentSecrets.Output.Ok.Body.JsonPayload {
+            let input = Operations.DeploymentSecrets.Input(path: .init(id: id))
+            return try await client.perform { api in
+                try await api.deploymentSecrets(input).ok.body.json
+            }
+        }
+
         /// Withdraw an offer: `DELETE /deployments/{id}/apps/{app}` (`deployment_withdraw`).
         ///
         /// **Who:** an account holder (a passkey session not bound to an app's frontend). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
@@ -1397,12 +1566,12 @@ extension CalimeroClient {
 
         /// Make an invite: `POST /orgs/{org}/invites` (`invite_create`).
         ///
-        /// A token for `role` and `teams`, `uses` times within `ttlSecs`; `allApps` (an admin's) also gives every app added later. `412` first.
+        /// A token for `role` and `teams`, `uses` times within `ttlSecs`; `allApps` (an admin's) also gives every app added later; `capabilities` (bits) is what a new member gets as their own setting, no more than the creator holds (`403`), and `409 FEATURE_NOT_ACTIVE` below cluster version 1.0.0-rc.29. `412` first.
         ///
         /// **Who:** a passkey session (an API key is refused). **Step-up:** answers `412 CONFIRM_REQUIRED` first; send the same request again with `confirm`, a passkey assertion over `details.challenge`.
         @discardableResult
-        public func inviteCreate(org: Swift.String, role: Components.Schemas.OrgRole, teams: [Swift.String]? = nil, ttlSecs: Swift.Int64? = nil, uses: Swift.Int64? = nil, allApps: Swift.Bool? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.InviteCreate.Output.Ok.Body.JsonPayload {
-            let input = Operations.InviteCreate.Input(path: .init(org: org), body: .json(.init(role: role, teams: teams, ttlSecs: ttlSecs, uses: uses, allApps: allApps)))
+        public func inviteCreate(org: Swift.String, role: Components.Schemas.OrgRole, teams: [Swift.String]? = nil, ttlSecs: Swift.Int64? = nil, uses: Swift.Int64? = nil, allApps: Swift.Bool? = nil, capabilities: Swift.Int64? = nil, passkey: (any PasskeyProvider)? = nil) async throws -> Operations.InviteCreate.Output.Ok.Body.JsonPayload {
+            let input = Operations.InviteCreate.Input(path: .init(org: org), body: .json(.init(role: role, teams: teams, ttlSecs: ttlSecs, uses: uses, allApps: allApps, capabilities: capabilities)))
             return try await client.perform(passkey: passkey) { api in
                 try await api.inviteCreate(input).ok.body.json
             }
@@ -1538,12 +1707,12 @@ extension CalimeroClient {
 
         /// Create an organization: `POST /orgs` (`org_create`).
         ///
-        /// `recoveryKey` is the public half of an organization recovery key. Every account also has a personal organization from sign-up (`personal` in `/auth/me`), which this does not make.
+        /// `recoveryKey` is the public half of an organization recovery key. `capabilities` (bits) is what members can do unless set for them, in place of the default; `409 FEATURE_NOT_ACTIVE` below cluster version 1.0.0-rc.29. Every account also has a personal organization from sign-up (`personal` in `/auth/me`), which this does not make.
         ///
         /// **Who:** a passkey session (an API key is refused).
         @discardableResult
-        public func create(name: Swift.String, recoveryKey: Swift.String? = nil) async throws -> Operations.OrgCreate.Output.Ok.Body.JsonPayload {
-            let input = Operations.OrgCreate.Input(body: .json(.init(name: name, recoveryKey: recoveryKey)))
+        public func create(name: Swift.String, recoveryKey: Swift.String? = nil, capabilities: Swift.Int64? = nil) async throws -> Operations.OrgCreate.Output.Ok.Body.JsonPayload {
+            let input = Operations.OrgCreate.Input(body: .json(.init(name: name, recoveryKey: recoveryKey, capabilities: capabilities)))
             return try await client.perform { api in
                 try await api.orgCreate(input).ok.body.json
             }
@@ -1949,6 +2118,19 @@ extension CalimeroClient {
             }
         }
 
+        /// A release's capabilities: `GET /packages/{package}/{version}/capabilities` (`package_capabilities`).
+        ///
+        /// What the release is and may do, read from its signed manifest and the ABI its service component embeds, before any app of it exists: `bundle` is the service WASM's hash, `outbound` the sorted prefixes it may call out to and `abi` the embedded `calimero:abi` verbatim (`null` when it embeds none). `service` names the service whose card to read (default: the release's only one). A session bound to the package reads every release of it. `404` for a release the caller may not see, `400 NO_SUCH_SERVICE` for an unknown service or no `service` on a release with several, `400 BAD_REQUEST` for an over-long `service`.
+        ///
+        /// **Who:** signed in (a session or an API key).
+        @discardableResult
+        public func capabilities(package: Swift.String, version: Swift.String, service: Swift.String? = nil) async throws -> Operations.PackageCapabilities.Output.Ok.Body.JsonPayload {
+            let input = Operations.PackageCapabilities.Input(path: .init(package: package, version: version), query: .init(service: service))
+            return try await client.perform { api in
+                try await api.packageCapabilities(input).ok.body.json
+            }
+        }
+
         /// One package: `GET /packages/{package}` (`package_get`).
         ///
         /// The versions the caller may see; `404` when none.
@@ -2048,7 +2230,7 @@ extension CalimeroClient {
 
         /// The node's attestation: `GET /attestation` (`attestation`).
         ///
-        /// In the clear. A TDX quote binding the node's transport key (or, with `purpose=receipts`, its receipt key and the governance; with `purpose=kms`, what it verified of its KMS; with `purpose=orchestrator`, the cluster identity this replica holds) to `nonce`; `app`/`appHash` bind an app's bundle hash. A client checks it before it seals anything to the key.
+        /// In the clear. A TDX quote binding the node's transport key (or, with `purpose=receipts`, its receipt key and the governance; with `purpose=kms`, what it verified of its KMS; with `purpose=orchestrator`, the cluster identity this replica holds) to `nonce`; `app`/`appHash` bind an app's bundle hash: `app` only an app anyone may reach (public), any other answering `404` as an unknown id does, so it never says that a private app exists. A client checks it before it seals anything to the key. The node makes one quote at a time and lets a few requests wait for it: past that `503 BUSY` with `Retry-After: 1`, ask again then.
         ///
         /// **Who:** anyone.
         @discardableResult
